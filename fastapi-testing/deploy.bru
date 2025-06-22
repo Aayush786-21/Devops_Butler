@@ -1,0 +1,22 @@
+meta {
+  name: deploy
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://127.0.0.1:8000/deploy
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "git_url": "https://github.com/aayush786-21/mern-deployment.git"
+  }
+  
+}
