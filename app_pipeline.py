@@ -1,10 +1,14 @@
 import subprocess
 import os
 import shutil
+import uuid
 from docker_build import docker_build
 from docker_up import docker_up
+from docker_run import run_container
 
 def run_pipeline(repo_url: str):
+    project_id = f"proj-{str(uuid.uuid4())[:8]}"
+    print(f"--- Starting pipeline for {repo_url} [ID: {project_id}] ---")
 
     repo_dir = "./temp_repo"
     if os.path.exists(repo_dir):
@@ -39,15 +43,17 @@ def run_pipeline(repo_url: str):
 
     # Priority 2: If no compose file, check for a Dockerfile
     elif os.path.exists(os.path.join(repo_dir, 'Dockerfile')):
-        print("Analysis complete: Dockerfile found. Starting build process.")
-        build_success = docker_build(repo_url)
-        if build_success:
-            print("--- Pipeline finished build successfully ---")
-            return True
-        else:
-            print("--- Pipeline FAILED during docker build step ---")
-            return False
-            
+        print(f"[{project_id}] Analysis complete: Dockerfile found.")
+        # Pass the ID to the build function
+        image_name = docker_build(repo_url, project_id) # We'll have docker_build return the name
+        if image_name:
+            # Pass the image_name and ID to the run function
+            run_success = run_container(image_name, project_id)
+            if run_success:
+                print(f"--- [{project_id}] Pipeline finished successfully ---")
+                return True
+        print(f"--- [{project_id}] Pipeline FAILED during docker build or run step ---")
+        return False
     else:
         print("Analysis failed: No 'docker-compose.yml' or 'Dockerfile' found.")
         print("--- pipeline failed ---")

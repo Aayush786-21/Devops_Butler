@@ -13,7 +13,8 @@ def docker_up(repo_url: str):
             "docker",
             "compose",
             "up",
-            "--build"
+            "--build",
+            "-d"
         ]
 
         print(f"building your web application")

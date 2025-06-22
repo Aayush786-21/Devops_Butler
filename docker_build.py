@@ -2,8 +2,10 @@ import subprocess
 import os
 
 
-def docker_build(repo_url: str):
+def docker_build(repo_url: str, project_id: str):
     repo_dir = "./temp_repo"
+    image_name = f"local-registry/{project_id}:latest"
+
     print(f"running the dockerfile that we found inside {repo_dir}")
 
     original_dir = os.getcwd()
@@ -14,7 +16,7 @@ def docker_build(repo_url: str):
             "docker",
             "build",
             "-t",
-            "my_new_docker_image",
+            image_name,
             "."
         ]
 
@@ -38,20 +40,20 @@ def docker_build(repo_url: str):
             print(f"  {image}")
 
         # Check specifically for our image
-        if any("my_new_docker_image" in image for image in images):
-            print("\n✅ Successfully found 'my_new_docker_image' in the list!")
-            return True
+        if any(image_name in image for image in images):
+            print(f"\n Successfully found '{image_name}' in the list!")
+            return image_name
         else:
-            print("\n❌ 'my_new_docker_image' not found in the list!")
-            return False
+            print(f"\n '{image_name}' not found in the list!")
+            return None
 
     except subprocess.CalledProcessError as e:
-        print(f"❌ Docker build failed: {e}")
+        print(f" Docker build failed: {e}")
         print(f"Error output: {e.stderr}")
-        return False
+        return None
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        return False
+        print(f" Unexpected error: {e}")
+        return None
     finally:
         os.chdir(original_dir)
 
