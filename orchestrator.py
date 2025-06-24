@@ -1,10 +1,10 @@
 # orchestrator.py
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from pydantic import BaseModel, HttpUrl
 from app_pipeline import run_pipeline 
 import subprocess
 import json
+from connection_manager import manager
 
 class Project(BaseModel):
     git_url: HttpUrl
@@ -26,23 +26,20 @@ def inspect_container(container_name: str):
         return None
 
 @app.post("/deploy")
-def create_deployment(project: Project):
-    container_name, container_names = run_pipeline(str(project.git_url))
-    
-    if container_name and container_names:
-        ports_info = {}
-        for name in container_names:
-            details = inspect_container(name)
-            if details and "NetworkSettings" in details and "Ports" in details["NetworkSettings"]:
-                ports_info[name] = details["NetworkSettings"]["Ports"]
-            else:
-                ports_info[name] = {}
-        return {
-            "status": "pipeline_successful",
-            "git_url": project.git_url,
-            "container_name": container_name,
-            "containers": ports_info
-        }
-    else:
-        print(f"pipeline failed")
-        raise HTTPException(status_code=500, detail="Pipeline failed")
+async def create_deployment(project: Project, background_tasks: BackgroundTasks):
+    background_tasks.add_task(run_pipeline, str(project.git_url))
+    return {
+        "status": "pipeline_started_in_background",
+        "message": "The deployment process has begun. Check server logs for progress."
+    }
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        print(f"Client #{client_id} disconnected.")
+        

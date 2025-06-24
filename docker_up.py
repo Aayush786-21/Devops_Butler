@@ -6,33 +6,34 @@ def docker_up(repo_url: str):
     repo_dir = "./temp_repo"
     print(f"running the docker compose from {repo_dir}")
 
-    original_dir = os.getcwd()
-    os.chdir(repo_dir)
-
     try:
-        command = [
+        up_command = [
             "docker",
             "compose",
             "up",
             "--build",
             "-d"
-        ]
+            ]
+        print("Building and starting services via docker-compose...")
+        subprocess.run(up_command, cwd=repo_dir, check=True, capture_output=True, text=True)
+        print("Docker compose up completed successfully.")
 
-        print(f"building your web application")
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
-        print("Docker compose up completed successfully")
-        print(f"build output: {result.stdout}")
-
-        # Get container names
-        ps_command = ["docker", "compose", "ps", "--format", "json"]
-        ps_result = subprocess.run(ps_command, check=True, capture_output=True, text=True)
-        containers_info = json.loads(ps_result.stdout)
+        print("Discovering running container names...")
+        ps_command_json = ["docker", "compose", "ps", "--format", "json"]
+        ps_result = subprocess.run(
+            ps_command_json,
+            cwd=repo_dir,
+            check=True,
+            text=True,
+            capture_output=True
+        )
+        output_lines = ps_result.stdout.strip().split('\n')
+        containers_info = [json.loads(line) for line in output_lines if line.strip()]
         container_names = [info["Name"] for info in containers_info]
+        print(f"✅ Discovered containers: {container_names}")
         return container_names
 
     except subprocess.CalledProcessError as failed:
-        print(f"docker compose up failed: {failed}")
-        print(f"error output: {failed.stderr}")
+        print(f"A docker-compose command failed: {failed}")
+        print(f"Error output: {failed.stderr}")
         return []
-    finally:
-        os.chdir(original_dir)
