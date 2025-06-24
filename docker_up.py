@@ -1,5 +1,6 @@
 import os
 import subprocess
+import json
 
 def docker_up(repo_url: str):
     repo_dir = "./temp_repo"
@@ -21,12 +22,17 @@ def docker_up(repo_url: str):
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         print("Docker compose up completed successfully")
         print(f"build output: {result.stdout}")
-        return True
+
+        # Get container names
+        ps_command = ["docker", "compose", "ps", "--format", "json"]
+        ps_result = subprocess.run(ps_command, check=True, capture_output=True, text=True)
+        containers_info = json.loads(ps_result.stdout)
+        container_names = [info["Name"] for info in containers_info]
+        return container_names
 
     except subprocess.CalledProcessError as failed:
         print(f"docker compose up failed: {failed}")
         print(f"error output: {failed.stderr}")
-        return False
-    
+        return []
     finally:
         os.chdir(original_dir)

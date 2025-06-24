@@ -2,9 +2,9 @@ import subprocess
 import os
 
 
-def docker_build(repo_url: str, project_id: str):
+def docker_build(repo_url: str, container_name: str):
     repo_dir = "./temp_repo"
-    image_name = f"local-registry/{project_id}:latest"
+    image_name = f"local-registry/{container_name}:latest"
 
     print(f"running the dockerfile that we found inside {repo_dir}")
 
@@ -56,5 +56,3 @@ def docker_build(repo_url: str, project_id: str):
         return None
     finally:
         os.chdir(original_dir)
-
-        

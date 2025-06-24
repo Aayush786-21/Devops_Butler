@@ -1,10 +1,10 @@
 import subprocess
 
-def run_container(image_name: str, project_id: str):
-    print(f"Attempting to run container for project: {project_id}")
+def run_container(image_name: str, container_name: str):
+    print(f"Attempting to run container: {container_name}")
 
-    subprocess.run(["docker", "stop", project_id], capture_output=True)
-    subprocess.run(["docker", "rm", project_id], capture_output=True)
+    subprocess.run(["docker", "stop", container_name], capture_output=True)
+    subprocess.run(["docker", "rm", container_name], capture_output=True)
 
     try:
         command = [
@@ -12,14 +12,14 @@ def run_container(image_name: str, project_id: str):
             "run",
             "-d",
             "-P",
-            "--name", project_id,
+            "--name", container_name,
             image_name
         ]
         subprocess.run(command, check=True)
-        print(f"Successfully started the container {project_id} from the image {image_name}")
+        print(f"Successfully started the container {container_name} from the image {image_name}")
         return True
 
     except subprocess.CalledProcessError as failed:
-        print(f"Error starting container {project_id} from the image {image_name} because of {failed}")
+        print(f"Error starting container {container_name} from the image {image_name} because of {failed}")
         return False
 

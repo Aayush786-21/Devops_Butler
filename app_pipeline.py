@@ -7,8 +7,8 @@ from docker_up import docker_up
 from docker_run import run_container
 
 def run_pipeline(repo_url: str):
-    project_id = f"proj-{str(uuid.uuid4())[:8]}"
-    print(f"--- Starting pipeline for {repo_url} [ID: {project_id}] ---")
+    container_name = f"proj-{str(uuid.uuid4())[:8]}"
+    print(f"--- Starting pipeline for {repo_url} [ID: {container_name}] ---")
 
     repo_dir = "./temp_repo"
     if os.path.exists(repo_dir):
@@ -32,30 +32,27 @@ def run_pipeline(repo_url: str):
 
     if os.path.exists(compose_path_yml) or os.path.exists(compose_path_yaml):
         print("Analysis complete: docker-compose file found. Starting compose process.")
-        # Call your docker_up function
-        success = docker_up(repo_url) 
-        if success:
+        container_names = docker_up(repo_url)
+        if container_names:
             print("--- Pipeline finished successfully via docker-compose ---")
-            return True
+            return container_name, container_names
         else:
             print("--- Pipeline FAILED during docker-compose step ---")
-            return False
+            return None, None
 
     # Priority 2: If no compose file, check for a Dockerfile
     elif os.path.exists(os.path.join(repo_dir, 'Dockerfile')):
-        print(f"[{project_id}] Analysis complete: Dockerfile found.")
-        # Pass the ID to the build function
-        image_name = docker_build(repo_url, project_id) # We'll have docker_build return the name
+        print(f"[{container_name}] Analysis complete: Dockerfile found.")
+        image_name = docker_build(repo_url, container_name) # We'll have docker_build return the name
         if image_name:
-            # Pass the image_name and ID to the run function
-            run_success = run_container(image_name, project_id)
-            if run_success:
-                print(f"--- [{project_id}] Pipeline finished successfully ---")
-                return True
-        print(f"--- [{project_id}] Pipeline FAILED during docker build or run step ---")
-        return False
+            run_success = run_container(image_name, container_name)
+            if run_success: 
+                print(f"--- [{container_name}] Pipeline finished successfully ---")
+                return container_name, [container_name]
+        print(f"--- [{container_name}] Pipeline FAILED during docker build or run step ---")
+        return None, None
     else:
         print("Analysis failed: No 'docker-compose.yml' or 'Dockerfile' found.")
         print("--- pipeline failed ---")
-        return False
+        return None, None
     
