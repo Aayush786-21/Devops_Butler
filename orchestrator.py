@@ -11,20 +11,6 @@ class Project(BaseModel):
 
 app = FastAPI()
 
-def inspect_container(container_name: str):
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", container_name],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        inspect_data = json.loads(result.stdout)
-        return inspect_data[0]
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to inspect container: {e.stderr}")
-        return None
-
 @app.post("/deploy")
 async def create_deployment(project: Project, background_tasks: BackgroundTasks):
     background_tasks.add_task(run_pipeline, str(project.git_url))

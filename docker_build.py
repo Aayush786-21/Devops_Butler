@@ -1,8 +1,7 @@
-import subprocess
+import asyncio
 import os
 
-
-def docker_build(repo_url: str, container_name: str):
+async def docker_build(repo_url: str, container_name: str):
     repo_dir = "./temp_repo"
     image_name = f"local-registry/{container_name}:latest"
 
@@ -21,21 +20,26 @@ def docker_build(repo_url: str, container_name: str):
         ]
 
         print(f"building the image inside {repo_dir}")
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            print(f" Docker build failed: {stderr.decode()}")
+            return None
         print("Docker build completed successfully!")
-        print(f"Build output: {result.stdout}")
+        print(f"Build output: {stdout.decode()}")
 
         # Check if image was created
-        def get_docker_images():
-            result = subprocess.run(
-                ["docker", "images"],
-                text=True,
-                capture_output=True
+        async def get_docker_images():
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "images",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
-            return result.stdout.strip().split('\n')
+            out, _ = await proc.communicate()
+            return out.decode().strip().split('\n')
 
         print("\nListing all Docker images:")
-        images = get_docker_images()
+        images = await get_docker_images()
         for image in images:
             print(f"  {image}")
 
@@ -47,10 +51,6 @@ def docker_build(repo_url: str, container_name: str):
             print(f"\n '{image_name}' not found in the list!")
             return None
 
-    except subprocess.CalledProcessError as e:
-        print(f" Docker build failed: {e}")
-        print(f"Error output: {e.stderr}")
-        return None
     except Exception as e:
         print(f" Unexpected error: {e}")
         return None

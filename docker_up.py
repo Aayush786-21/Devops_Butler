@@ -1,8 +1,9 @@
 import os
 import subprocess
 import json
+import asyncio
 
-def docker_up(repo_url: str):
+async def docker_up(repo_url: str):
     repo_dir = "./temp_repo"
     print(f"running the docker compose from {repo_dir}")
 
@@ -15,12 +16,12 @@ def docker_up(repo_url: str):
             "-d"
             ]
         print("Building and starting services via docker-compose...")
-        subprocess.run(up_command, cwd=repo_dir, check=True, capture_output=True, text=True)
+        await asyncio.to_thread(subprocess.run, up_command, cwd=repo_dir, check=True, capture_output=True, text=True)
         print("Docker compose up completed successfully.")
 
         print("Discovering running container names...")
         ps_command_json = ["docker", "compose", "ps", "--format", "json"]
-        ps_result = subprocess.run(
+        ps_result = await asyncio.to_thread(subprocess.run,
             ps_command_json,
             cwd=repo_dir,
             check=True,
