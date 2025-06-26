@@ -9,6 +9,7 @@ from docker_run import run_container
 from connection_manager import manager
 from container_inspector import inspect_container
 from nginx_manager import create_nginx_config, reload_nginx
+from docker_helpers import get_host_port
 
 async def run_pipeline(repo_url: str):
     container_name = f"proj-{str(uuid.uuid4())[:8]}"
@@ -40,13 +41,22 @@ async def run_pipeline(repo_url: str):
 
     if await asyncio.to_thread(os.path.exists, compose_path_yml) or await asyncio.to_thread(os.path.exists, compose_path_yaml):
         await manager.broadcast("⏩ STEP: Docker Compose found. Running docker-compose up...")
-        container_names = await docker_up(repo_url)
-        if container_names:
-            await manager.broadcast("✅ STEP-SUCCESS: Docker Compose finished.")
-            await manager.broadcast("🟢 STATUS: Pipeline finished successfully.")
-            return container_name, container_names
+        service_ports = await docker_up(repo_url)
+        if service_ports:
+            await manager.broadcast(f"✅ STEP-SUCCESS: Docker Compose services are up: {list(service_ports.keys())}")
+            primary_container_name = list(service_ports.keys())[0]
+            primary_port = service_ports[primary_container_name]
+            await manager.broadcast(f"⏩ STEP: Setting up Nginx for primary service '{primary_container_name}' on port {primary_port}")
+            nginx_success = create_nginx_config(container_name, int(primary_port))
+            if not nginx_success:
+                await manager.broadcast(f"🔴 [{container_name}] FATAL: Failed to create Nginx config.")
+                return None, None
+            await reload_nginx()
+            server_url = f"http://{container_name}.localhost:8888"
+            await manager.broadcast(f"🚀 SUCCESS! Primary service is available at: {server_url}")
+            return container_name, service_ports
         else:
-            await manager.broadcast("❌ STEP-FAILED: Docker Compose failed.")
+            await manager.broadcast("❌ STEP-FAILED: Docker Compose failed to expose any services.")
             await manager.broadcast("🔴 STATUS: Pipeline failed.")
             return None, None
 
@@ -98,17 +108,4 @@ async def run_pipeline(repo_url: str):
         await manager.broadcast("--- pipeline failed ---")
         await manager.broadcast("🔴 STATUS: Pipeline failed.")
         return None, None
-
-def get_host_port(container_details: dict):
-    """
-    Parses the complex Docker inspect output to find the host port.
-    """
-    try:
-        ports = container_details.get("NetworkSettings", {}).get("Ports", {})
-        for container_port, host_bindings in ports.items():
-            if host_bindings and len(host_bindings) > 0:
-                return host_bindings[0].get("HostPort")
-        return None
-    except (KeyError, IndexError, TypeError):
-        return None
     

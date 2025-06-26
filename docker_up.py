@@ -2,6 +2,8 @@ import os
 import subprocess
 import json
 import asyncio
+from container_inspector import inspect_container
+from docker_helpers import get_host_port
 
 async def docker_up(repo_url: str):
     repo_dir = "./temp_repo"
@@ -32,9 +34,19 @@ async def docker_up(repo_url: str):
         containers_info = [json.loads(line) for line in output_lines if line.strip()]
         container_names = [info["Name"] for info in containers_info]
         print(f"✅ Discovered containers: {container_names}")
-        return container_names
+
+        # Inspect each container and get its port
+        service_ports = {}
+        for name in container_names:
+            details = await inspect_container(name)
+            if details:
+                host_port = get_host_port(details)
+                if host_port:
+                    service_ports[name] = host_port
+        print(f"✅ Discovered service ports: {service_ports}")
+        return service_ports
 
     except subprocess.CalledProcessError as failed:
         print(f"A docker-compose command failed: {failed}")
         print(f"Error output: {failed.stderr}")
-        return []
+        return {}
