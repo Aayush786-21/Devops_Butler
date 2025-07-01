@@ -62,4 +62,23 @@ def list_deployments(session: Session = Depends(get_session)):
     statement = select(Deployment)
     deployments = session.exec(statement).all()
     return deployments
+
+@app.delete("/deployments/clear")
+def clear_all_deployments(session: Session = Depends(get_session)):
+    """
+    Deletes all deployment records from the database.
+    """
+    try:
+        # Get all existing deployment records
+        deployments_to_delete = session.exec(select(Deployment)).all()
+        # Loop through them and delete each one
+        for deployment in deployments_to_delete:
+            session.delete(deployment)
+        # Commit the transaction to make the deletions permanent
+        session.commit()
+        print("✅ Database cleared successfully.")
+        return {"message": "All deployment history has been cleared."}
+    except Exception as e:
+        print(f"❌ Failed to clear database: {e}")
+        raise HTTPException(status_code=500, detail="Could not clear the database.")
         

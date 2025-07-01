@@ -1,4 +1,4 @@
- // --- Helper: Toast Notification ---
+// --- Helper: Toast Notification ---
 function showToast(msg, type='info') {
     const toast = document.getElementById('toast');
     toast.textContent = msg;
@@ -143,4 +143,32 @@ function showToast(msg, type='info') {
     showToast('Paste your Git URL and hit Deploy!', 'info');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
+  // --- CLEAR HISTORY BUTTON LOGIC ---
+  const clearBtn = document.getElementById('clearBtn');
+  async function handleClearHistory() {
+    if (!confirm("Are you sure you want to delete ALL deployment history? This cannot be undone.")) {
+        return;
+    }
+    try {
+        const response = await fetch('/deployments/clear', {
+            method: 'DELETE'
+        });
+        
+        const result = await response.json();
+        
+        if(response.ok) {
+            addLog(`✅ ${result.message}`);
+            // After clearing, automatically refresh the (now empty) table
+            fetchAndDisplayHistory();
+        } else {
+            addLog(`🔴 ERROR: ${result.detail}`);
+        }
+    } catch (error) {
+        addLog(`🔴 NETWORK-ERROR: Could not clear history. ${error}`);
+    }
+  }
+  if (clearBtn) {
+    clearBtn.addEventListener('click', handleClearHistory);
+  }
+  // --- END CLEAR HISTORY BUTTON LOGIC ---
   

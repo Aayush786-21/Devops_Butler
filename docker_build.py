@@ -1,58 +1,46 @@
 import asyncio
-import os
+import subprocess
 
-async def docker_build(repo_url: str, container_name: str):
-    repo_dir = "./temp_repo"
+# The function now accepts the project_id (or container_name)
+async def docker_build(container_name: str):
     image_name = f"local-registry/{container_name}:latest"
-
-    print(f"running the dockerfile that we found inside {repo_dir}")
-
-    original_dir = os.getcwd()
-    os.chdir(repo_dir)
+    print(f"building the image: {image_name} inside ./temp_repo")
 
     try:
-        command = [
-            "docker",
-            "build",
-            "-t",
-            image_name,
-            "."
-        ]
-
-        print(f"building the image inside {repo_dir}")
-        proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            print(f" Docker build failed: {stderr.decode()}")
-            return None
+        build_command = ["docker", "build", "-t", image_name, "."]
+        await asyncio.to_thread(
+            subprocess.run,
+            build_command,
+            cwd="./temp_repo",
+            check=True,
+            capture_output=True,
+            text=True
+        )
         print("Docker build completed successfully!")
-        print(f"Build output: {stdout.decode()}")
 
-        # Check if image was created
-        async def get_docker_images():
-            proc = await asyncio.create_subprocess_exec(
-                "docker", "images",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            out, _ = await proc.communicate()
-            return out.decode().strip().split('\n')
-
-        print("\nListing all Docker images:")
-        images = await get_docker_images()
-        for image in images:
-            print(f"  {image}")
-
-        # Check specifically for our image
-        if any(image_name in image for image in images):
-            print(f"\n Successfully found '{image_name}' in the list!")
+        # --- ROBUST VERIFICATION LOGIC ---
+        print("\nVerifying image creation with a precise filter...")
+        verification_command = [
+            "docker", "images",
+            "--filter", f"reference={image_name}",
+            "--format", "{{.ID}}"
+        ]
+        verification_result = await asyncio.to_thread(
+            subprocess.run,
+            verification_command,
+            text=True,
+            capture_output=True,
+            check=True
+        )
+        image_id = verification_result.stdout.strip()
+        if image_id:
+            print(f"\n✅ Successfully verified image '{image_name}' exists with ID: {image_id}")
             return image_name
         else:
-            print(f"\n '{image_name}' not found in the list!")
+            print(f"\n❌ Verification failed. No image found for reference '{image_name}'.")
             return None
+        # ---------------------------------
 
     except Exception as e:
-        print(f" Unexpected error: {e}")
+        print(f" An unexpected error occurred in docker_build: {e}")
         return None
-    finally:
-        os.chdir(original_dir)

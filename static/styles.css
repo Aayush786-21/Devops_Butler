@@ -403,4 +403,6 @@
     transition: opacity 0.4s cubic-bezier(.4,2,.6,1);
   }
   .toast.show { opacity: 1; pointer-events: auto;}
+  button.danger { background-color: #c53030; }
+  button.danger:hover { background-color: #9b2c2c; }
   
