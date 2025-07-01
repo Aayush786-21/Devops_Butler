@@ -10,9 +10,24 @@ from connection_manager import manager
 from container_inspector import inspect_container
 from nginx_manager import create_nginx_config, reload_nginx
 from docker_helpers import get_host_port
+from sqlmodel import Session 
+from database import engine  
+from models import Deployment
+
+
 
 async def run_pipeline(repo_url: str):
     container_name = f"proj-{str(uuid.uuid4())[:8]}"
+    with Session(engine) as session:
+        # Create a new Deployment object with the starting status
+        db_deployment = Deployment(
+            container_name=container_name,
+            git_url=repo_url,
+            status="starting"
+        )
+        session.add(db_deployment)
+        session.commit()
+        session.refresh(db_deployment)
     await manager.broadcast(f"🔵 STATUS: Starting pipeline for {repo_url} [ID: {container_name}]")
     await asyncio.sleep(1)
 
@@ -50,13 +65,33 @@ async def run_pipeline(repo_url: str):
             nginx_success = create_nginx_config(container_name, int(primary_port))
             if not nginx_success:
                 await manager.broadcast(f"🔴 [{container_name}] FATAL: Failed to create Nginx config.")
+                with Session(engine) as session:
+                    deployment_to_update = session.get(Deployment, db_deployment.id)
+                    if deployment_to_update:
+                        deployment_to_update.status = "failed"
+                        session.add(deployment_to_update)
+                        session.commit()
+                await manager.broadcast("🔴 STATUS: Pipeline failed.")
                 return None, None
             await reload_nginx()
             server_url = f"http://{container_name}.localhost:8888"
-            await manager.broadcast(f"🚀 SUCCESS! Primary service is available at: {server_url}")
+            with Session(engine) as session:
+                deployment_to_update = session.get(Deployment, db_deployment.id)
+                if deployment_to_update:
+                    deployment_to_update.status = "success"
+                    deployment_to_update.deployed_url = server_url
+                    session.add(deployment_to_update)
+                    session.commit()
+            await manager.broadcast(f"🚀 SUCCESS! Deployed to: {server_url}")
             return container_name, service_ports
         else:
             await manager.broadcast("❌ STEP-FAILED: Docker Compose failed to expose any services.")
+            with Session(engine) as session:
+                deployment_to_update = session.get(Deployment, db_deployment.id)
+                if deployment_to_update:
+                    deployment_to_update.status = "failed"
+                    session.add(deployment_to_update)
+                    session.commit()
             await manager.broadcast("🔴 STATUS: Pipeline failed.")
             return None, None
 
@@ -69,24 +104,52 @@ async def run_pipeline(repo_url: str):
         image_name = await docker_build(repo_url, container_name)
         if not image_name:
             await manager.broadcast(f"🔴 [{container_name}] FATAL: Docker build failed.")
+            with Session(engine) as session:
+                deployment_to_update = session.get(Deployment, db_deployment.id)
+                if deployment_to_update:
+                    deployment_to_update.status = "failed"
+                    session.add(deployment_to_update)
+                    session.commit()
+            await manager.broadcast("🔴 STATUS: Pipeline failed.")
             return None, None
 
         # Step 2: Run the container
         run_success = await run_container(image_name, container_name)
         if not run_success:
             await manager.broadcast(f"🔴 [{container_name}] FATAL: Failed to start container.")
+            with Session(engine) as session:
+                deployment_to_update = session.get(Deployment, db_deployment.id)
+                if deployment_to_update:
+                    deployment_to_update.status = "failed"
+                    session.add(deployment_to_update)
+                    session.commit()
+            await manager.broadcast("🔴 STATUS: Pipeline failed.")
             return None, None
 
         # Step 3: Inspect the container to find the port
         container_details = await inspect_container(container_name)
         if not container_details:
             await manager.broadcast(f"🔴 [{container_name}] FATAL: Could not inspect container.")
+            with Session(engine) as session:
+                deployment_to_update = session.get(Deployment, db_deployment.id)
+                if deployment_to_update:
+                    deployment_to_update.status = "failed"
+                    session.add(deployment_to_update)
+                    session.commit()
+            await manager.broadcast("🔴 STATUS: Pipeline failed.")
             return None, None
 
         # Helper to extract the port
         host_port = get_host_port(container_details)
         if not host_port:
             await manager.broadcast(f"🔴 [{container_name}] FATAL: Could not find published port.")
+            with Session(engine) as session:
+                deployment_to_update = session.get(Deployment, db_deployment.id)
+                if deployment_to_update:
+                    deployment_to_update.status = "failed"
+                    session.add(deployment_to_update)
+                    session.commit()
+            await manager.broadcast("🔴 STATUS: Pipeline failed.")
             return None, None
 
         await manager.broadcast(f"✅ [{container_name}] Container is running on localhost:{host_port}")
@@ -95,17 +158,37 @@ async def run_pipeline(repo_url: str):
         nginx_success = create_nginx_config(container_name, int(host_port))
         if not nginx_success:
             await manager.broadcast(f"🔴 [{container_name}] FATAL: Failed to create Nginx config.")
+            with Session(engine) as session:
+                deployment_to_update = session.get(Deployment, db_deployment.id)
+                if deployment_to_update:
+                    deployment_to_update.status = "failed"
+                    session.add(deployment_to_update)
+                    session.commit()
+            await manager.broadcast("🔴 STATUS: Pipeline failed.")
             return None, None
 
         # Step 5: Reload Nginx
         await reload_nginx()
 
         server_url = f"http://{container_name}.localhost:8888"
+        with Session(engine) as session:
+            deployment_to_update = session.get(Deployment, db_deployment.id)
+            if deployment_to_update:
+                deployment_to_update.status = "success"
+                deployment_to_update.deployed_url = server_url
+                session.add(deployment_to_update)
+                session.commit()
         await manager.broadcast(f"🚀 SUCCESS! Application deployed at: {server_url}")
         return container_name, [server_url]
     else:
         await manager.broadcast("Analysis failed: No 'docker-compose.yml' or 'Dockerfile' found.")
         await manager.broadcast("--- pipeline failed ---")
+        with Session(engine) as session:
+            deployment_to_update = session.get(Deployment, db_deployment.id)
+            if deployment_to_update:
+                deployment_to_update.status = "failed"
+                session.add(deployment_to_update)
+                session.commit()
         await manager.broadcast("🔴 STATUS: Pipeline failed.")
         return None, None
     

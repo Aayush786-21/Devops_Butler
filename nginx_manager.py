@@ -1,6 +1,8 @@
 import os
+import platform
 import subprocess
 import asyncio
+from tabnanny import check
 
 NGINX_SITES_AVAILABLE = "/opt/homebrew/etc/nginx/servers"
 
@@ -39,7 +41,12 @@ async def reload_nginx():
     """
     print("Reloading Nginx configuration...")
     try:
-        await asyncio.to_thread(subprocess.run, ["sudo", "brew", "services", "restart", "nginx"], check=True)
+        _os = platform.system()
+        if _os == 'darwin':
+            await asyncio.to_thread(subprocess.run, ["sudo", "brew", "services", "restart", "nginx"], check=True)
+        if _os=="liunx":
+            await asyncio.to_thread(subprocess.run,['sudo','systemctl','restart','nginx'],check=True)
+
         print("✅ Nginx reloaded successfully.")
     except subprocess.CalledProcessError as e:
         print(f"❌ Failed to reload Nginx: {e}")

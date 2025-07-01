@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-g">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOps Butler</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+    <div class="container">
+        <h1>🤵‍♂️ DevOps Butler</h1>
+        <p>Your personal deployment assistant. Enter a Git repository URL to begin.</p>
+        
+        <div class="input-group">
+            <input type="text" id="gitUrl" placeholder="https://github.com/user/repo.git">
+            <button id="deployBtn">Deploy</button>
+        </div>
+
+        <div id="logs">
+            <!-- Real-time logs will appear here -->
+        </div>
+
+        <div class="history-header">
+            <h2>Deployment History</h2>
+            <button id="refreshBtn">Refresh</button>
+        </div>
+        <table id="historyTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Container Name</th>
+                    <th>Status</th>
+                    <th>Deployed URL</th>
+                    <th>Created At</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- History rows will be inserted here by JavaScript -->
+            </tbody>
+        </table>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
