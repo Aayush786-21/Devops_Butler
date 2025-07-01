@@ -1,46 +1,67 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-g">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DevOps Butler</title>
-    <link rel="stylesheet" href="/static/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DevOps Butler – Command Center</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="icon" href="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/docker/docker-original.svg">
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-
-    <div class="container">
-        <h1>🤵‍♂️ DevOps Butler</h1>
-        <p>Your personal deployment assistant. Enter a Git repository URL to begin.</p>
-        
+  <div class="bg-anim">
+    <span class="c1"></span>
+    <span class="c2"></span>
+    <span class="c3"></span>
+  </div>
+  <div class="hero">
+    <h1><span style="vertical-align:middle;">🤵‍♂️</span> DevOps Butler</h1>
+    <p>Welcome to your futuristic deployment command center.<br>
+      <span style="color:var(--accent2);font-weight:600;">Deploy, monitor, and manage your projects in style.</span>
+    </p>
+  </div>
+  <main class="command-center">
+    <!-- Deploy Card -->
+    <section class="card">
+      <form class="deploy-form" id="deployForm" autocomplete="off" onsubmit="return false;">
         <div class="input-group">
-            <input type="text" id="gitUrl" placeholder="https://github.com/user/repo.git">
-            <button id="deployBtn">Deploy</button>
+          <input type="text" id="gitUrl" placeholder=" " autocomplete="off" required>
+          <label for="gitUrl" class="floating-label">Git Repository URL</label>
         </div>
-
-        <div id="logs">
-            <!-- Real-time logs will appear here -->
-        </div>
-
-        <div class="history-header">
-            <h2>Deployment History</h2>
-            <button id="refreshBtn">Refresh</button>
-        </div>
-        <table id="historyTable">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Container Name</th>
-                    <th>Status</th>
-                    <th>Deployed URL</th>
-                    <th>Created At</th>
-                </tr>
-            </thead>
-            <tbody>
-                <!-- History rows will be inserted here by JavaScript -->
-            </tbody>
-        </table>
-    </div>
-
-    <script src="/static/app.js"></script>
+        <button type="submit" class="deploy-btn" id="deployBtn">
+          <span class="icon">🚀</span> Deploy
+        </button>
+      </form>
+      <div class="logs-section" id="logs" aria-live="polite"></div>
+    </section>
+    <!-- History Card -->
+    <section class="card">
+      <div class="history-header">
+        <h2><span style="vertical-align:middle;">📜</span> Deployment History</h2>
+        <button class="refresh-btn" id="refreshBtn"><span style="vertical-align:middle;">🔄</span> Refresh</button>
+      </div>
+      <table class="history-table" id="historyTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Container Name</th>
+            <th>Status</th>
+            <th>Deployed URL</th>
+            <th>Created At</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- History rows will be inserted here by JavaScript -->
+        </tbody>
+      </table>
+    </section>
+  </main>
+  <!-- Floating Action Button for Quick Deploy -->
+  <button class="fab" id="fabDeploy" title="Quick Deploy">
+    <span>+</span>
+  </button>
+  <!-- Toast Notification -->
+  <div class="toast" id="toast"></div>
+  <script src="/static/app.js"></script>
 </body>
 </html>
