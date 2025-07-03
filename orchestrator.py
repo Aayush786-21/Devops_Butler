@@ -29,6 +29,7 @@ app = FastAPI(lifespan=lifespan)
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+app.mount("/icons", StaticFiles(directory="icons"), name="icons")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():

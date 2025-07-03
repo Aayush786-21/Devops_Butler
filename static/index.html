@@ -1,70 +1,134 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DevOps Butler – Command Center</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-  <link rel="icon" href="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/docker/docker-original.svg">
-  <link rel="stylesheet" href="/static/styles.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DevOps Butler</title>
+  <link rel="stylesheet" href="/static/styles.css"/>
+  <link rel="icon" type="image/png" href="/icons/logo.png"/>
+  <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet"/>
 </head>
 <body>
-  <div class="bg-anim">
-    <span class="c1"></span>
-    <span class="c2"></span>
-    <span class="c3"></span>
+
+  <!-- Background Animation -->
+  <div class="bg-animation">
+    <div class="floating-shapes">
+      <div class="shape" style="background: var(--gradient-purple); top: 20%; left: 10%; width: 100px; height: 100px;"></div>
+      <div class="shape" style="background: var(--gradient-2); top: 60%; right: 10%; width: 150px; height: 150px;"></div>
+      <div class="shape" style="background: var(--gradient-3); bottom: 20%; left: 20%; width: 80px; height: 80px;"></div>
+      <div class="shape" style="background: var(--gradient-1); top: 80%; left: 80%; width: 60px; height: 60px;"></div>
+      <div class="shape" style="background: var(--gradient-2); top: 10%; right: 30%; width: 120px; height: 120px;"></div>
+    </div>
+    <div id="confetti-container"></div>
   </div>
-  <div class="hero">
-    <h1><span style="vertical-align:middle;">🤵‍♂️</span> DevOps Butler</h1>
-    <p>Welcome to your futuristic deployment command center.<br>
-      <span style="color:var(--accent2);font-weight:600;">Deploy, monitor, and manage your projects in style.</span>
-    </p>
-  </div>
-  <main class="command-center">
-    <!-- Deploy Card -->
-    <section class="card">
-      <form class="deploy-form" id="deployForm" autocomplete="off" onsubmit="return false;">
-        <div class="input-group">
-          <input type="text" id="gitUrl" placeholder=" " autocomplete="off" required>
-          <label for="gitUrl" class="floating-label">Git Repository URL</label>
-        </div>
-        <button type="submit" class="deploy-btn" id="deployBtn">
-          <span class="icon">🚀</span> Deploy
-        </button>
-      </form>
-      <div class="logs-section" id="logs" aria-live="polite"></div>
-    </section>
-    <!-- History Card -->
-    <section class="card">
-      <div class="history-header">
-        <h2><span style="vertical-align:middle;">📜</span> Deployment History</h2>
-        <div>
-          <button class="refresh-btn" id="refreshBtn"><span style="vertical-align:middle;">🔄</span> Refresh</button>
-          <button id="clearBtn" class="danger">Clear History</button>
+
+  <!-- Navbar -->
+  <nav class="navbar" data-aos="fade-down">
+    <div class="nav-container">
+      <div class="logo">DevOps Butler</div>
+      <ul class="nav-links">
+        <li><a class="nav-link" href="#deploy">Deploy</a></li>
+        <li><a class="nav-link" href="#status">Status</a></li>
+        <li><a class="nav-link" href="#history">History</a></li>
+        <li><a class="nav-link" href="#about">About</a></li>
+      </ul>
+      <a class="nav-cta" href="#deploy">Get Started</a>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero" id="hero">
+    <div class="about-content" data-aos="fade-up">
+      <div class="about-image">
+        <img src="/icons/devops.png" alt="DevOps Butler Logo" class="profile-image" style="max-width: 260px;" />
+      </div>
+      <div>
+        <h1 class="hero-name">DevOps Butler</h1>
+        <h2 class="hero-title">Your Automated Cloud Deployment Assistant</h2>
+        <p class="hero-description">
+          Automate deployments directly from your Git repositories with zero hassle. Let Butler configure Docker, Nginx, and expose your app instantly.
+        </p>
+        <div class="hero-buttons">
+          <a href="#deploy" class="btn btn-primary">Deploy Now</a>
+          <a href="#about" class="btn btn-secondary">Learn More</a>
         </div>
       </div>
-      <table class="history-table" id="historyTable">
+    </div>
+  </section>
+
+  <!-- Deploy Section -->
+  <section class="section" id="deploy" data-aos="fade-up">
+    <h2 class="section-title">Deploy Your App</h2>
+    <div class="card">
+      <form class="deploy-form">
+        <div class="input-group">
+          <label for="git-url">Git Repository URL</label>
+          <input type="text" id="git-url" name="git-url" placeholder="https://github.com/your/repo" required />
+        </div>
+        <button type="submit" class="deploy-btn btn-primary">Deploy</button>
+      </form>
+      <div id="deploy-status" class="fade-in"></div>
+    </div>
+  </section>
+
+  <!-- Status Section -->
+  <section class="section" id="status" data-aos="fade-up">
+    <h2 class="section-title">Deployment Status</h2>
+    <div class="card">
+      <div id="status-logs" class="logs-section">
+        <!-- Live logs will appear here -->
+      </div>
+    </div>
+  </section>
+
+  <!-- History Section -->
+  <section class="section" id="history" data-aos="fade-up">
+    <h2 class="section-title">Deployment History</h2>
+    <div class="card">
+      <table class="history-table" id="history-table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Container Name</th>
+            <th>Project</th>
             <th>Status</th>
-            <th>Deployed URL</th>
-            <th>Created At</th>
+            <th>URL</th>
+            <th>Time</th>
           </tr>
         </thead>
         <tbody>
-          <!-- History rows will be inserted here by JavaScript -->
+          <!-- JS will populate this -->
         </tbody>
       </table>
-    </section>
-  </main>
-  <!-- Floating Action Button for Quick Deploy -->
-  <button class="fab" id="fabDeploy" title="Quick Deploy">
-    <span>+</span>
-  </button>
+      <br />
+      <button id="clearBtn" class="btn btn-secondary" style="float: right;">Clear History</button>
+    </div>
+  </section>
+
+  <!-- About Section -->
+  <section class="section" id="about" data-aos="fade-up">
+    <h2 class="section-title">About DevOps Butler</h2>
+    <div class="card">
+      <p>
+        DevOps Butler is an open-source tool that simplifies your cloud deployment pipelines. Backed by Docker, Nginx, and smart automation, it handles build-to-deploy cycles straight from Git.
+      </p>
+    </div>
+  </section>
+
   <!-- Toast Notification -->
-  <div class="toast" id="toast"></div>
+  <div id="toast"></div>
+
+  <!-- Floating Deploy Button -->
+  <button id="fabDeploy" class="btn btn-primary" style="position: fixed; bottom: 2rem; right: 2rem; z-index: 1000;">
+    🚀
+  </button>
+
+  <!-- Hidden Logs for toast logging (if needed) -->
+  <div id="logs" style="display: none;"></div>
+
+  <!-- Scripts -->
+  <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
   <script src="/static/app.js"></script>
+  <script>
+    AOS.init({ duration: 800, once: true });
+  </script>
 </body>
 </html>
