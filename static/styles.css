@@ -153,6 +153,63 @@ body {
   color: var(--primary);
 }
 
+.btn-danger {
+  background: var(--error);
+  color: white;
+  border: none;
+}
+
+.btn-sm {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+/* Deploy Button Styling */
+.deploy-btn {
+  padding: 1rem 2rem !important;
+  font-size: 1.2rem !important;
+  font-weight: 600 !important;
+  border-radius: 12px !important;
+  transition: all 0.3s ease !important;
+  box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3) !important;
+  border: none !important;
+  cursor: pointer !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
+  color: white !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.deploy-btn:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 8px 25px rgba(79, 70, 229, 0.4) !important;
+  background: linear-gradient(135deg, #4338ca, #6d28d9) !important;
+}
+
+.deploy-btn:active {
+  transform: translateY(0) !important;
+  box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3) !important;
+}
+
+.deploy-btn:disabled {
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
+
+/* Floating Action Button Hover Effects */
+#fabDeploy:hover {
+  transform: translateY(-3px) scale(1.05) !important;
+  box-shadow: 0 8px 25px rgba(79, 70, 229, 0.4) !important;
+  background: linear-gradient(135deg, #4338ca, #6d28d9) !important;
+}
+
+#fabDeploy:active {
+  transform: translateY(-1px) scale(1.02) !important;
+}
+
 /* Card */
 .card {
   background: var(--card-bg);

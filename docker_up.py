@@ -3,10 +3,9 @@ import subprocess
 import json
 import asyncio
 from container_inspector import inspect_container
-from docker_helpers import get_host_port
+from docker_helpers import get_host_port, get_container_port
 
-async def docker_up(repo_url: str):
-    repo_dir = "./temp_repo"
+async def docker_up(repo_dir: str):
     print(f"running the docker compose from {repo_dir}")
 
     try:
@@ -35,14 +34,19 @@ async def docker_up(repo_url: str):
         container_names = [info["Name"] for info in containers_info]
         print(f"✅ Discovered containers: {container_names}")
 
-        # Inspect each container and get its port
+        # Inspect each container and get its ports
         service_ports = {}
         for name in container_names:
             details = await inspect_container(name)
             if details:
                 host_port = get_host_port(details)
-                if host_port:
-                    service_ports[name] = host_port
+                internal_port = get_container_port(details)
+                if internal_port:
+                    service_ports[name] = {
+                        'internal_port': int(internal_port),
+                        'host_port': host_port
+                    }
+                    print(f"✅ Service '{name}': internal_port={internal_port}, host_port={host_port}")
         print(f"✅ Discovered service ports: {service_ports}")
         return service_ports
 

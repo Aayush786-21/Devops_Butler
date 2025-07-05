@@ -65,7 +65,7 @@
           <label for="git-url">Git Repository URL</label>
           <input type="text" id="git-url" name="git-url" placeholder="https://github.com/your/repo" required />
         </div>
-        <button type="submit" class="deploy-btn btn-primary">Deploy</button>
+        <button type="submit" class="deploy-btn btn-primary">🚀 Deploy</button>
       </form>
       <div id="deploy-status" class="fade-in"></div>
     </div>
@@ -92,6 +92,7 @@
             <th>Status</th>
             <th>URL</th>
             <th>Time</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -117,7 +118,7 @@
   <div id="toast"></div>
 
   <!-- Floating Deploy Button -->
-  <button id="fabDeploy" class="btn btn-primary" style="position: fixed; bottom: 2rem; right: 2rem; z-index: 1000;">
+  <button id="fabDeploy" class="btn btn-primary" style="position: fixed; bottom: 2rem; right: 2rem; z-index: 1000; padding: 1rem; border-radius: 50%; width: 60px; height: 60px; font-size: 1.5rem; box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3); transition: all 0.3s ease;">
     🚀
   </button>
 

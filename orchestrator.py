@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Back
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, HttpUrl
-from app_pipeline import run_pipeline 
+from app_pipeline import run_pipeline, extract_repo_name
 from contextlib import asynccontextmanager
 from database import create_db_and_tables, get_session
 import subprocess
@@ -13,6 +13,8 @@ import os
 from sqlmodel import Session, select
 from typing import List
 from models import Deployment
+from nginx_manager import delete_nginx_config, reload_nginx
+import asyncio
 
 class Project(BaseModel):
     git_url: HttpUrl
@@ -82,4 +84,85 @@ def clear_all_deployments(session: Session = Depends(get_session)):
     except Exception as e:
         print(f"❌ Failed to clear database: {e}")
         raise HTTPException(status_code=500, detail="Could not clear the database.")
+
+@app.post("/cleanup/orphaned-configs")
+async def cleanup_orphaned_configs_endpoint():
+    """
+    Manually triggers cleanup of orphaned Nginx config files.
+    """
+    try:
+        from app_pipeline import cleanup_orphaned_configs
+        await cleanup_orphaned_configs()
+        return {"message": "Orphaned config cleanup completed successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+
+
+@app.delete("/deployments/{container_name}")
+async def destroy_deployment(container_name: str, session: Session = Depends(get_session)):
+    """
+    Destroys a deployment by stopping the container, removing nginx config, and updating the database.
+    """
+    try:
+        # Find the deployment in the database by container_name
+        deployment = session.exec(select(Deployment).where(Deployment.container_name == container_name)).first()
+        if not deployment:
+            raise HTTPException(status_code=404, detail="Deployment not found")
+        
+        print(f"🔴 Starting destruction of deployment: {container_name}")
+        
+        # Extract repo name from git URL for nginx config cleanup
+        repo_name = extract_repo_name(deployment.git_url)
+        
+        # Step 1: Remove nginx configuration
+        print(f"⏩ STEP: Removing nginx config for {repo_name}")
+        nginx_removed = delete_nginx_config(repo_name)
+        if not nginx_removed:
+            print(f"⚠️ Warning: Failed to remove nginx config for {repo_name}")
+        
+        # Step 2: Reload nginx to apply changes
+        print("⏩ STEP: Reloading nginx configuration")
+        await reload_nginx()
+        
+        # Step 3: Stop the container
+        print(f"⏩ STEP: Stopping container {container_name}")
+        stop_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "stop", container_name],
+            capture_output=True,
+            text=True
+        )
+        if stop_result.returncode != 0:
+            print(f"⚠️ Warning: Container {container_name} may not have been running: {stop_result.stderr}")
+        
+        # Step 4: Remove the container
+        print(f"⏩ STEP: Removing container {container_name}")
+        rm_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "rm", container_name],
+            capture_output=True,
+            text=True
+        )
+        if rm_result.returncode != 0:
+            print(f"⚠️ Warning: Container {container_name} may not have existed: {rm_result.stderr}")
+        
+        # Step 5: Update database status
+        deployment.status = "destroyed"
+        session.add(deployment)
+        session.commit()
+        
+        print(f"✅ Successfully destroyed deployment: {container_name}")
+        
+        # Broadcast the destruction event
+        await manager.broadcast(f"🗑️ DEPLOYMENT DESTROYED: {container_name} has been cleaned up")
+        
+        return {
+            "status": "destroyed",
+            "message": f"Deployment {container_name} has been successfully destroyed",
+            "container_name": container_name
+        }
+        
+    except Exception as e:
+        print(f"❌ Failed to destroy deployment {container_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to destroy deployment: {str(e)}")
         

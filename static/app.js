@@ -103,7 +103,7 @@ async function fetchAndDisplayHistory() {
     historyTableBody.innerHTML = '';
     if (deployments.length === 0) {
       const row = document.createElement('tr');
-      row.innerHTML = `<td colspan="4" style="text-align:center;color:var(--text-light);">No deployment history found.</td>`;
+      row.innerHTML = `<td colspan="5" style="text-align:center;color:var(--text-light);">No deployment history found.</td>`;
       historyTableBody.appendChild(row);
       return;
     }
@@ -119,22 +119,54 @@ async function fetchAndDisplayHistory() {
         ? `<a href="${dep.deployed_url}" target="_blank" title="Open deployment">${dep.deployed_url}</a>`
         : '<span style="color:var(--text-secondary);">N/A</span>';
       const formattedDate = dep.created_at ? new Date(dep.created_at).toLocaleString() : '-';
+      
+      // Create destroy button for running deployments
+      const destroyButton = (dep.status === 'success' || dep.status === 'starting') 
+        ? `<button class="btn btn-danger btn-sm" onclick="destroyDeployment('${dep.container_name}')" title="Destroy deployment">🗑️ Destroy</button>`
+        : '<span style="color:var(--text-secondary);">-</span>';
+      
       row.innerHTML = `
         <td><span style="font-family:var(--font-mono);font-size:1em;">${dep.container_name || '-'}</span></td>
         <td><span class="${statusClass}">${statusIcon} ${dep.status.charAt(0).toUpperCase() + dep.status.slice(1)}</span></td>
         <td>${urlLink}</td>
         <td>${formattedDate}</td>
+        <td>${destroyButton}</td>
       `;
       historyTableBody.appendChild(row);
     });
   } catch (error) {
     const row = document.createElement('tr');
-    row.innerHTML = `<td colspan="4" style="color:var(--error);text-align:center;">Could not fetch deployment history.</td>`;
+    row.innerHTML = `<td colspan="5" style="color:var(--error);text-align:center;">Could not fetch deployment history.</td>`;
     historyTableBody.appendChild(row);
     showToast('Could not fetch deployment history.', 'error');
   }
 }
 window.addEventListener('load', fetchAndDisplayHistory);
+
+// --- Destroy Deployment Function ---
+async function destroyDeployment(containerName) {
+  if (!confirm(`Are you sure you want to destroy the deployment "${containerName}"? This will stop the container and remove all associated resources.`)) {
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/deployments/${containerName}`, { method: 'DELETE' });
+    const result = await response.json();
+    
+    if (response.ok) {
+      showToast(`✅ ${result.message}`, 'success');
+      addUILog(`🗑️ Destroyed deployment: ${containerName}`);
+      // Refresh the history table to show updated status
+      fetchAndDisplayHistory();
+    } else {
+      showToast(`🔴 ERROR: ${result.detail}`, 'error');
+      addUILog(`🔴 Failed to destroy deployment: ${result.detail}`);
+    }
+  } catch (error) {
+    showToast(`🔴 NETWORK-ERROR: Could not destroy deployment.`, 'error');
+    addUILog(`🔴 Network error while destroying deployment: ${error}`);
+  }
+}
 
 // --- Helper: Toast Notification ---
 function showToast(msg, type = 'info') {
