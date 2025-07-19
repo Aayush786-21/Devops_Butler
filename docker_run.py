@@ -1,6 +1,6 @@
 import asyncio
 
-async def run_container(image_name: str, container_name: str):
+async def run_container(image_name: str, container_name: str, host_port: int = None, internal_port: int = None):
     print(f"Attempting to run container: {container_name}")
 
     # Stop old container if it exists - wait for completion
@@ -21,8 +21,10 @@ async def run_container(image_name: str, container_name: str):
             "-d",
             "--name", container_name,
             "--network", "devops-butler-net",
-            image_name
         ]
+        if host_port and internal_port:
+            command += ["-p", f"{host_port}:{internal_port}"]
+        command.append(image_name)
         proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         _, stderr = await proc.communicate()
         if proc.returncode == 0:

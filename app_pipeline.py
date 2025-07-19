@@ -15,6 +15,8 @@ from sqlmodel import Session, select
 from database import engine  
 from models import Deployment
 from ai_analyst import generate_dockerfile
+import socket
+import yaml
 
 
 def validate_git_url(git_url: str) -> bool:
@@ -116,6 +118,52 @@ def find_exposed_port(dockerfile_path: str) -> int | None:
         return None
     except FileNotFoundError:
         return None
+
+
+def find_free_port(start_port=1024, max_port=65535):
+    """
+    Finds and returns a free port on the host, starting from start_port.
+    """
+    for port in range(start_port, max_port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('localhost', port)) != 0:
+                return port
+    raise RuntimeError("No free ports available in range")
+
+
+def patch_compose_ports(compose_file_path):
+    """
+    Patch the docker-compose file to use free host ports if the default is busy.
+    """
+    with open(compose_file_path, 'r') as f:
+        compose_data = yaml.safe_load(f)
+
+    services = compose_data.get('services', {})
+    for service_name, service in services.items():
+        ports = service.get('ports', [])
+        new_ports = []
+        for port_mapping in ports:
+            # port_mapping can be 'host:container' or just 'container'
+            if isinstance(port_mapping, str) and ':' in port_mapping:
+                host_port, container_port = port_mapping.split(':', 1)
+                try:
+                    host_port_int = int(host_port)
+                except ValueError:
+                    new_ports.append(port_mapping)
+                    continue
+                # Check if host port is busy
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    if s.connect_ex(('localhost', host_port_int)) == 0:
+                        free_port = find_free_port(host_port_int + 1)
+                        print(f"Port {host_port_int} is busy, using {free_port} instead for service {service_name}")
+                        new_ports.append(f"{free_port}:{container_port}")
+                    else:
+                        new_ports.append(port_mapping)
+            else:
+                new_ports.append(port_mapping)
+        service['ports'] = new_ports
+    with open(compose_file_path, 'w') as f:
+        yaml.safe_dump(compose_data, f)
 
 
 async def cleanup_orphaned_configs():
@@ -322,6 +370,7 @@ async def run_pipeline(repo_url: str):
 
         if (compose_yml_exists or compose_yaml_exists) and should_use_compose:
             await manager.broadcast("⏩ STEP: Docker Compose found. Running docker-compose up...")
+            patch_compose_ports(compose_path_yml) # Patch ports before running compose
             service_ports = await docker_up(repo_dir)
             if service_ports:
                 await manager.broadcast(f"✅ STEP-SUCCESS: Docker Compose services are up: {list(service_ports.keys())}")
@@ -400,7 +449,15 @@ async def run_pipeline(repo_url: str):
                 return None, None
 
             # Step 2: Run the container (no longer needs to publish ports with -P)
-            run_success = await run_container(image_name, new_container_name)
+            # For direct Docker run, find a free port if the EXPOSE port is busy
+            desired_port = internal_port
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(('localhost', desired_port)) == 0:
+                    print(f"Port {desired_port} is busy, finding a free one...")
+                    desired_port = find_free_port(desired_port + 1)
+                    print(f"Using free port {desired_port} for direct Docker run.")
+
+            run_success = await run_container(image_name, new_container_name, host_port=desired_port, internal_port=internal_port)
             if not run_success:
                 await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Failed to start container.")
                 with Session(engine) as session:
@@ -431,7 +488,7 @@ async def run_pipeline(repo_url: str):
             # Step 5: Reload Nginx
             await reload_nginx()
 
-            server_url = f"http://{repo_name}.localhost:8888"
+            server_url = f"http://{repo_name}.localhost:{desired_port}" # Use the found/assigned port
             with Session(engine) as session:
                 deployment_to_update = session.get(Deployment, db_deployment.id)
                 if deployment_to_update:
