@@ -3,6 +3,7 @@ import os
 import re  # Import the regular expressions module
 import google.generativeai as genai
 from config import GOOGLE_API_KEY # Import our securely loaded key
+import glob
 
 # type: ignore[attr-defined]
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -36,6 +37,29 @@ def sanitize_output(raw_text: str) -> str:
         return match.group(2).strip()
     else:
         return raw_text.strip()
+
+def find_main_app_dir(code_directory: str) -> tuple[str, list[str]]:
+    """
+    Returns the relative path to the main app directory (where package.json or requirements.txt is found)
+    and the list of files in that directory.
+    """
+    for root, _, files in os.walk(code_directory):
+        if "package.json" in files or "requirements.txt" in files:
+            rel_path = os.path.relpath(root, code_directory)
+            return rel_path, files
+    return ".", os.listdir(code_directory)
+
+def load_dockerfile_templates():
+    """
+    Loads all Dockerfile templates from the dockerfile_templates directory and returns a dict of {template_name: content}.
+    """
+    templates = {}
+    template_dir = os.path.join(os.path.dirname(__file__), 'dockerfile_templates')
+    for path in glob.glob(os.path.join(template_dir, '*.Dockerfile')):
+        name = os.path.splitext(os.path.basename(path))[0]
+        with open(path, 'r') as f:
+            templates[name] = f.read()
+    return templates
 
 async def generate_docker_compose(code_directory: str) -> str | None:
     """
@@ -76,13 +100,15 @@ async def generate_docker_compose(code_directory: str) -> str | None:
 
 async def generate_dockerfile(code_directory: str, feedback: str | None = None) -> str | None:
     """
-    Asks the Gemini LLM to generate a Dockerfile for the given code.
+    Asks the Gemini LLM to generate a Dockerfile for the given code, with improved context about the main app directory and explicit template instructions/examples for known project types.
     """
     print("🤖 AI Analyst: Analyzing code to generate a Dockerfile...")
 
     try:
         file_structure = list_files_for_prompt(code_directory)
-        
+        main_app_dir, main_app_files = find_main_app_dir(code_directory)
+        main_app_files_str = "\n".join(main_app_files)
+
         feedback_prompt_section = ""
         if feedback:
             feedback_prompt_section = f"""
@@ -93,6 +119,12 @@ async def generate_dockerfile(code_directory: str, feedback: str | None = None) 
             Please analyze this error and generate a new, corrected Dockerfile that fixes the issue. DO NOT repeat the same mistake.
             """
 
+        # Load Dockerfile templates
+        templates = load_dockerfile_templates()
+        template_examples = "IMPORTANT: Here are sample Dockerfile templates for common project types. If you recognize the project structure, use the relevant template as a pattern.\n\n"
+        for name, content in templates.items():
+            template_examples += f"Example: {name} project\n" + content + "\n\n"
+
         prompt = f"""
         You are an expert DevOps engineer. Your task is to analyze the file structure of a project and generate a single, complete, valid `Dockerfile` for the main application.
 
@@ -101,7 +133,13 @@ async def generate_dockerfile(code_directory: str, feedback: str | None = None) 
         {file_structure}
         --- END FILE STRUCTURE ---
 
-        Based on this file structure, please generate a `Dockerfile`.
+        The main application appears to be in the directory: '{main_app_dir}'
+        Here are the files in that directory:
+        {main_app_files_str}
+
+        If you generate a Dockerfile, make sure to use the correct WORKDIR and copy files from the correct subdirectory if needed.
+
+        {template_examples}
 
         IMPORTANT RULES:
         1. The output must be ONLY the Dockerfile content and nothing else. Do not include explanations, introductions, or the ```dockerfile markdown markers.
@@ -111,7 +149,7 @@ async def generate_dockerfile(code_directory: str, feedback: str | None = None) 
         5. Set a sensible `CMD` or `ENTRYPOINT` to run the application.
         {feedback_prompt_section}
         """
-        
+
         response = await model.generate_content_async(prompt)
         sanitized_dockerfile = sanitize_output(response.text)
         print("✅ AI Analyst: Successfully generated and sanitized Dockerfile.")

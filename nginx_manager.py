@@ -33,6 +33,8 @@ server {{
 """
     print(f"Creating Nginx config at: {config_path}")
     try:
+        # Ensure the parent directory exists
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
         # This writes the file to your Mac, and the volume mount does the rest.
         with open(config_path, "w") as config_file:
             config_file.write(config_content)

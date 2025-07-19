@@ -318,20 +318,7 @@ async def run_pipeline(repo_url: str):
         # Check if docker-compose is a simple single-service setup or complex multi-service
         should_use_compose = False
         if compose_yml_exists or compose_yaml_exists:
-            compose_file = compose_path_yml if compose_yml_exists else compose_path_yaml
-            try:
-                with open(compose_file, 'r') as f:
-                    compose_content = f.read()
-                    # Simple heuristic: if it has 'depends_on' or multiple services, it's complex
-                    if 'depends_on:' in compose_content or compose_content.count('services:') > 1:
-                        print(f"⚠️ Complex docker-compose detected (has dependencies or multiple services), preferring Dockerfile approach")
-                        should_use_compose = False
-                    else:
-                        print(f"✅ Simple docker-compose detected, will use compose approach")
-                        should_use_compose = True
-            except Exception as e:
-                print(f"⚠️ Error reading docker-compose file: {e}, falling back to Dockerfile")
-                should_use_compose = False
+            should_use_compose = True
 
         if (compose_yml_exists or compose_yaml_exists) and should_use_compose:
             await manager.broadcast("⏩ STEP: Docker Compose found. Running docker-compose up...")

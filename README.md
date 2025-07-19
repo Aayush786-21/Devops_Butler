@@ -6,10 +6,7 @@ Give the Butler a Git URL, and it will handle the rest—from cloning and analys
 
 ![DevOps Butler](icons/devops.png)
 
-<!-- 
-**TODO:** Create a short screen recording of the process (connect WebSocket, send API request, see logs, visit the final URL) and save it as `butler-demo.gif` in this directory. Then uncomment the line below.
--->
-<!-- ![DevOps Butler in Action](butler-demo.gif) -->
+
 
 ## ✨ Core Features
 
