@@ -14,7 +14,7 @@ from nginx_manager import create_nginx_config, reload_nginx, delete_nginx_config
 from sqlmodel import Session, select
 from database import engine  
 from models import Deployment
-from ai_analyst import generate_dockerfile
+from ai_analyst import generate_dockerfile, ai_patch_docker_compose
 import socket
 import yaml
 
@@ -162,6 +162,19 @@ def patch_compose_ports(compose_file_path):
             else:
                 new_ports.append(port_mapping)
         service['ports'] = new_ports
+    with open(compose_file_path, 'w') as f:
+        yaml.safe_dump(compose_data, f)
+
+
+def patch_env_files_in_compose(compose_file_path, repo_dir):
+    import yaml, os
+    with open(compose_file_path, 'r') as f:
+        compose_data = yaml.safe_load(f)
+    services = compose_data.get('services', {})
+    if os.path.exists(os.path.join(repo_dir, "frontend.env")) and 'frontend' in services:
+        services['frontend']['env_file'] = ['./frontend.env']
+    if os.path.exists(os.path.join(repo_dir, "backend.env")) and 'backend' in services:
+        services['backend']['env_file'] = ['./backend.env']
     with open(compose_file_path, 'w') as f:
         yaml.safe_dump(compose_data, f)
 
@@ -347,6 +360,34 @@ async def run_pipeline(repo_url: str):
             return None, None
         await asyncio.sleep(1)
 
+        # After cloning the repo, check for .env file in the repo_dir
+        repo_env_path = os.path.join(repo_dir, '.env')
+        if os.path.exists(repo_env_path):
+            warning_msg = (
+                "⚠️ Warning: A .env file was found in your repository. "
+                "For security, do NOT commit .env files to your repo. "
+                "Please use the upload feature to provide your .env file securely during deployment. "
+                "The deployment will use the uploaded .env file if provided."
+            )
+            print(warning_msg)
+            await manager.broadcast(warning_msg)
+
+        # Fallback: If no uploaded .env file but repo .env exists, use it for deployment
+        frontend_env_path = os.path.join(repo_dir, "frontend.env")
+        backend_env_path = os.path.join(repo_dir, "backend.env")
+        if os.path.exists(repo_env_path):
+            if not os.path.exists(frontend_env_path) and not os.path.exists(backend_env_path):
+                # Use repo .env as fallback for both frontend and backend
+                import shutil
+                shutil.copy(repo_env_path, frontend_env_path)
+                shutil.copy(repo_env_path, backend_env_path)
+                fallback_msg = (
+                    "⚠️ No uploaded .env file found. Using the .env file from your repository as a fallback for deployment. "
+                    "For best security, please use the upload feature instead."
+                )
+                print(fallback_msg)
+                await manager.broadcast(fallback_msg)
+
         # --- ANALYSIS PHASE WITH DEBUGGING ---
         print(f"--- Analysis Phase ---")
         print(f"Checking for compose file in: {repo_dir}")
@@ -370,7 +411,15 @@ async def run_pipeline(repo_url: str):
 
         if (compose_yml_exists or compose_yaml_exists) and should_use_compose:
             await manager.broadcast("⏩ STEP: Docker Compose found. Running docker-compose up...")
-            patch_compose_ports(compose_path_yml) # Patch ports before running compose
+            compose_file = compose_path_yml if compose_yml_exists else compose_path_yaml
+            # AI-powered patching of the compose file
+            patched_yaml = await ai_patch_docker_compose(compose_file)
+            if patched_yaml:
+                with open(compose_file, 'w') as f:
+                    f.write(patched_yaml)
+                print(f"AI-patched docker-compose file written to {compose_file}")
+            patch_compose_ports(compose_file) # Patch ports before running compose (fallback/manual)
+            patch_env_files_in_compose(compose_file, repo_dir) # Patch env files before running compose
             service_ports = await docker_up(repo_dir)
             if service_ports:
                 await manager.broadcast(f"✅ STEP-SUCCESS: Docker Compose services are up: {list(service_ports.keys())}")
@@ -378,8 +427,8 @@ async def run_pipeline(repo_url: str):
                 primary_service = service_ports[primary_container_name]
                 primary_port = primary_service['internal_port']
                 await manager.broadcast(f"⏩ STEP: Setting up Nginx for primary service '{primary_container_name}' on internal port {primary_port}")
-                print(f"🔧 VERIFICATION: Creating Nginx config with repo_name='{repo_name}', container_name='{new_container_name}', port={primary_port}")
-                nginx_success = create_nginx_config(repo_name, new_container_name, primary_port)
+                print(f"🔧 VERIFICATION: Creating Nginx config with repo_name='{repo_name}', container_name='{primary_container_name}', port={primary_port}")
+                nginx_success = create_nginx_config(repo_name, primary_container_name, primary_port)
                 if not nginx_success:
                     await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Failed to create Nginx config.")
                     with Session(engine) as session:

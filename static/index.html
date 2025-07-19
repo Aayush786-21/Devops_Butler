@@ -60,10 +60,18 @@
   <section class="section" id="deploy" data-aos="fade-up">
     <h2 class="section-title">Deploy Your App</h2>
     <div class="card">
-      <form class="deploy-form">
+      <form class="deploy-form" enctype="multipart/form-data">
         <div class="input-group">
           <label for="git-url">Git Repository URL</label>
           <input type="text" id="git-url" name="git-url" placeholder="https://github.com/your/repo" required />
+        </div>
+        <div class="input-group">
+          <label>Frontend .env</label>
+          <input type="file" id="frontend-env" name="frontend_env" accept=".env" />
+        </div>
+        <div class="input-group">
+          <label>Backend .env</label>
+          <input type="file" id="backend-env" name="backend_env" accept=".env" />
         </div>
         <button type="submit" class="deploy-btn btn-primary">🚀 Deploy</button>
       </form>

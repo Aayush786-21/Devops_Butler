@@ -158,3 +158,31 @@ async def generate_dockerfile(code_directory: str, feedback: str | None = None) 
     except Exception as e:
         print(f"❌ AI Analyst: Failed to generate content. Error: {e}")
         return None
+
+async def ai_patch_docker_compose(compose_file_path: str) -> str | None:
+    """
+    Uses the AI Analyst to patch an existing docker-compose file for best practices, including using the external network 'devops-butler-net' and resolving port conflicts.
+    """
+    print(f"🤖 AI Analyst: Patching docker-compose file at {compose_file_path}...")
+    try:
+        with open(compose_file_path, 'r') as f:
+            compose_content = f.read()
+
+        prompt = f"""
+        You are an expert DevOps engineer. Here is a docker-compose.yaml file. Please:
+        - Ensure all services use the external Docker network 'devops-butler-net'.
+        - If any host ports are already in use, assign the next available free port.
+        - Make any other adjustments needed for best practices on a local multi-container deployment.
+        - Return only the fixed YAML content.
+
+        --- ORIGINAL DOCKER-COMPOSE.YAML ---
+        {compose_content}
+        --- END ORIGINAL ---
+        """
+        response = await model.generate_content_async(prompt)
+        patched_yaml = sanitize_output(response.text)
+        print("✅ AI Analyst: Successfully patched docker-compose file.")
+        return patched_yaml
+    except Exception as e:
+        print(f"❌ AI Analyst: Failed to patch docker-compose file. Error: {e}")
+        return None

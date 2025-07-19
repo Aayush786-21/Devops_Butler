@@ -1,6 +1,12 @@
 import asyncio
+from typing import Optional
 
-async def run_container(image_name: str, container_name: str, host_port: int = None, internal_port: int = None):
+async def run_container(
+    image_name: str,
+    container_name: str,
+    host_port: Optional[int] = None,
+    internal_port: Optional[int] = None
+):
     print(f"Attempting to run container: {container_name}")
 
     # Stop old container if it exists - wait for completion

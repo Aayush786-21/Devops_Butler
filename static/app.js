@@ -30,6 +30,14 @@ function validateGitUrl(url) {
 
 deployForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const form = e.target;
+  const data = new FormData(form);
+  // Add .env files if selected
+  const frontendEnv = document.getElementById('frontend-env').files[0];
+  const backendEnv = document.getElementById('backend-env').files[0];
+  if (frontendEnv) data.append('frontend_env', frontendEnv);
+  if (backendEnv) data.append('backend_env', backendEnv);
+
   const gitUrl = gitUrlInput.value.trim();
   if (!validateGitUrl(gitUrl)) {
     gitUrlInput.classList.add('invalid');
@@ -47,8 +55,7 @@ deployForm.addEventListener('submit', async (e) => {
   try {
     const response = await fetch('/deploy', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ git_url: gitUrl })
+      body: data
     });
     const result = await response.json();
     if (response.ok) {

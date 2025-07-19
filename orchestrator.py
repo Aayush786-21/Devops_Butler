@@ -1,5 +1,5 @@
 # orchestrator.py
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, HttpUrl
@@ -40,12 +40,23 @@ async def read_root():
         return HTMLResponse(content=f.read(), status_code=200)
 
 @app.post("/deploy")
-async def create_deployment(project: Project, background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_pipeline, str(project.git_url))
-    return {
-        "status": "pipeline_started_in_background",
-        "message": "The deployment process has begun. Check server logs for progress."
-    }
+async def deploy(
+    git_url: str = Form(...),
+    frontend_env: UploadFile = File(None),
+    backend_env: UploadFile = File(None)
+):
+    import tempfile, os
+    repo_dir = tempfile.mkdtemp(prefix="butler-run-")
+    # Save env files if provided
+    if frontend_env:
+        with open(os.path.join(repo_dir, "frontend.env"), "wb") as f:
+            f.write(await frontend_env.read())
+    if backend_env:
+        with open(os.path.join(repo_dir, "backend.env"), "wb") as f:
+            f.write(await backend_env.read())
+    # Call your pipeline, passing repo_dir as the workspace
+    # Example: result = await run_pipeline(git_url, repo_dir=repo_dir)
+    # ...return response...
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
