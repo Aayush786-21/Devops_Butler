@@ -1,3 +1,68 @@
+// Authentication check and setup
+let authToken = localStorage.getItem('authToken');
+let username = localStorage.getItem('username');
+let authProvider = localStorage.getItem('authProvider');
+
+// Check authentication status on page load
+document.addEventListener('DOMContentLoaded', function() {
+    checkAuthStatus();
+});
+
+function checkAuthStatus() {
+    const userInfo = document.getElementById('userInfo');
+    const loginLink = document.getElementById('loginLink');
+    const usernameSpan = document.getElementById('username');
+    
+    if (authToken && username) {
+        // User is logged in
+        userInfo.style.display = 'inline';
+        loginLink.style.display = 'none';
+        const providerIcon = authProvider === 'github' ? '🐙' : '👤';
+        usernameSpan.textContent = `${providerIcon} Welcome, ${username}!`;
+        
+        // Load deployment history for authenticated user
+        fetchAndDisplayHistory();
+        
+        // Load GitHub repositories if user is GitHub user
+        if (authProvider === 'github') {
+            loadUserGitHubRepositories();
+        }
+    } else {
+        // User is not logged in
+        userInfo.style.display = 'none';
+        loginLink.style.display = 'inline';
+        
+        // Redirect to login if trying to access protected features
+        const currentPath = window.location.pathname;
+        if (currentPath === '/' && !authToken) {
+            // Show login prompt on main page
+            showToast('Please login to access DevOps Butler features', 'info');
+        }
+    }
+}
+
+// Logout function
+document.getElementById('logoutBtn').addEventListener('click', function() {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('username');
+    localStorage.removeItem('authProvider');
+    authToken = null;
+    username = null;
+    authProvider = null;
+    checkAuthStatus();
+    showToast('Logged out successfully', 'success');
+    window.location.reload();
+});
+
+// Helper function to get authenticated headers
+function getAuthHeaders() {
+    const headers = {};
+    if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    return headers;
+}
+
 // AOS Animation init
 AOS.init({
   duration: 800,
@@ -30,6 +95,14 @@ function validateGitUrl(url) {
 
 deployForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  
+  // Check authentication
+  if (!authToken) {
+    showToast('Please login to deploy applications', 'error');
+    window.location.href = '/login';
+    return;
+  }
+  
   const form = e.target;
   const data = new FormData(form);
   // Add .env files if selected
@@ -55,8 +128,19 @@ deployForm.addEventListener('submit', async (e) => {
   try {
     const response = await fetch('/deploy', {
       method: 'POST',
+      headers: getAuthHeaders(),
       body: data
     });
+    
+    if (response.status === 401) {
+      // Token expired or invalid
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('username');
+      showToast('Session expired. Please login again.', 'error');
+      window.location.href = '/login';
+      return;
+    }
+    
     const result = await response.json();
     if (response.ok) {
       deployStatus.textContent = `✅ ${result.message}`;
@@ -103,9 +187,21 @@ function addLog(message) {
 // --- Deployment History ---
 const historyTableBody = document.querySelector('#history-table tbody');
 async function fetchAndDisplayHistory() {
-  if (!historyTableBody) return;
+  if (!historyTableBody || !authToken) return;
   try {
-    const response = await fetch('/deployments');
+    const response = await fetch('/deployments', {
+      headers: getAuthHeaders()
+    });
+    
+    if (response.status === 401) {
+      // Token expired or invalid
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('username');
+      showToast('Session expired. Please login again.', 'error');
+      window.location.href = '/login';
+      return;
+    }
+    
     const deployments = await response.json();
     historyTableBody.innerHTML = '';
     if (deployments.length === 0) {
@@ -148,16 +244,34 @@ async function fetchAndDisplayHistory() {
     showToast('Could not fetch deployment history.', 'error');
   }
 }
-window.addEventListener('load', fetchAndDisplayHistory);
 
 // --- Destroy Deployment Function ---
 async function destroyDeployment(containerName) {
+  if (!authToken) {
+    showToast('Please login to manage deployments', 'error');
+    window.location.href = '/login';
+    return;
+  }
+  
   if (!confirm(`Are you sure you want to destroy the deployment "${containerName}"? This will stop the container and remove all associated resources.`)) {
     return;
   }
   
   try {
-    const response = await fetch(`/deployments/${containerName}`, { method: 'DELETE' });
+    const response = await fetch(`/deployments/${containerName}`, { 
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
+    
+    if (response.status === 401) {
+      // Token expired or invalid
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('username');
+      showToast('Session expired. Please login again.', 'error');
+      window.location.href = '/login';
+      return;
+    }
+    
     const result = await response.json();
     
     if (response.ok) {
@@ -174,6 +288,245 @@ async function destroyDeployment(containerName) {
     addUILog(`🔴 Network error while destroying deployment: ${error}`);
   }
 }
+
+// --- GitHub Repositories ---
+let selectedRepo = null;
+
+async function loadUserGitHubRepositories() {
+    const reposList = document.getElementById('repositories-list');
+    const reposLoading = document.getElementById('repos-loading');
+    const reposError = document.getElementById('repos-error');
+    const refreshBtn = document.getElementById('refreshReposBtn');
+    
+    if (!authToken) return;
+    
+    // Show refresh button for GitHub users
+    if (refreshBtn) refreshBtn.style.display = 'inline';
+    
+    // Show loading
+    reposLoading.style.display = 'block';
+    reposError.style.display = 'none';
+    reposList.innerHTML = '';
+    hideWelcomeMessage();
+    
+    try {
+        const response = await fetch('/api/user/repositories', {
+            headers: getAuthHeaders()
+        });
+        
+        if (response.status === 401) {
+            // Token expired or invalid
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('username');
+            localStorage.removeItem('authProvider');
+            showToast('Session expired. Please login again.', 'error');
+            window.location.href = '/login';
+            return;
+        }
+        
+        const data = await response.json();
+        
+        if (response.ok && data.repositories) {
+            displayRepositories(data.repositories, 'Your repositories');
+        } else {
+            throw new Error(data.detail || 'Failed to load repositories');
+        }
+    } catch (error) {
+        console.error('Failed to load repositories:', error);
+        reposError.textContent = 'Failed to load repositories. Please try again.';
+        reposError.style.display = 'block';
+    } finally {
+        reposLoading.style.display = 'none';
+    }
+}
+
+async function searchPublicRepositories(username) {
+    const reposList = document.getElementById('repositories-list');
+    const reposLoading = document.getElementById('repos-loading');
+    const reposError = document.getElementById('repos-error');
+    const refreshBtn = document.getElementById('refreshReposBtn');
+    
+    if (!username.trim()) {
+        showToast('Please enter a GitHub username', 'error');
+        return;
+    }
+    
+    // Hide refresh button for public searches
+    if (refreshBtn) refreshBtn.style.display = 'none';
+    
+    // Show loading
+    reposLoading.style.display = 'block';
+    reposError.style.display = 'none';
+    reposList.innerHTML = '';
+    hideWelcomeMessage();
+    
+    try {
+        const response = await fetch(`/api/repositories/${username.trim()}`);
+        const data = await response.json();
+        
+        if (response.ok && data.repositories) {
+            displayRepositories(data.repositories, `${username}'s repositories`);
+        } else {
+            throw new Error(data.detail || 'Failed to load repositories');
+        }
+    } catch (error) {
+        console.error('Failed to load repositories:', error);
+        reposError.textContent = 'Failed to load repositories. Please check the username and try again.';
+        reposError.style.display = 'block';
+    } finally {
+        reposLoading.style.display = 'none';
+    }
+}
+
+async function loadDemoRepositories() {
+    const reposList = document.getElementById('repositories-list');
+    const reposLoading = document.getElementById('repos-loading');
+    const reposError = document.getElementById('repos-error');
+    const refreshBtn = document.getElementById('refreshReposBtn');
+    
+    // Hide refresh button for demo
+    if (refreshBtn) refreshBtn.style.display = 'none';
+    
+    // Show loading
+    reposLoading.style.display = 'block';
+    reposError.style.display = 'none';
+    reposList.innerHTML = '';
+    hideWelcomeMessage();
+    
+    try {
+        // Use demo user to get demo repositories
+        const response = await fetch('/api/repositories/demo_user');
+        const data = await response.json();
+        
+        if (response.ok && data.repositories) {
+            displayRepositories(data.repositories, 'Popular repositories you can deploy');
+        } else {
+            throw new Error(data.detail || 'Failed to load demo repositories');
+        }
+    } catch (error) {
+        console.error('Failed to load demo repositories:', error);
+        reposError.textContent = 'Failed to load demo repositories. Please try again.';
+        reposError.style.display = 'block';
+    } finally {
+        reposLoading.style.display = 'none';
+    }
+}
+
+function hideWelcomeMessage() {
+    const welcomeMsg = document.getElementById('repos-welcome');
+    if (welcomeMsg) welcomeMsg.style.display = 'none';
+}
+
+function showWelcomeMessage() {
+    const welcomeMsg = document.getElementById('repos-welcome');
+    const reposList = document.getElementById('repositories-list');
+    if (welcomeMsg) {
+        welcomeMsg.style.display = 'block';
+        reposList.innerHTML = '';
+    }
+}
+
+function displayRepositories(repositories, title = 'Repositories') {
+    const reposList = document.getElementById('repositories-list');
+    if (!reposList) return;
+    
+    if (repositories.length === 0) {
+        reposList.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; color: var(--text-secondary); padding: 2rem;">
+                <p>No repositories found. Try a different username or check if the user has public repositories.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    reposList.innerHTML = repositories.map(repo => `
+        <div class="repo-card" data-repo-url="${repo.clone_url}" data-repo-name="${repo.full_name}">
+            <div class="repo-header">
+                <div>
+                    <div class="repo-name">${repo.name}</div>
+                    <div class="repo-full-name">${repo.full_name}</div>
+                </div>
+                <span class="repo-visibility ${repo.private ? 'private' : 'public'}">
+                    ${repo.private ? '🔒 Private' : '🌐 Public'}
+                </span>
+            </div>
+            <div class="repo-description">
+                ${repo.description || 'No description available'}
+            </div>
+            <div class="repo-meta">
+                <span class="repo-language">${repo.language || 'Unknown'}</span>
+                <span class="repo-updated">Updated ${formatDate(repo.updated_at)}</span>
+            </div>
+        </div>
+    `).join('');
+    
+    // Add click handlers
+    document.querySelectorAll('.repo-card').forEach(card => {
+        card.addEventListener('click', () => selectRepository(card));
+    });
+}
+
+function selectRepository(card) {
+    // Remove previous selection
+    document.querySelectorAll('.repo-card').forEach(c => c.classList.remove('selected'));
+    
+    // Select current card
+    card.classList.add('selected');
+    
+    // Get repository URL and fill the deploy form
+    const repoUrl = card.dataset.repoUrl;
+    const repoName = card.dataset.repoName;
+    
+    document.getElementById('git-url').value = repoUrl;
+    selectedRepo = repoUrl;
+    
+    // Scroll to deploy section
+    document.getElementById('deploy').scrollIntoView({ behavior: 'smooth' });
+    
+    showToast(`Selected repository: ${repoName}`, 'success');
+}
+
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffTime = Math.abs(now - date);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 1) return 'today';
+    if (diffDays === 2) return 'yesterday';
+    if (diffDays < 7) return `${diffDays - 1} days ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+    if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
+    return `${Math.floor(diffDays / 365)} years ago`;
+}
+
+// Search repositories button
+document.getElementById('searchReposBtn')?.addEventListener('click', () => {
+    const username = document.getElementById('usernameSearch').value;
+    searchPublicRepositories(username);
+});
+
+// Enter key in search input
+document.getElementById('usernameSearch')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        const username = e.target.value;
+        searchPublicRepositories(username);
+    }
+});
+
+// Show demo repositories button
+document.getElementById('showDemoReposBtn')?.addEventListener('click', () => {
+    loadDemoRepositories();
+    showToast('Loading demo repositories...', 'info');
+});
+
+// Refresh repositories button (for GitHub users)
+document.getElementById('refreshReposBtn')?.addEventListener('click', () => {
+    if (authProvider === 'github') {
+        loadUserGitHubRepositories();
+        showToast('Refreshing your repositories...', 'info');
+    }
+});
 
 // --- Helper: Toast Notification ---
 function showToast(msg, type = 'info') {
@@ -218,11 +571,26 @@ if (fab) {
 // --- CLEAR HISTORY BUTTON LOGIC ---
 const clearBtn = document.getElementById('clearBtn');
 async function handleClearHistory() {
+  if (!authToken) {
+    showToast('Please login to clear history', 'error');
+    window.location.href = '/login';
+    return;
+  }
   if (!confirm("Are you sure you want to delete ALL deployment history? This cannot be undone.")) {
     return;
   }
   try {
-    const response = await fetch('/deployments/clear', { method: 'DELETE' });
+    const response = await fetch('/deployments/clear', { method: 'DELETE', headers: getAuthHeaders() });
+    
+    if (response.status === 401) {
+      // Token expired or invalid
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('username');
+      showToast('Session expired. Please login again.', 'error');
+      window.location.href = '/login';
+      return;
+    }
+    
     const result = await response.json();
     if (response.ok) {
       addUILog(`✅ ${result.message}`);

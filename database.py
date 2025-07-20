@@ -1,5 +1,6 @@
 # database.py
 from sqlmodel import SQLModel, create_engine
+from login import User, Deployment  # Import models to ensure they're registered
 
 # 1. Define the database file
 sqlite_file_name = "deployments.db"

@@ -12,12 +12,24 @@ from connection_manager import manager
 import os
 from sqlmodel import Session, select
 from typing import List
-from models import Deployment
+from login import Deployment, User
 from nginx_manager import delete_nginx_config, reload_nginx
 import asyncio
+from auth import authenticate_user, create_user, create_access_token, get_current_user
+from github_oauth import github_oauth
+from datetime import timedelta
 
 class Project(BaseModel):
     git_url: HttpUrl
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class UserRegister(BaseModel):
+    username: str
+    email: str
+    password: str
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,24 +51,146 @@ async def read_root():
     with open(html_file_path, "r") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    html_file_path = os.path.join(static_dir, "login.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
+@app.post("/api/auth/login")
+async def login(user_credentials: UserLogin):
+    user = authenticate_user(user_credentials.username, user_credentials.password)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password"
+        )
+    
+    access_token_expires = timedelta(minutes=30)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user.username
+    }
+
+@app.post("/api/auth/register")
+async def register(user_data: UserRegister):
+    user = create_user(user_data.username, user_data.email, user_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="Username or email already exists"
+        )
+    
+    return {"message": "User created successfully"}
+
+@app.get("/api/auth/github")
+async def github_login():
+    """Redirect to GitHub OAuth authorization."""
+    auth_url = github_oauth.get_authorization_url()
+    return {"auth_url": auth_url}
+
+@app.get("/api/auth/github/callback")
+async def github_callback(code: str):
+    """Handle GitHub OAuth callback."""
+    try:
+        # Exchange code for access token
+        access_token = await github_oauth.exchange_code_for_token(code)
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Failed to get access token from GitHub")
+        
+        # Get user info from GitHub
+        user_info = await github_oauth.get_user_info(access_token)
+        if not user_info:
+            raise HTTPException(status_code=400, detail="Failed to get user info from GitHub")
+        
+        # Authenticate or create user
+        user = await github_oauth.authenticate_or_create_user(user_info, access_token)
+        if not user:
+            raise HTTPException(status_code=400, detail="Failed to create or authenticate user")
+        
+        # Create JWT token
+        jwt_token = github_oauth.create_user_token(user)
+        
+        # Redirect to frontend with token
+        return {
+            "access_token": jwt_token,
+            "token_type": "bearer",
+            "username": user.username,
+            "auth_provider": "github"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GitHub authentication failed: {str(e)}")
+
+@app.get("/api/user/repositories")
+async def get_user_repositories(current_user: User = Depends(get_current_user)):
+    """Get GitHub repositories for the authenticated user."""
+    if current_user.auth_provider != "github" or not current_user.github_access_token:
+        raise HTTPException(
+            status_code=400, 
+            detail="GitHub repositories only available for GitHub users"
+        )
+    
+    try:
+        repos = await github_oauth.get_user_repositories(
+            current_user.github_access_token, 
+            current_user.github_username
+        )
+        return {"repositories": repos}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to fetch repositories: {str(e)}"
+        )
+
+@app.get("/api/repositories/{username}")
+async def get_public_repositories(username: str):
+    """Get public repositories for any GitHub username (no authentication required)."""
+    try:
+        # Special case for demo user - return demo repositories
+        if username == "demo_user":
+            repos = await github_oauth.get_demo_repositories()
+            return {"repositories": repos, "username": "demo_user"}
+        
+        # For real GitHub usernames, fetch from GitHub API
+        repos = await github_oauth.get_public_repositories_by_username(username)
+        return {"repositories": repos, "username": username}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to fetch repositories: {str(e)}"
+        )
+
 @app.post("/deploy")
 async def deploy(
     git_url: str = Form(...),
     frontend_env: UploadFile = File(None),
-    backend_env: UploadFile = File(None)
+    backend_env: UploadFile = File(None),
+    current_user: User = Depends(get_current_user)
 ):
-    import tempfile, os
-    repo_dir = tempfile.mkdtemp(prefix="butler-run-")
-    # Save env files if provided
-    if frontend_env:
-        with open(os.path.join(repo_dir, "frontend.env"), "wb") as f:
-            f.write(await frontend_env.read())
-    if backend_env:
-        with open(os.path.join(repo_dir, "backend.env"), "wb") as f:
-            f.write(await backend_env.read())
-    # Call your pipeline, passing repo_dir as the workspace
-    # Example: result = await run_pipeline(git_url, repo_dir=repo_dir)
-    # ...return response...
+    try:
+        import tempfile, os
+        repo_dir = tempfile.mkdtemp(prefix="butler-run-")
+        
+        # Save env files if provided
+        if frontend_env:
+            with open(os.path.join(repo_dir, "frontend.env"), "wb") as f:
+                f.write(await frontend_env.read())
+        if backend_env:
+            with open(os.path.join(repo_dir, "backend.env"), "wb") as f:
+                f.write(await backend_env.read())
+        
+        # Run pipeline with user context
+        result = await run_pipeline(git_url, user_id=current_user.id)
+        return result
+    except Exception as e:
+        print(f"❌ Deployment failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Deployment failed: {str(e)}")
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
@@ -69,35 +203,45 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         print(f"Client #{client_id} disconnected.")
 
 @app.get("/deployments", response_model=List[Deployment])
-def list_deployments(session: Session = Depends(get_session)):
+def list_deployments(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
     """
-    Lists all past and current deployments from the database.
+    Lists all deployments for the current user from the database.
     """
-    statement = select(Deployment)
+    statement = select(Deployment).where(Deployment.user_id == current_user.id)
     deployments = session.exec(statement).all()
     return deployments
 
 @app.delete("/deployments/clear")
-def clear_all_deployments(session: Session = Depends(get_session)):
+def clear_user_deployments(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
     """
-    Deletes all deployment records from the database.
+    Deletes all deployment records for the current user from the database.
     """
     try:
-        # Get all existing deployment records
-        deployments_to_delete = session.exec(select(Deployment)).all()
+        # Get all deployment records for the current user
+        deployments_to_delete = session.exec(
+            select(Deployment).where(Deployment.user_id == current_user.id)
+        ).all()
+        
         # Loop through them and delete each one
         for deployment in deployments_to_delete:
             session.delete(deployment)
+        
         # Commit the transaction to make the deletions permanent
         session.commit()
-        print("✅ Database cleared successfully.")
-        return {"message": "All deployment history has been cleared."}
+        print(f"✅ Database cleared for user {current_user.username}.")
+        return {"message": "Your deployment history has been cleared."}
     except Exception as e:
-        print(f"❌ Failed to clear database: {e}")
+        print(f"❌ Failed to clear database for user {current_user.username}: {e}")
         raise HTTPException(status_code=500, detail="Could not clear the database.")
 
 @app.post("/cleanup/orphaned-configs")
-async def cleanup_orphaned_configs_endpoint():
+async def cleanup_orphaned_configs_endpoint(current_user: User = Depends(get_current_user)):
     """
     Manually triggers cleanup of orphaned Nginx config files.
     """
@@ -108,17 +252,27 @@ async def cleanup_orphaned_configs_endpoint():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
 
-
 @app.delete("/deployments/{container_name}")
-async def destroy_deployment(container_name: str, session: Session = Depends(get_session)):
+async def destroy_deployment(
+    container_name: str, 
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
     """
     Destroys a deployment by stopping the container, removing nginx config, and updating the database.
+    Only allows users to destroy their own deployments.
     """
     try:
-        # Find the deployment in the database by container_name
-        deployment = session.exec(select(Deployment).where(Deployment.container_name == container_name)).first()
+        # Find the deployment in the database by container_name and user_id
+        deployment = session.exec(
+            select(Deployment).where(
+                Deployment.container_name == container_name,
+                Deployment.user_id == current_user.id
+            )
+        ).first()
+        
         if not deployment:
-            raise HTTPException(status_code=404, detail="Deployment not found")
+            raise HTTPException(status_code=404, detail="Deployment not found or access denied")
         
         print(f"🔴 Starting destruction of deployment: {container_name}")
         

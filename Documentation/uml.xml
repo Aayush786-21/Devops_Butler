@@ -1,0 +1,221 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="DevOps Butler - Enhanced UML" id="devops-butler-enhanced">
+    <mxGraphModel dx="1422" dy="834" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        
+        <!-- User Management Layer -->
+        <mxCell id="user-class" value="User&#xa;────────────────&#xa;- userId: String&#xa;- username: String&#xa;- email: String&#xa;- passwordHash: String&#xa;- role: UserRole&#xa;- createdAt: DateTime&#xa;- lastLogin: DateTime&#xa;- isActive: Boolean&#xa;────────────────&#xa;+ authenticate(credentials): Boolean&#xa;+ updateProfile(data): void&#xa;+ changePassword(password): void&#xa;+ getPermissions(): List&lt;Permission&gt;" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="280" height="240" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="user-role-enum" value="&lt;&lt;enumeration&gt;&gt;&#xa;UserRole&#xa;────────────────&#xa;ADMIN&#xa;DEVELOPER&#xa;DEVOPS_ENGINEER&#xa;VIEWER" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="360" y="40" width="160" height="120" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="auth-service" value="AuthenticationService&#xa;────────────────&#xa;- tokenManager: TokenManager&#xa;- passwordEncoder: PasswordEncoder&#xa;- sessionStore: SessionStore&#xa;────────────────&#xa;+ login(credentials): AuthToken&#xa;+ logout(token): void&#xa;+ validateToken(token): Boolean&#xa;+ refreshToken(token): AuthToken&#xa;+ resetPassword(email): void" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="560" y="40" width="260" height="180" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="permission-class" value="Permission&#xa;────────────────&#xa;- name: String&#xa;- description: String&#xa;- allowedActions: List&lt;String&gt;&#xa;- resourceType: String&#xa;────────────────&#xa;+ checkAccess(action): Boolean&#xa;+ grantAccess(action): void&#xa;+ revokeAccess(action): void" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="860" y="40" width="240" height="160" as="geometry"/>
+        </mxCell>
+        
+        <!-- Repository Management Layer -->
+        <mxCell id="repository-class" value="Repository&#xa;────────────────&#xa;- repoId: String&#xa;- name: String&#xa;- url: String&#xa;- defaultBranch: String&#xa;- type: RepositoryType&#xa;- accessToken: String&#xa;- lastSync: DateTime&#xa;- owner: User&#xa;────────────────&#xa;+ clone(): Boolean&#xa;+ pull(): void&#xa;+ getBranches(): List&lt;String&gt;&#xa;+ getCommits(): List&lt;Commit&gt;&#xa;+ webhookHandler(event): void" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="280" height="240" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="repo-type-enum" value="&lt;&lt;enumeration&gt;&gt;&#xa;RepositoryType&#xa;────────────────&#xa;GITHUB&#xa;GITLAB&#xa;BITBUCKET&#xa;AZURE_DEVOPS" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="360" y="320" width="160" height="120" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="git-service" value="GitService&#xa;────────────────&#xa;- apiClient: ApiClient&#xa;- webhookManager: WebhookManager&#xa;────────────────&#xa;+ syncRepository(repo): void&#xa;+ handleWebhook(payload): void&#xa;+ validateAccess(repo): Boolean&#xa;+ getFileContent(repo, path): String&#xa;+ createPullRequest(data): PullRequest" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="560" y="320" width="260" height="180" as="geometry"/>
+        </mxCell>
+        
+        <!-- Pipeline & CI/CD Layer -->
+        <mxCell id="pipeline-class" value="Pipeline&#xa;────────────────&#xa;- pipelineId: String&#xa;- name: String&#xa;- repository: Repository&#xa;- stages: List&lt;Stage&gt;&#xa;- triggers: List&lt;Trigger&gt;&#xa;- status: PipelineStatus&#xa;- createdBy: User&#xa;- lastRun: DateTime&#xa;────────────────&#xa;+ execute(): PipelineRun&#xa;+ validate(): ValidationResult&#xa;+ pause(): void&#xa;+ resume(): void&#xa;+ getHistory(): List&lt;PipelineRun&gt;" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="40" y="600" width="280" height="240" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="stage-class" value="Stage&#xa;────────────────&#xa;- stageId: String&#xa;- name: String&#xa;- order: Integer&#xa;- jobs: List&lt;Job&gt;&#xa;- dependencies: List&lt;Stage&gt;&#xa;- conditions: Map&lt;String, Object&gt;&#xa;────────────────&#xa;+ execute(context): StageResult&#xa;+ canExecute(): Boolean&#xa;+ addJob(job): void&#xa;+ removeJob(jobId): void" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="360" y="600" width="240" height="180" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="job-class" value="Job&#xa;────────────────&#xa;- jobId: String&#xa;- name: String&#xa;- type: JobType&#xa;- commands: List&lt;String&gt;&#xa;- environment: Map&lt;String, String&gt;&#xa;- timeout: Duration&#xa;- retryPolicy: RetryPolicy&#xa;────────────────&#xa;+ execute(context): JobResult&#xa;+ cancel(): void&#xa;+ getArtifacts(): List&lt;Artifact&gt;" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="640" y="600" width="240" height="180" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="job-type-enum" value="&lt;&lt;enumeration&gt;&gt;&#xa;JobType&#xa;────────────────&#xa;BUILD&#xa;TEST&#xa;DEPLOY&#xa;SECURITY_SCAN&#xa;CODE_QUALITY&#xa;NOTIFICATION" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="920" y="600" width="160" height="140" as="geometry"/>
+        </mxCell>
+        
+        <!-- Deployment & Infrastructure Layer -->
+        <mxCell id="deployment-class" value="Deployment&#xa;────────────────&#xa;- deploymentId: String&#xa;- name: String&#xa;- environment: Environment&#xa;- application: Application&#xa;- version: String&#xa;- status: DeploymentStatus&#xa;- strategy: DeploymentStrategy&#xa;- createdBy: User&#xa;- deployedAt: DateTime&#xa;────────────────&#xa;+ deploy(): DeploymentResult&#xa;+ rollback(): void&#xa;+ getHealth(): HealthStatus&#xa;+ getLogs(): List&lt;LogEntry&gt;&#xa;+ scale(replicas): void" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="40" y="880" width="280" height="260" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="environment-class" value="Environment&#xa;────────────────&#xa;- envId: String&#xa;- name: String&#xa;- type: EnvironmentType&#xa;- namespace: String&#xa;- cluster: Cluster&#xa;- variables: Map&lt;String, String&gt;&#xa;- secrets: Map&lt;String, String&gt;&#xa;────────────────&#xa;+ getConfiguration(): Config&#xa;+ updateVariables(vars): void&#xa;+ isHealthy(): Boolean&#xa;+ getResources(): List&lt;Resource&gt;" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="360" y="880" width="260" height="200" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="env-type-enum" value="&lt;&lt;enumeration&gt;&gt;&#xa;EnvironmentType&#xa;────────────────&#xa;DEVELOPMENT&#xa;STAGING&#xa;PRODUCTION&#xa;TEST" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="660" y="880" width="160" height="120" as="geometry"/>
+        </mxCell>
+        
+        <!-- Container Management -->
+        <mxCell id="container-manager" value="ContainerManager&#xa;────────────────&#xa;- orchestrator: Orchestrator&#xa;- registry: ContainerRegistry&#xa;- imageBuilder: ImageBuilder&#xa;────────────────&#xa;+ deployContainer(spec): Container&#xa;+ buildImage(dockerfile): Image&#xa;+ pullImage(imageUrl): Image&#xa;+ pushImage(image): void&#xa;+ scaleService(name, replicas): void&#xa;+ getContainerLogs(id): List&lt;String&gt;" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="860" y="880" width="280" height="200" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="orchestrator-interface" value="&lt;&lt;interface&gt;&gt;&#xa;Orchestrator&#xa;────────────────&#xa;+ deploy(spec): void&#xa;+ delete(name): void&#xa;+ scale(name, replicas): void&#xa;+ getStatus(name): Status" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="860" y="1120" width="200" height="120" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="kubernetes-orchestrator" value="KubernetesOrchestrator&#xa;────────────────&#xa;- kubeClient: KubernetesClient&#xa;- namespace: String&#xa;────────────────&#xa;+ deploy(spec): void&#xa;+ delete(name): void&#xa;+ scale(name, replicas): void&#xa;+ getStatus(name): Status&#xa;+ applyManifest(yaml): void" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="640" y="1280" width="240" height="160" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="docker-orchestrator" value="DockerComposeOrchestrator&#xa;────────────────&#xa;- dockerClient: DockerClient&#xa;- composeFile: String&#xa;────────────────&#xa;+ deploy(spec): void&#xa;+ delete(name): void&#xa;+ scale(name, replicas): void&#xa;+ getStatus(name): Status&#xa;+ executeCompose(cmd): void" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="920" y="1280" width="260" height="160" as="geometry"/>
+        </mxCell>
+        
+        <!-- Monitoring & Logging -->
+        <mxCell id="monitoring-service" value="MonitoringService&#xa;────────────────&#xa;- metricsCollector: MetricsCollector&#xa;- alertManager: AlertManager&#xa;- dashboardManager: DashboardManager&#xa;────────────────&#xa;+ collectMetrics(target): Metrics&#xa;+ createAlert(rule): Alert&#xa;+ sendNotification(alert): void&#xa;+ getSystemHealth(): HealthReport&#xa;+ generateReport(period): Report" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1180" width="280" height="180" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="log-service" value="LogService&#xa;────────────────&#xa;- logStore: LogStore&#xa;- logParser: LogParser&#xa;- indexer: LogIndexer&#xa;────────────────&#xa;+ storeLogs(source, logs): void&#xa;+ searchLogs(query): List&lt;LogEntry&gt;&#xa;+ aggregateLogs(period): Summary&#xa;+ streamLogs(source): Stream&lt;LogEntry&gt;&#xa;+ archiveLogs(before): void" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="360" y="1180" width="260" height="180" as="geometry"/>
+        </mxCell>
+        
+        <!-- Relationships -->
+        <!-- User to Repository -->
+        <mxCell id="user-repo-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="user-class" target="repository-class">
+          <mxGeometry relative="1" as="geometry"/>
+          <mxPoint x="180" y="290" as="sourcePoint"/>
+          <mxPoint x="180" y="310" as="targetPoint"/>
+          <Array as="points"/>
+        </mxCell>
+        <mxCell id="user-repo-label" value="owns" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="user-repo-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Repository to Pipeline -->
+        <mxCell id="repo-pipeline-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="repository-class" target="pipeline-class">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        <mxCell id="repo-pipeline-label" value="triggers" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="repo-pipeline-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Pipeline to Stage -->
+        <mxCell id="pipeline-stage-rel" style="endArrow=open;endFill=1;endSize=12;html=1;" edge="1" parent="1" source="pipeline-class" target="stage-class">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pipeline-stage-label" value="1..*" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="pipeline-stage-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Stage to Job -->
+        <mxCell id="stage-job-rel" style="endArrow=open;endFill=1;endSize=12;html=1;" edge="1" parent="1" source="stage-class" target="job-class">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="stage-job-label" value="1..*" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="stage-job-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Pipeline to Deployment -->
+        <mxCell id="pipeline-deployment-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="pipeline-class" target="deployment-class">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        <mxCell id="pipeline-deployment-label" value="creates" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="pipeline-deployment-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Deployment to Environment -->
+        <mxCell id="deployment-env-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="deployment-class" target="environment-class">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="deployment-env-label" value="deploys to" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="deployment-env-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- ContainerManager to Orchestrator -->
+        <mxCell id="container-orchestrator-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="container-manager" target="orchestrator-interface">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        <mxCell id="container-orchestrator-label" value="uses" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="container-orchestrator-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Orchestrator implementations -->
+        <mxCell id="k8s-impl-rel" style="endArrow=block;endFill=0;endSize=16;startArrow=none;startFill=0;html=1;dashed=1;" edge="1" parent="1" source="kubernetes-orchestrator" target="orchestrator-interface">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        
+        <mxCell id="docker-impl-rel" style="endArrow=block;endFill=0;endSize=16;startArrow=none;startFill=0;html=1;dashed=1;" edge="1" parent="1" source="docker-orchestrator" target="orchestrator-interface">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        
+        <!-- User Role relationship -->
+        <mxCell id="user-role-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="user-class" target="user-role-enum">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        
+        <!-- Repository Type relationship -->
+        <mxCell id="repo-type-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="repository-class" target="repo-type-enum">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        
+        <!-- Job Type relationship -->
+        <mxCell id="job-type-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="job-class" target="job-type-enum">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        
+        <!-- Environment Type relationship -->
+        <mxCell id="env-type-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="environment-class" target="env-type-enum">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        
+        <!-- User Permission relationship -->
+        <mxCell id="user-permission-rel" style="endArrow=open;endFill=0;endSize=12;html=1;" edge="1" parent="1" source="user-class" target="permission-class">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        <mxCell id="user-permission-label" value="has" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="user-permission-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Monitoring relationships -->
+        <mxCell id="monitoring-deployment-rel" style="endArrow=open;endFill=0;endSize=12;html=1;dashed=1;" edge="1" parent="1" source="monitoring-service" target="deployment-class">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        <mxCell id="monitoring-deployment-label" value="monitors" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="monitoring-deployment-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="log-pipeline-rel" style="endArrow=open;endFill=0;endSize=12;html=1;dashed=1;" edge="1" parent="1" source="log-service" target="pipeline-class">
+          <mxGeometry relative="1" as="geometry"/>
+          <Array as="points"/>
+        </mxCell>
+        <mxCell id="log-pipeline-label" value="logs" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;" connectable="0" vertex="1" parent="log-pipeline-rel">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

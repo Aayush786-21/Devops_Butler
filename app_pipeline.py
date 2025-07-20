@@ -13,7 +13,7 @@ from connection_manager import manager
 from nginx_manager import create_nginx_config, reload_nginx, delete_nginx_config
 from sqlmodel import Session, select
 from database import engine  
-from models import Deployment
+from login import Deployment
 from ai_analyst import generate_dockerfile, ai_patch_docker_compose
 import socket
 import yaml
@@ -274,7 +274,7 @@ async def destroy_deployment(container_name: str, repo_name: str):
         print(f"❌ Error during cleanup: {e}")
 
 
-async def run_pipeline(repo_url: str):
+async def run_pipeline(repo_url: str, user_id: int = None):
     # Validate the Git URL first
     if not validate_git_url(repo_url):
         error_msg = f"❌ Invalid Git repository URL: {repo_url}. Please provide a valid Git repository URL (e.g., https://github.com/user/repo)."
@@ -317,7 +317,8 @@ async def run_pipeline(repo_url: str):
         db_deployment = Deployment(
             container_name=new_container_name,
             git_url=repo_url,
-            status="starting"
+            status="starting",
+            user_id=user_id
         )
         session.add(db_deployment)
         session.commit()
@@ -378,7 +379,6 @@ async def run_pipeline(repo_url: str):
         if os.path.exists(repo_env_path):
             if not os.path.exists(frontend_env_path) and not os.path.exists(backend_env_path):
                 # Use repo .env as fallback for both frontend and backend
-                import shutil
                 shutil.copy(repo_env_path, frontend_env_path)
                 shutil.copy(repo_env_path, backend_env_path)
                 fallback_msg = (
