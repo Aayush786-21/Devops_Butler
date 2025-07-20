@@ -152,12 +152,7 @@ async def get_user_repositories(current_user: User = Depends(get_current_user)):
 async def get_public_repositories(username: str):
     """Get public repositories for any GitHub username (no authentication required)."""
     try:
-        # Special case for demo user - return demo repositories
-        if username == "demo_user":
-            repos = await github_oauth.get_demo_repositories()
-            return {"repositories": repos, "username": "demo_user"}
-        
-        # For real GitHub usernames, fetch from GitHub API
+        # Fetch from GitHub API
         repos = await github_oauth.get_public_repositories_by_username(username)
         return {"repositories": repos, "username": username}
     except Exception as e:

@@ -6,8 +6,6 @@ Give the Butler a Git URL, and it will handle the rest—from cloning and analys
 
 ![DevOps Butler](icons/devops.png)
 
-
-
 ## ✨ Core Features
 
 *   **🚀 One-Click Deployments:** Start an entire deployment with a single click from the beautiful web interface or a `POST` request.
@@ -22,8 +20,14 @@ Give the Butler a Git URL, and it will handle the rest—from cloning and analys
 *   **🌐 Beautiful Web UI:** Modern, responsive interface with real-time deployment status and logs.
 *   **📡 Real-time Logging:** Uses WebSockets to stream live, color-coded logs directly to you as the pipeline runs.
 *   **🔄 Automatic Reverse Proxy:** Integrates with Nginx to automatically configure a reverse proxy for each deployed application.
-*   **🎯 Pretty Local URLs:** Makes your deployed applications accessible via clean, predictable URLs like `http://project-name.localhost:8888`.
+*   **🎯 Pretty Local URLs:** Makes your deployed applications accessible via clean, predictable URLs like `http://project-name.localhost`.
 *   **⚡ Idempotent Deployments:** Automatically cleans up previous deployments before creating new ones.
+
+## ⚠️ Current Limitations
+
+*   **Repository Structure:** Currently only supports repositories with Dockerfile or docker-compose.yml files in the root directory. Subfolder detection for Docker configurations is not yet implemented.
+*   **Complex Multi-Service:** While Docker Compose is supported, complex multi-service setups with dependencies may work better with the Dockerfile approach.
+*   **GitHub OAuth:** Requires proper GitHub OAuth app configuration for full functionality.
 
 ## 🛠️ Tech Stack
 
@@ -48,7 +52,7 @@ The DevOps Butler operates as an event-driven system with a clear, modular archi
 3.  **📋 Database Record:** Creates a deployment record with "starting" status
 4.  **📥 Repository Clone:** Clones the Git repository into a temporary local directory
 5.  **🔍 Intelligent Analysis:** 
-    - Checks for docker-compose.yml and Dockerfile
+    - Checks for docker-compose.yml and Dockerfile in the root directory
     - Analyzes complexity (dependencies, multiple services)
     - Chooses optimal deployment strategy
 6.  **🏗️ Build & Deploy:**
@@ -106,7 +110,7 @@ You must have the following tools installed on your macOS machine:
     docker run -d \
       --name butler-nginx-proxy \
       --network devops-butler-net \
-      -p 8888:8888 \
+      -p 80:80 \
       -v /opt/homebrew/etc/nginx/servers:/etc/nginx/conf.d \
       nginx:latest
     ```
@@ -135,10 +139,10 @@ You must have the following tools installed on your macOS machine:
     Navigate to `http://localhost:8000` in your browser
 
 3.  **Deploy Your First App**
-    - Paste a Git repository URL
+    - Paste a Git repository URL (must have Dockerfile or docker-compose.yml in root)
     - Click the "🚀 Deploy" button
     - Watch real-time logs and deployment progress
-    - Access your app at the provided URL
+    - Access your app at the provided URL (e.g., `http://my-app.localhost`)
 
 #### **API Usage**
 
@@ -207,33 +211,4 @@ You must have the following tools installed on your macOS machine:
 - **Build Error Reporting:** Detailed Docker build error messages
 - **Network Validation:** Ensures containers are accessible before Nginx configuration
 - **Graceful Failures:** Proper cleanup on deployment failures
-- **Orphaned Config Prevention:** Automatic cleanup of stale Nginx configurations
-
-## 🔮 Future Roadmap
-
-*   [x] **Build a Proper Frontend:** ✅ Beautiful web interface with real-time updates
-*   [x] **Persistence:** ✅ SQLite database with deployment history
-*   [x] **Cleanup Logic:** ✅ Complete destroy functionality
-*   [x] **Enhanced Log Streaming:** ✅ Real-time WebSocket logs
-*   [ ] **Multi-Environment Support:** Support for staging, production environments
-*   [ ] **Health Checks:** Automatic health monitoring of deployed applications
-*   [ ] **Resource Monitoring:** CPU, memory, and disk usage tracking
-*   [ ] **Custom Domains:** Support for custom domain names
-*   [ ] **SSL/TLS Support:** Automatic HTTPS certificate generation
-*   [ ] **PaaS Transformation:** Cloud deployment with AWS/GCP/Azure
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 🙏 Acknowledgments
-
-- FastAPI for the excellent web framework
-- Docker for containerization technology
-- Nginx for reverse proxy capabilities
-- The open-source community for inspiration and tools
 

@@ -3,9 +3,10 @@ let authToken = localStorage.getItem('authToken');
 let username = localStorage.getItem('username');
 let authProvider = localStorage.getItem('authProvider');
 
-// Check authentication status on page load
-document.addEventListener('DOMContentLoaded', function() {
-    checkAuthStatus();
+// Initialize the application
+document.addEventListener('DOMContentLoaded', () => {
+  checkAuthStatus();
+  clearDeploymentUrlButton(); // Ensure clean state on page load
 });
 
 function checkAuthStatus() {
@@ -123,6 +124,10 @@ deployForm.addEventListener('submit', async (e) => {
   deployStatus.innerHTML = '🔵 STATUS: Initiating deployment... <span class="loader"></span>';
   deployStatus.style.color = 'var(--primary)';
   statusLogs.innerHTML = '';
+  
+  // Clear any existing deployment URL button
+  clearDeploymentUrlButton();
+  
   connectWebSocket();
 
   try {
@@ -172,6 +177,13 @@ function connectWebSocket() {
   socket.onerror = (error) => addLog(`🔴 WEBSOCKET-ERROR: ${error}`);
 }
 
+function clearDeploymentUrlButton() {
+  const existingButton = document.getElementById('deployment-url-button');
+  if (existingButton) {
+    existingButton.remove();
+  }
+}
+
 function addLog(message) {
   if (!statusLogs) return;
   const now = new Date();
@@ -182,6 +194,81 @@ function addLog(message) {
   statusLogs.appendChild(line);
   statusLogs.scrollTop = statusLogs.scrollHeight;
   setTimeout(() => line.classList.add('animate'), 10);
+  
+  // Check if this is a deployment success message
+  if (message.includes('🚀 SUCCESS!') && message.includes('localhost')) {
+    // Extract URL from the message (now without port numbers)
+    const urlMatch = message.match(/https?:\/\/[^\s]+\.localhost(?::\d+)?/);
+    if (urlMatch) {
+      const deployedUrl = urlMatch[0];
+      showDeploymentUrlButton(deployedUrl);
+    }
+  }
+  
+  // Check if this is a deployment failure message
+  if (message.includes('🔴 STATUS: Pipeline failed.') || message.includes('FATAL:')) {
+    clearDeploymentUrlButton();
+  }
+}
+
+function showDeploymentUrlButton(url) {
+  // Remove any existing deployment URL button
+  const existingButton = document.getElementById('deployment-url-button');
+  if (existingButton) {
+    existingButton.remove();
+  }
+  
+  // Create the deployment URL button
+  const buttonContainer = document.createElement('div');
+  buttonContainer.id = 'deployment-url-button';
+  buttonContainer.className = 'deployment-url-container fade-in';
+  buttonContainer.style.cssText = `
+    margin-top: 1rem;
+    padding: 1rem;
+    background: linear-gradient(135deg, var(--success), #28a745);
+    border-radius: 12px;
+    text-align: center;
+    box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+    border: 2px solid #28a745;
+  `;
+  
+  buttonContainer.innerHTML = `
+    <div style="margin-bottom: 0.5rem;">
+      <span style="font-size: 1.2em; color: white;">🎉 Deployment Successful!</span>
+    </div>
+    <div style="margin-bottom: 1rem;">
+      <span style="color: rgba(255,255,255,0.9); font-size: 0.9em;">Your application is now live at:</span>
+    </div>
+    <a href="${url}" target="_blank" class="btn btn-primary" style="
+      background: white;
+      color: var(--success);
+      border: none;
+      padding: 0.75rem 1.5rem;
+      font-size: 1.1em;
+      font-weight: 600;
+      text-decoration: none;
+      border-radius: 8px;
+      display: inline-block;
+      transition: all 0.3s ease;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    " onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 12px rgba(0,0,0,0.15)'" onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'">
+      🌐 Open Application
+    </a>
+    <div style="margin-top: 0.5rem;">
+      <span style="color: rgba(255,255,255,0.8); font-size: 0.8em; font-family: monospace;">${url}</span>
+    </div>
+  `;
+  
+  // Insert the button after the status logs
+  if (statusLogs && statusLogs.parentNode) {
+    statusLogs.parentNode.insertBefore(buttonContainer, statusLogs.nextSibling);
+  }
+  
+  // Animate the button
+  setTimeout(() => buttonContainer.classList.add('animate'), 10);
+  
+  // Show a toast notification
+  showToast('🎉 Deployment completed successfully!', 'success');
 }
 
 // --- Deployment History ---
@@ -298,10 +385,8 @@ async function loadUserGitHubRepositories() {
     const reposError = document.getElementById('repos-error');
     const refreshBtn = document.getElementById('refreshReposBtn');
     
-    if (!authToken) return;
-    
-    // Show refresh button for GitHub users
-    if (refreshBtn) refreshBtn.style.display = 'inline';
+    // Show refresh button for authenticated users
+    if (refreshBtn) refreshBtn.style.display = 'inline-block';
     
     // Show loading
     reposLoading.style.display = 'block';
@@ -318,7 +403,6 @@ async function loadUserGitHubRepositories() {
             // Token expired or invalid
             localStorage.removeItem('authToken');
             localStorage.removeItem('username');
-            localStorage.removeItem('authProvider');
             showToast('Session expired. Please login again.', 'error');
             window.location.href = '/login';
             return;
@@ -327,7 +411,7 @@ async function loadUserGitHubRepositories() {
         const data = await response.json();
         
         if (response.ok && data.repositories) {
-            displayRepositories(data.repositories, 'Your repositories');
+            displayRepositories(data.repositories, `Your repositories (${data.username})`);
         } else {
             throw new Error(data.detail || 'Failed to load repositories');
         }
@@ -372,40 +456,6 @@ async function searchPublicRepositories(username) {
     } catch (error) {
         console.error('Failed to load repositories:', error);
         reposError.textContent = 'Failed to load repositories. Please check the username and try again.';
-        reposError.style.display = 'block';
-    } finally {
-        reposLoading.style.display = 'none';
-    }
-}
-
-async function loadDemoRepositories() {
-    const reposList = document.getElementById('repositories-list');
-    const reposLoading = document.getElementById('repos-loading');
-    const reposError = document.getElementById('repos-error');
-    const refreshBtn = document.getElementById('refreshReposBtn');
-    
-    // Hide refresh button for demo
-    if (refreshBtn) refreshBtn.style.display = 'none';
-    
-    // Show loading
-    reposLoading.style.display = 'block';
-    reposError.style.display = 'none';
-    reposList.innerHTML = '';
-    hideWelcomeMessage();
-    
-    try {
-        // Use demo user to get demo repositories
-        const response = await fetch('/api/repositories/demo_user');
-        const data = await response.json();
-        
-        if (response.ok && data.repositories) {
-            displayRepositories(data.repositories, 'Popular repositories you can deploy');
-        } else {
-            throw new Error(data.detail || 'Failed to load demo repositories');
-        }
-    } catch (error) {
-        console.error('Failed to load demo repositories:', error);
-        reposError.textContent = 'Failed to load demo repositories. Please try again.';
         reposError.style.display = 'block';
     } finally {
         reposLoading.style.display = 'none';
@@ -512,12 +562,6 @@ document.getElementById('usernameSearch')?.addEventListener('keypress', (e) => {
         const username = e.target.value;
         searchPublicRepositories(username);
     }
-});
-
-// Show demo repositories button
-document.getElementById('showDemoReposBtn')?.addEventListener('click', () => {
-    loadDemoRepositories();
-    showToast('Loading demo repositories...', 'info');
 });
 
 // Refresh repositories button (for GitHub users)

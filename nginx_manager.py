@@ -4,8 +4,6 @@ import asyncio
 
 NGINX_SITES_AVAILABLE = "/opt/homebrew/etc/nginx/servers"
 
-BASE_DOMAIN = "localhost"
-
 def create_nginx_config(repo_name: str, container_name: str, internal_port: int):
     """
     Creates an Nginx configuration file for a project.
@@ -20,7 +18,7 @@ def create_nginx_config(repo_name: str, container_name: str, internal_port: int)
 
     config_content = f"""
 server {{
-    listen 8888;
+    listen 80;
     server_name {server_name};
     location / {{
         proxy_pass http://{container_name}:{internal_port};

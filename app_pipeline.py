@@ -440,7 +440,7 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                     await manager.broadcast("🔴 STATUS: Pipeline failed.")
                     return None, None
                 await reload_nginx()
-                server_url = f"http://{repo_name}.localhost:8888"
+                server_url = f"http://{repo_name}.localhost"
                 with Session(engine) as session:
                     deployment_to_update = session.get(Deployment, db_deployment.id)
                     if deployment_to_update:
@@ -537,7 +537,7 @@ async def run_pipeline(repo_url: str, user_id: int = None):
             # Step 5: Reload Nginx
             await reload_nginx()
 
-            server_url = f"http://{repo_name}.localhost:{desired_port}" # Use the found/assigned port
+            server_url = f"http://{repo_name}.localhost" # Clean URL without port
             with Session(engine) as session:
                 deployment_to_update = session.get(Deployment, db_deployment.id)
                 if deployment_to_update:
@@ -613,7 +613,7 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                     await manager.broadcast("🔴 STATUS: Pipeline failed.")
                     return None, None
                 await reload_nginx()
-                server_url = f"http://{repo_name}.localhost:8888"
+                server_url = f"http://{repo_name}.localhost"
                 with Session(engine) as session:
                     deployment_to_update = session.get(Deployment, db_deployment.id)
                     if deployment_to_update:

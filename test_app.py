@@ -92,26 +92,21 @@ def main():
     result = test_endpoint(f"{BASE_URL}/api/repositories/facebook")
     print_test_result("Facebook repositories", result)
     
-    # Test 7: Demo repositories
-    print("\n7. Testing Demo Repositories...")
-    result = test_endpoint(f"{BASE_URL}/api/repositories/demo_user")
-    print_test_result("Demo repositories", result)
-    
-    # Test 8: GitHub OAuth URL
-    print("\n8. Testing GitHub OAuth...")
+    # Test 7: GitHub OAuth URL
+    print("\n7. Testing GitHub OAuth...")
     result = test_endpoint(f"{BASE_URL}/api/auth/github")
     print_test_result("GitHub OAuth URL generation", result)
     
-    # Test 9: Static files
-    print("\n9. Testing Static Files...")
+    # Test 8: Static files
+    print("\n8. Testing Static Files...")
     result = test_endpoint(f"{BASE_URL}/static/styles.css")
     print_test_result("CSS file loads", result)
     
     result = test_endpoint(f"{BASE_URL}/static/app.js")
     print_test_result("JavaScript file loads", result)
     
-    # Test 10: Icons
-    print("\n10. Testing Icons...")
+    # Test 9: Icons
+    print("\n9. Testing Icons...")
     result = test_endpoint(f"{BASE_URL}/icons/logo.png")
     print_test_result("Logo icon loads", result)
     
@@ -120,9 +115,8 @@ def main():
     print("\n📝 Next Steps:")
     print("1. Open http://localhost:8000 in your browser")
     print("2. Try the repository search feature")
-    print("3. Click 'Show Demo' to see demo repositories")
-    print("4. Test the login functionality")
-    print("5. Try deploying a repository!")
+    print("3. Test the login functionality")
+    print("4. Try deploying a repository!")
 
 if __name__ == "__main__":
     main() 

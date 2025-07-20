@@ -1,178 +1,137 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>DevOps Butler</title>
-  <link rel="stylesheet" href="/static/styles.css"/>
-  <link rel="icon" type="image/png" href="/icons/logo.png"/>
-  <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet"/>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOps Butler - Your Automated Cloud Deployment Assistant</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
-
-  <!-- Background Animation -->
-  <div class="bg-animation">
-    <div class="floating-shapes">
-      <div class="shape" style="background: var(--gradient-purple); top: 20%; left: 10%; width: 100px; height: 100px;"></div>
-      <div class="shape" style="background: var(--gradient-2); top: 60%; right: 10%; width: 150px; height: 150px;"></div>
-      <div class="shape" style="background: var(--gradient-3); bottom: 20%; left: 20%; width: 80px; height: 80px;"></div>
-      <div class="shape" style="background: var(--gradient-1); top: 80%; left: 80%; width: 60px; height: 60px;"></div>
-      <div class="shape" style="background: var(--gradient-2); top: 10%; right: 30%; width: 120px; height: 120px;"></div>
-    </div>
-    <div id="confetti-container"></div>
-  </div>
-
-  <!-- Navbar -->
-  <nav class="navbar" data-aos="fade-down">
-    <div class="nav-container">
-      <div class="logo">DevOps Butler</div>
-      <ul class="nav-links">
-        <li><a class="nav-link" href="#deploy">Deploy</a></li>
-        <li><a class="nav-link" href="#status">Status</a></li>
-        <li><a class="nav-link" href="#history">History</a></li>
-        <li><a class="nav-link" href="#about">About</a></li>
-      </ul>
-      <div class="nav-auth">
-        <span id="userInfo" style="display: none;">
-          <span id="username"></span>
-          <button id="logoutBtn" class="btn btn-secondary" style="margin-left: 1rem;">Logout</button>
-        </span>
-        <a id="loginLink" class="nav-cta" href="/login">Login</a>
-      </div>
-    </div>
-  </nav>
-
-  <!-- Hero Section -->
-  <section class="hero" id="hero">
-    <div class="about-content" data-aos="fade-up">
-      <div class="about-image">
-        <img src="/icons/devops.png" alt="DevOps Butler Logo" class="profile-image" style="max-width: 260px;" />
-      </div>
-      <div>
-        <h1 class="hero-name">DevOps Butler</h1>
-        <h2 class="hero-title">Your Automated Cloud Deployment Assistant</h2>
-        <p class="hero-description">
-          Automate deployments directly from your Git repositories with zero hassle. Let Butler configure Docker, Nginx, and expose your app instantly.
-        </p>
-        <div class="hero-buttons">
-          <a href="#deploy" class="btn btn-primary">Deploy Now</a>
-          <a href="#about" class="btn btn-secondary">Learn More</a>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <img src="/static/icons/logo.png" alt="DevOps Butler" class="logo-img">
+                <span class="logo-text">DevOps Butler</span>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link active">Home</a>
+                <a href="/dashboard" class="nav-link">Dashboard</a>
+                <a href="/learn" class="nav-link">Learn More</a>
+                <div class="auth-buttons">
+                    <a href="/login" class="btn btn-outline">Login</a>
+                    <a href="/login" class="btn btn-primary">Sign Up</a>
+                </div>
+            </div>
         </div>
-      </div>
-    </div>
-  </section>
+    </nav>
 
-  <!-- GitHub Repositories Section -->
-  <section class="section" id="repositories" data-aos="fade-up">
-    <h2 class="section-title">🐙 GitHub Repositories</h2>
-    <div class="card">
-      <div class="repos-header">
-        <div class="repos-search">
-          <input type="text" id="usernameSearch" placeholder="Enter GitHub username (e.g., facebook, vercel)" />
-          <button id="searchReposBtn" class="btn btn-primary">🔍 Search</button>
+    <!-- Hero Section -->
+    <main class="hero-section">
+        <div class="hero-content">
+            <div class="hero-logo">
+                <img src="/static/icons/logo.png" alt="DevOps Butler Logo" class="hero-logo-img">
+            </div>
+            <h1 class="hero-title">DevOps Butler</h1>
+            <p class="hero-subtitle">Your Automated Cloud Deployment Assistant</p>
+            <p class="hero-description">
+                Automate deployments directly from your Git repositories with zero hassle. 
+                Let Butler configure Docker, Nginx, and expose your app instantly.
+            </p>
+            <div class="hero-buttons">
+                <a href="/login" class="btn btn-primary btn-large">
+                    <i class="fas fa-sign-in-alt"></i>
+                    Get Started
+                </a>
+                <a href="/learn" class="btn btn-outline btn-large">
+                    <i class="fas fa-info-circle"></i>
+                    Learn More
+                </a>
+            </div>
         </div>
-        <div class="repos-actions">
-          <button id="refreshReposBtn" class="btn btn-secondary" style="display: none;">🔄 Refresh</button>
-          <button id="showDemoReposBtn" class="btn btn-secondary">🎯 Show Demo</button>
+    </main>
+
+    <!-- Features Section -->
+    <section class="features-section">
+        <div class="container">
+            <h2 class="section-title">Why Choose DevOps Butler?</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-rocket"></i>
+                    </div>
+                    <h3>Instant Deployment</h3>
+                    <p>Deploy your applications in seconds with automated Docker builds and Nginx configuration.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fab fa-github"></i>
+                    </div>
+                    <h3>GitHub Integration</h3>
+                    <p>Connect your GitHub account and deploy directly from your repositories with one click.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-cogs"></i>
+                    </div>
+                    <h3>Zero Configuration</h3>
+                    <p>No complex setup required. Butler automatically detects your app type and configures everything.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i class="fas fa-chart-line"></i>
+                    </div>
+                    <h3>Real-time Monitoring</h3>
+                    <p>Watch your deployments in real-time with live logs and status updates.</p>
+                </div>
+            </div>
         </div>
-      </div>
-      <div id="repositories-list" class="repositories-grid">
-        <!-- GitHub repositories will be loaded here -->
-      </div>
-      <div id="repos-loading" class="loading-spinner" style="display: none;">
-        <div class="spinner"></div>
-        <p>Loading repositories...</p>
-      </div>
-      <div id="repos-error" class="error-message" style="display: none;"></div>
-      <div id="repos-welcome" class="welcome-message">
-        <p>🔍 Search for any GitHub username to see their public repositories</p>
-        <p>🎯 Or click "Show Demo" to see popular repositories you can deploy</p>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Deploy Section -->
-  <section class="section" id="deploy" data-aos="fade-up">
-    <h2 class="section-title">Deploy Your App</h2>
-    <div class="card">
-      <form class="deploy-form" enctype="multipart/form-data">
-        <div class="input-group">
-          <label for="git-url">Git Repository URL</label>
-          <input type="text" id="git-url" name="git_url" placeholder="https://github.com/your/repo" required />
+    <!-- CTA Section -->
+    <section class="cta-section">
+        <div class="container">
+            <h2>Ready to Deploy?</h2>
+            <p>Join thousands of developers who trust DevOps Butler for their deployments.</p>
+            <a href="/login" class="btn btn-primary btn-large">
+                <i class="fas fa-rocket"></i>
+                Start Deploying Now
+            </a>
         </div>
-        <div class="input-group">
-          <label>Frontend .env</label>
-          <input type="file" id="frontend-env" name="frontend_env" accept=".env" />
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>DevOps Butler</h3>
+                    <p>Your automated cloud deployment assistant.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="/dashboard">Dashboard</a></li>
+                        <li><a href="/learn">Learn More</a></li>
+                        <li><a href="/login">Login</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="/learn">Documentation</a></li>
+                        <li><a href="/learn#features">Features</a></li>
+                        <li><a href="/learn#pricing">Pricing</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 DevOps Butler. All rights reserved.</p>
+            </div>
         </div>
-        <div class="input-group">
-          <label>Backend .env</label>
-          <input type="file" id="backend-env" name="backend_env" accept=".env" />
-        </div>
-        <button type="submit" class="deploy-btn btn-primary">🚀 Deploy</button>
-      </form>
-      <div id="deploy-status" class="fade-in"></div>
-    </div>
-  </section>
+    </footer>
 
-  <!-- Status Section -->
-  <section class="section" id="status" data-aos="fade-up">
-    <h2 class="section-title">Deployment Status</h2>
-    <div class="card">
-      <div id="status-logs" class="logs-section">
-        <!-- Live logs will appear here -->
-      </div>
-    </div>
-  </section>
-
-  <!-- History Section -->
-  <section class="section" id="history" data-aos="fade-up">
-    <h2 class="section-title">Deployment History</h2>
-    <div class="card">
-      <table class="history-table" id="history-table">
-        <thead>
-          <tr>
-            <th>Project</th>
-            <th>Status</th>
-            <th>URL</th>
-            <th>Time</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <!-- JS will populate this -->
-        </tbody>
-      </table>
-      <br />
-      <button id="clearBtn" class="btn btn-secondary" style="float: right;">Clear History</button>
-    </div>
-  </section>
-
-  <!-- About Section -->
-  <section class="section" id="about" data-aos="fade-up">
-    <h2 class="section-title">About DevOps Butler</h2>
-    <div class="card">
-      <p>
-        DevOps Butler is an open-source tool that simplifies your cloud deployment pipelines. Backed by Docker, Nginx, and smart automation, it handles build-to-deploy cycles straight from Git.
-      </p>
-    </div>
-  </section>
-
-  <!-- Toast Notification -->
-  <div id="toast"></div>
-
-  <!-- Floating Deploy Button -->
-  <button id="fabDeploy" class="btn btn-primary" style="position: fixed; bottom: 2rem; right: 2rem; z-index: 1000; padding: 1rem; border-radius: 50%; width: 60px; height: 60px; font-size: 1.5rem; box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3); transition: all 0.3s ease;">
-    🚀
-  </button>
-
-  <!-- Hidden Logs for toast logging (if needed) -->
-  <div id="logs" style="display: none;"></div>
-
-  <!-- Scripts -->
-  <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
-  <script src="/static/app.js"></script>
-  <script>
-    AOS.init({ duration: 800, once: true });
-  </script>
+    <script src="/static/app.js"></script>
 </body>
 </html>
