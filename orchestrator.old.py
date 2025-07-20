@@ -1,7 +1,7 @@
 # orchestrator.py
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, HttpUrl
 from app_pipeline import run_pipeline, extract_repo_name
 from contextlib import asynccontextmanager
@@ -15,7 +15,8 @@ from typing import List
 from login import Deployment, User
 from nginx_manager import delete_nginx_config, reload_nginx
 import asyncio
-from auth import authenticate_user, create_user, create_access_token, get_current_user, verify_token
+from auth import authenticate_user, create_user, create_access_token, get_current_user
+from github_oauth import github_oauth
 from datetime import timedelta
 
 class Project(BaseModel):
@@ -56,45 +57,6 @@ async def login_page():
     with open(html_file_path, "r") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page():
-    html_file_path = os.path.join(static_dir, "dashboard.html")
-    with open(html_file_path, "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
-
-@app.get("/deploy", response_class=HTMLResponse)
-async def deploy_page(request: Request):
-    # Check for Authorization header (JWT token)
-    token = request.cookies.get("authToken") or request.headers.get("Authorization")
-    if not token:
-        # Try to get token from query param (for dev/testing)
-        token = request.query_params.get("token")
-    username = verify_token(token.replace("Bearer ", "") if token else None)
-    if not username:
-        # Not authenticated, redirect to login
-        return RedirectResponse(url="/login")
-    html_file_path = os.path.join(static_dir, "deploy.html")
-    with open(html_file_path, "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
-
-@app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request):
-    token = request.cookies.get("authToken") or request.headers.get("Authorization")
-    if not token:
-        token = request.query_params.get("token")
-    username = verify_token(token.replace("Bearer ", "") if token else None)
-    if not username:
-        return RedirectResponse(url="/login")
-    html_file_path = os.path.join(static_dir, "history.html")
-    with open(html_file_path, "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
-
-@app.get("/learn", response_class=HTMLResponse)
-async def learn_page():
-    html_file_path = os.path.join(static_dir, "learn.html")
-    with open(html_file_path, "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
-
 @app.post("/api/auth/login")
 async def login(user_credentials: UserLogin):
     user = authenticate_user(user_credentials.username, user_credentials.password)
@@ -109,13 +71,11 @@ async def login(user_credentials: UserLogin):
         data={"sub": user.username}, expires_delta=access_token_expires
     )
     
-    response = JSONResponse({
+    return {
         "access_token": access_token,
         "token_type": "bearer",
         "username": user.username
-    })
-    response.set_cookie(key="authToken", value=access_token, httponly=False, samesite="lax")
-    return response
+    }
 
 @app.post("/api/auth/register")
 async def register(user_data: UserRegister):
@@ -127,6 +87,45 @@ async def register(user_data: UserRegister):
         )
     
     return {"message": "User created successfully"}
+
+@app.get("/api/auth/github")
+async def github_login():
+    """Redirect to GitHub OAuth authorization."""
+    auth_url = github_oauth.get_authorization_url()
+    return {"auth_url": auth_url}
+
+@app.get("/api/auth/github/callback")
+async def github_callback(code: str):
+    """Handle GitHub OAuth callback."""
+    try:
+        # Exchange code for access token
+        access_token = await github_oauth.exchange_code_for_token(code)
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Failed to get access token from GitHub")
+        
+        # Get user info from GitHub
+        user_info = await github_oauth.get_user_info(access_token)
+        if not user_info:
+            raise HTTPException(status_code=400, detail="Failed to get user info from GitHub")
+        
+        # Authenticate or create user
+        user = await github_oauth.authenticate_or_create_user(user_info, access_token)
+        if not user:
+            raise HTTPException(status_code=400, detail="Failed to create or authenticate user")
+        
+        # Create JWT token
+        jwt_token = github_oauth.create_user_token(user)
+        
+        # Redirect to frontend with token
+        return {
+            "access_token": jwt_token,
+            "token_type": "bearer",
+            "username": user.username,
+            "auth_provider": "github"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GitHub authentication failed: {str(e)}")
 
 @app.get("/api/user/repositories")
 async def get_user_repositories(current_user: User = Depends(get_current_user)):
@@ -153,7 +152,12 @@ async def get_user_repositories(current_user: User = Depends(get_current_user)):
 async def get_public_repositories(username: str):
     """Get public repositories for any GitHub username (no authentication required)."""
     try:
-        # Fetch from GitHub API
+        # Special case for demo user - return demo repositories
+        if username == "demo_user":
+            repos = await github_oauth.get_demo_repositories()
+            return {"repositories": repos, "username": "demo_user"}
+        
+        # For real GitHub usernames, fetch from GitHub API
         repos = await github_oauth.get_public_repositories_by_username(username)
         return {"repositories": repos, "username": username}
     except Exception as e:
@@ -172,7 +176,7 @@ async def deploy(
     try:
         import tempfile, os
         repo_dir = tempfile.mkdtemp(prefix="butler-run-")
-
+        
         # Save env files if provided
         if frontend_env:
             with open(os.path.join(repo_dir, "frontend.env"), "wb") as f:
@@ -180,7 +184,7 @@ async def deploy(
         if backend_env:
             with open(os.path.join(repo_dir, "backend.env"), "wb") as f:
                 f.write(await backend_env.read())
-
+        
         # Run pipeline with user context
         result = await run_pipeline(git_url, user_id=current_user.id)
         return result
@@ -326,199 +330,4 @@ async def destroy_deployment(
     except Exception as e:
         print(f"❌ Failed to destroy deployment {container_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to destroy deployment: {str(e)}")
-
-# New API endpoints for multi-page functionality
-
-@app.get("/api/auth/me")
-async def get_current_user_info(current_user: User = Depends(get_current_user)):
-    """Get current user information."""
-    return {
-        "authenticated": True,
-        "user": {
-            "id": current_user.id,
-            "username": current_user.username,
-            "email": current_user.email,
-            "github_username": current_user.github_username,
-            "auth_provider": current_user.auth_provider
-        }
-    }
-
-@app.post("/api/auth/logout")
-async def logout():
-    """Logout endpoint (client-side token removal)."""
-    return {"message": "Logged out successfully"}
-
-@app.get("/api/dashboard/stats")
-async def get_dashboard_stats(session: Session = Depends(get_session)):
-    """Get dashboard statistics for all users."""
-    try:
-        # Get total deployments
-        total_deployments = len(session.exec(select(Deployment)).all())
-        
-        # Get successful deployments
-        successful_deployments = len(session.exec(
-            select(Deployment).where(Deployment.status == "success")
-        ).all())
-        
-        # Get active users (users with at least one deployment)
-        active_users = len(session.exec(
-            select(User).where(User.id.in_(
-                select(Deployment.user_id).distinct()
-            ))
-        ).all())
-        
-        return {
-            "total_deployments": total_deployments,
-            "successful_deployments": successful_deployments,
-            "active_users": active_users,
-            "uptime": "99.9%"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
-
-@app.get("/api/deployments/recent")
-async def get_recent_deployments(
-    session: Session = Depends(get_session),
-    limit: int = 10
-):
-    """Get recent deployments for all users."""
-    try:
-        statement = select(Deployment).order_by(Deployment.created_at.desc()).limit(limit)
-        deployments = session.exec(statement).all()
-        return deployments
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get recent deployments: {str(e)}")
-
-@app.get("/api/deployments/history")
-async def get_deployment_history(
-    session: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user),
-    status: str = None,
-    date_range: str = None,
-    search: str = None
-):
-    """Get deployment history for the current user with optional filters."""
-    try:
-        statement = select(Deployment).where(Deployment.user_id == current_user.id)
-        
-        # Apply filters
-        if status:
-            statement = statement.where(Deployment.status == status)
-        
-        if search:
-            statement = statement.where(Deployment.git_url.contains(search))
-        
-        # Apply date range filter
-        if date_range:
-            from datetime import datetime, timedelta
-            now = datetime.utcnow()
-            
-            if date_range == "today":
-                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            elif date_range == "week":
-                start_date = now - timedelta(days=7)
-            elif date_range == "month":
-                start_date = now - timedelta(days=30)
-            elif date_range == "year":
-                start_date = now - timedelta(days=365)
-            else:
-                start_date = None
-            
-            if start_date:
-                statement = statement.where(Deployment.created_at >= start_date)
-        
-        deployments = session.exec(statement.order_by(Deployment.created_at.desc())).all()
-        
-        # Calculate stats
-        total = len(deployments)
-        successful = len([d for d in deployments if d.status == "success"])
-        failed = len([d for d in deployments if d.status == "failed"])
-        
-        return {
-            "deployments": deployments,
-            "stats": {
-                "total": total,
-                "successful": successful,
-                "failed": failed,
-                "avg_time": "30s"  # Placeholder
-            }
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get deployment history: {str(e)}")
-
-@app.get("/api/repositories/search")
-async def search_user_repositories(
-    q: str,
-    current_user: User = Depends(get_current_user)
-):
-    """Search user repositories."""
-    if current_user.auth_provider != "github" or not current_user.github_access_token:
-        raise HTTPException(
-            status_code=400, 
-            detail="GitHub repositories only available for GitHub users"
-        )
-    
-    try:
-        repos = await github_oauth.get_user_repositories(
-            current_user.github_access_token, 
-            current_user.github_username
-        )
-        
-        # Filter repositories by search term
-        filtered_repos = [
-            repo for repo in repos 
-            if q.lower() in repo.get('name', '').lower() or 
-               q.lower() in repo.get('description', '').lower()
-        ]
-        
-        return filtered_repos
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Failed to search repositories: {str(e)}"
-        )
-
-@app.delete("/api/deployments/{deployment_id}")
-async def delete_deployment_by_id(
-    deployment_id: int,
-    session: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
-):
-    """Delete a specific deployment by ID."""
-    try:
-        deployment = session.exec(
-            select(Deployment).where(
-                Deployment.id == deployment_id,
-                Deployment.user_id == current_user.id
-            )
-        ).first()
-        
-        if not deployment:
-            raise HTTPException(status_code=404, detail="Deployment not found or access denied")
-        
-        session.delete(deployment)
-        session.commit()
-        
-        return {"message": "Deployment deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete deployment: {str(e)}")
-
-@app.delete("/api/deployments/clear")
-async def clear_all_deployments(
-    session: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
-):
-    """Clear all deployments for the current user."""
-    try:
-        deployments = session.exec(
-            select(Deployment).where(Deployment.user_id == current_user.id)
-        ).all()
-        
-        for deployment in deployments:
-            session.delete(deployment)
-        
-        session.commit()
-        return {"message": "All deployments cleared successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to clear deployments: {str(e)}")
         

@@ -626,30 +626,22 @@
     <div class="particle" style="top: 60%; left: 90%;"></div>
     <div class="particle" style="top: 30%; left: 60%;"></div>
 
+    <!-- Navigation -->
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-logo">
-                <div class="logo-img">
-                    <i class="fas fa-robot"></i>
-                </div>
+                <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img">
                 <span class="logo-text">DevOps Butler</span>
             </div>
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
                 <a href="/dashboard" class="nav-link active">Dashboard</a>
-                <a href="/deploy" class="nav-link">Deploy</a>
-                <a href="/projects" class="nav-link">Projects</a>
-                <a href="/history" class="nav-link">History</a>
+                <a href="/deploy" class="nav-link authed-link" style="display:none;">Deploy</a>
+                <a href="/history" class="nav-link authed-link" style="display:none;">History</a>
                 <a href="/learn" class="nav-link">Learn More</a>
-                <div class="auth-buttons" id="authButtons" style="display: flex; gap: 0.5rem; align-items: center; margin-left: 2rem;">
-                    <a href="/login" class="btn btn-outline" style="display: flex; align-items: center; gap: 0.5rem;">
-                        <i class="fas fa-sign-in-alt"></i>
-                        Login
-                    </a>
-                    <a href="/login" class="btn btn-primary" style="display: flex; align-items: center; gap: 0.5rem;">
-                        <i class="fas fa-user-plus"></i>
-                        Sign Up
-                    </a>
+                <div class="auth-buttons">
+                    <a href="/login" class="btn btn-outline">Login</a>
+                    <a href="/login" class="btn btn-primary">Sign Up</a>
                 </div>
             </div>
         </div>
@@ -761,13 +753,6 @@
                     <h3>New Deployment</h3>
                     <p>Deploy a new application from your repository</p>
                 </a>
-                <a href="/projects" class="action-card">
-                    <div class="action-icon">
-                        <i class="fab fa-github"></i>
-                    </div>
-                    <h3>Browse Repositories</h3>
-                    <p>Explore your GitHub repositories</p>
-                </a>
                 <a href="/history" class="action-card">
                     <div class="action-icon">
                         <i class="fas fa-history"></i>
@@ -798,7 +783,6 @@
                     <ul>
                         <li><a href="/dashboard">Dashboard</a></li>
                         <li><a href="/deploy">Deploy</a></li>
-                        <li><a href="/projects">Projects</a></li>
                         <li><a href="/history">History</a></li>
                     </ul>
                 </div>
@@ -874,6 +858,24 @@
                     element.classList.remove('loading-shimmer');
                 });
             }, 1200);
+
+            // Show authed links if logged in
+            function updateAuthedLinks() {
+                const isLoggedIn = localStorage.getItem('token');
+                const authedLinks = document.querySelectorAll('.authed-link');
+                authedLinks.forEach(link => {
+                    link.style.display = isLoggedIn ? 'inline-block' : 'none';
+                });
+            }
+            updateAuthedLinks();
+            window.addEventListener('storage', updateAuthedLinks);
+        });
+
+        // Force navigation for auth-buttons
+        document.querySelectorAll('.auth-buttons a').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                window.location.href = this.getAttribute('href');
+            });
         });
     </script>
 </body>

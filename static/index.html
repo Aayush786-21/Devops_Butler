@@ -565,13 +565,16 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-logo">
-                <div class="logo-img"></div>
+                <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img">
                 <span class="logo-text">DevOps Butler</span>
             </div>
             <div class="nav-links">
-                <a href="/" class="nav-link active">Home</a>
+                <a href="/" class="nav-link">Home</a>
                 <a href="/dashboard" class="nav-link">Dashboard</a>
+                <a href="/deploy" class="nav-link authed-link" style="display:none;">Deploy</a>
+                <a href="/history" class="nav-link authed-link" style="display:none;">History</a>
                 <a href="/learn" class="nav-link">Learn More</a>
+                <span id="navbarUsername" style="display:none; margin-left: 1rem; font-weight: 600;"></span>
                 <div class="auth-buttons">
                     <a href="/login" class="btn btn-outline">Login</a>
                     <a href="/login" class="btn btn-primary">Sign Up</a>
@@ -763,6 +766,35 @@
             featureCards.forEach((card, index) => {
                 card.style.animationDelay = (index * 0.2) + 's';
             });
+
+            // Show authed links if logged in
+            function updateAuthedLinks() {
+                const isLoggedIn = localStorage.getItem('token');
+                const authedLinks = document.querySelectorAll('.authed-link');
+                authedLinks.forEach(link => {
+                    link.style.display = isLoggedIn ? 'inline-block' : 'none';
+                });
+            }
+            updateAuthedLinks();
+            window.addEventListener('storage', updateAuthedLinks);
+
+            // Show username in navbar if logged in
+            function updateNavbarUser() {
+                const username = localStorage.getItem('username');
+                const navbarUsername = document.getElementById('navbarUsername');
+                const authButtons = document.querySelector('.auth-buttons');
+                if (username) {
+                    navbarUsername.textContent = `👤 ${username}`;
+                    navbarUsername.style.display = 'inline-block';
+                    if (authButtons) authButtons.style.display = 'none';
+                } else {
+                    navbarUsername.textContent = '';
+                    navbarUsername.style.display = 'none';
+                    if (authButtons) authButtons.style.display = 'flex';
+                }
+            }
+            updateNavbarUser();
+            window.addEventListener('storage', updateNavbarUser);
         });
 
         // Smooth scrolling for anchor links
@@ -772,6 +804,12 @@
                 document.querySelector(this.getAttribute('href')).scrollIntoView({
                     behavior: 'smooth'
                 });
+            });
+        });
+        // Force navigation for auth-buttons
+        document.querySelectorAll('.auth-buttons a').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                window.location.href = this.getAttribute('href');
             });
         });
     </script>

@@ -78,8 +78,13 @@ document.addEventListener('DOMContentLoaded', function() {
             if (response.ok) {
                 // Store the token
                 localStorage.setItem('authToken', data.access_token);
+                localStorage.setItem('token', data.access_token); // Ensure compatibility
                 localStorage.setItem('username', data.username);
-                
+
+                // Immediately update navbar and authed links if functions exist
+                if (typeof updateNavbarUser === 'function') updateNavbarUser();
+                if (typeof updateAuthedLinks === 'function') updateAuthedLinks();
+
                 showToast('Login successful! Redirecting...', 'success');
                 
                 // Redirect to dashboard page
@@ -166,57 +171,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // GitHub OAuth login
-    document.getElementById('githubLoginBtn').addEventListener('click', async () => {
-        try {
-            const response = await fetch('/api/auth/github');
-            const data = await response.json();
-            
-            if (response.ok && data.auth_url) {
-                // Redirect to GitHub OAuth
-                window.location.href = data.auth_url;
-            } else {
-                showToast('GitHub OAuth is not configured. Please contact administrator.', 'error');
-            }
-        } catch (error) {
-            console.error('GitHub OAuth error:', error);
-            showToast('Failed to initiate GitHub login', 'error');
-        }
-    });
-
-    // Handle GitHub OAuth callback
-    function handleGitHubCallback() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const code = urlParams.get('code');
-        
-        if (code) {
-            // Exchange code for token
-            fetch(`/api/auth/github/callback?code=${code}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.access_token) {
-                        // Store the token
-                        localStorage.setItem('authToken', data.access_token);
-                        localStorage.setItem('username', data.username);
-                        localStorage.setItem('authProvider', data.auth_provider);
-                        
-                        showToast('GitHub login successful! Redirecting...', 'success');
-                        
-                        // Redirect to dashboard page
-                        setTimeout(() => {
-                            window.location.href = '/dashboard';
-                        }, 1000);
-                    } else {
-                        showToast('GitHub authentication failed', 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('GitHub callback error:', error);
-                    showToast('GitHub authentication failed', 'error');
-                });
-        }
-    }
-
     // Check if user is already logged in
     const token = localStorage.getItem('authToken');
     const currentPath = window.location.pathname;
@@ -224,8 +178,5 @@ document.addEventListener('DOMContentLoaded', function() {
     if (token && isAuthPage) {
         // User is already logged in, redirect to dashboard
         window.location.href = '/dashboard';
-    } else {
-        // Check for GitHub OAuth callback
-        handleGitHubCallback();
     }
 }); 

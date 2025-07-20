@@ -50,7 +50,7 @@
             font-weight: 700;
         }
 
-        .logo-icon {
+        .logo-img {
             width: 40px;
             height: 40px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -476,21 +476,17 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-logo">
-                <div class="logo-icon">🚀</div>
+                <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img">
                 <span class="logo-text">DevOps Butler</span>
             </div>
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
                 <a href="/dashboard" class="nav-link">Dashboard</a>
-                <a href="/deploy" class="nav-link">Deploy</a>
-                <a href="/projects" class="nav-link">Projects</a>
-                <a href="/history" class="nav-link active">History</a>
+                <a href="/deploy" class="nav-link authed-link" style="display:none;">Deploy</a>
+                <a href="/projects" class="nav-link authed-link" style="display:none;">Projects</a>
+                <a href="/history" class="nav-link active authed-link" style="display:none;">History</a>
                 <a href="/learn" class="nav-link">Learn More</a>
-                <div class="user-section" id="userSection" style="display: none;">
-                    <span id="username" class="username"></span>
-                    <button id="logoutBtn" class="btn btn-outline btn-small">Logout</button>
-                </div>
-                <div class="auth-buttons" id="authButtons">
+                <div class="auth-buttons">
                     <a href="/login" class="btn btn-outline">Login</a>
                     <a href="/login" class="btn btn-primary">Sign Up</a>
                 </div>
@@ -686,6 +682,13 @@
                 }
             });
 
+            // Force navigation for auth-buttons
+            document.querySelectorAll('.auth-buttons a').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    window.location.href = this.getAttribute('href');
+                });
+            });
+
             // Add spin animation for refresh button
             const style = document.createElement('style');
             style.textContent = `
@@ -695,6 +698,17 @@
                 }
             `;
             document.head.appendChild(style);
+
+            // Show authed links if logged in
+            function updateAuthedLinks() {
+                const isLoggedIn = localStorage.getItem('token');
+                const authedLinks = document.querySelectorAll('.authed-link');
+                authedLinks.forEach(link => {
+                    link.style.display = isLoggedIn ? 'inline-block' : 'none';
+                });
+            }
+            updateAuthedLinks();
+            window.addEventListener('storage', updateAuthedLinks);
         });
     </script>
 </body>

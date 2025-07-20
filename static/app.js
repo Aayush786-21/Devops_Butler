@@ -6,7 +6,7 @@ let authProvider = localStorage.getItem('authProvider');
 const token = localStorage.getItem('authToken');
 const currentPath = window.location.pathname;
 const isAuthPage = ['/login', '/register', '/auth'].includes(currentPath);
-const protectedPages = ['/dashboard', '/deploy', '/projects', '/history'];
+const protectedPages = ['/dashboard', '/deploy', '/history'];
 if (token && isAuthPage) {
   window.location.href = '/dashboard';
 }
