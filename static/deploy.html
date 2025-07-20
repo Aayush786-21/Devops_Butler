@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deploy - DevOps Butler</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img">
+                <span class="logo-text">DevOps Butler</span>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/dashboard" class="nav-link">Dashboard</a>
+                <a href="/deploy" class="nav-link active">Deploy</a>
+                <a href="/projects" class="nav-link">Projects</a>
+                <a href="/history" class="nav-link">History</a>
+                <a href="/learn" class="nav-link">Learn More</a>
+                <div class="user-section" id="userSection" style="display: none;">
+                    <span id="username" class="username"></span>
+                    <button id="logoutBtn" class="btn btn-outline btn-small">Logout</button>
+                </div>
+                <div class="auth-buttons" id="authButtons">
+                    <a href="/login" class="btn btn-outline">Login</a>
+                    <a href="/login" class="btn btn-primary">Sign Up</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Deploy Content -->
+    <main class="deploy-main">
+        <div class="container">
+            <!-- Welcome Section -->
+            <section class="welcome-section">
+                <h1 class="deploy-title">Deploy Your Application</h1>
+                <p class="deploy-subtitle">Deploy your application from GitHub with zero configuration</p>
+            </section>
+
+            <!-- Authentication Check -->
+            <div id="authRequired" class="auth-required" style="display: none;">
+                <div class="auth-message">
+                    <div class="auth-icon">
+                        <i class="fas fa-lock"></i>
+                    </div>
+                    <h2>Authentication Required</h2>
+                    <p>Please log in with your GitHub account to deploy applications.</p>
+                    <a href="/login" class="btn btn-primary">Login with GitHub</a>
+                </div>
+            </div>
+
+            <!-- Deploy Form -->
+            <div id="deployForm" class="deploy-form-container" style="display: none;">
+                <div class="deploy-grid">
+                    <!-- Repository Selection -->
+                    <section class="repo-selection">
+                        <h2>Select Repository</h2>
+                        <div class="repo-search">
+                            <input type="text" id="repoSearch" placeholder="Search your repositories..." />
+                            <button id="searchReposBtn" class="btn btn-primary">
+                                <i class="fas fa-search"></i>
+                                Search
+                            </button>
+                        </div>
+                        <div class="repos-list" id="reposList">
+                            <!-- Repositories will be loaded here -->
+                        </div>
+                        <div class="manual-repo">
+                            <h3>Or enter repository URL manually</h3>
+                            <input type="text" id="manualRepoUrl" placeholder="https://github.com/username/repository" />
+                        </div>
+                    </section>
+
+                    <!-- Deployment Form -->
+                    <section class="deployment-form">
+                        <h2>Deployment Configuration</h2>
+                        <form id="deployFormElement" enctype="multipart/form-data">
+                            <div class="form-group">
+                                <label for="gitUrl">Repository URL</label>
+                                <input type="text" id="gitUrl" name="git_url" placeholder="https://github.com/your/repo" required />
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="frontendEnv">Frontend Environment Variables (.env)</label>
+                                <input type="file" id="frontendEnv" name="frontend_env" accept=".env" />
+                                <small>Optional: Upload frontend environment variables</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="backendEnv">Backend Environment Variables (.env)</label>
+                                <input type="file" id="backendEnv" name="backend_env" accept=".env" />
+                                <small>Optional: Upload backend environment variables</small>
+                            </div>
+                            
+                            <button type="submit" class="btn btn-primary btn-large deploy-btn">
+                                <i class="fas fa-rocket"></i>
+                                Deploy Application
+                            </button>
+                        </form>
+                    </section>
+                </div>
+
+                <!-- Deployment Status -->
+                <section class="deployment-status">
+                    <h2>Deployment Status</h2>
+                    <div id="deployStatus" class="status-container">
+                        <div class="status-message">
+                            <i class="fas fa-info-circle"></i>
+                            Ready to deploy. Fill in the form above and click deploy.
+                        </div>
+                    </div>
+                    
+                    <!-- Real-time Logs -->
+                    <div id="deploymentLogs" class="logs-container" style="display: none;">
+                        <div class="logs-header">
+                            <h3>Deployment Logs</h3>
+                            <button id="clearLogsBtn" class="btn btn-outline btn-small">
+                                <i class="fas fa-trash"></i>
+                                Clear
+                            </button>
+                        </div>
+                        <div id="logsContent" class="logs-content">
+                            <!-- Real-time logs will appear here -->
+                        </div>
+                    </div>
+
+                    <!-- Deployment URL Button -->
+                    <div id="deploymentUrlButton" class="deployment-url-button" style="display: none;">
+                        <!-- Deployment URL button will appear here -->
+                    </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>DevOps Butler</h3>
+                    <p>Your automated cloud deployment assistant.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="/dashboard">Dashboard</a></li>
+                        <li><a href="/deploy">Deploy</a></li>
+                        <li><a href="/projects">Projects</a></li>
+                        <li><a href="/history">History</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="/learn">Documentation</a></li>
+                        <li><a href="/learn#features">Features</a></li>
+                        <li><a href="/learn#pricing">Pricing</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 DevOps Butler. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/static/deploy.js"></script>
+</body>
+</html> 

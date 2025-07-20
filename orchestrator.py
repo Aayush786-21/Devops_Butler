@@ -57,6 +57,36 @@ async def login_page():
     with open(html_file_path, "r") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page():
+    html_file_path = os.path.join(static_dir, "dashboard.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
+@app.get("/deploy", response_class=HTMLResponse)
+async def deploy_page():
+    html_file_path = os.path.join(static_dir, "deploy.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
+@app.get("/projects", response_class=HTMLResponse)
+async def projects_page():
+    html_file_path = os.path.join(static_dir, "projects.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
+@app.get("/history", response_class=HTMLResponse)
+async def history_page():
+    html_file_path = os.path.join(static_dir, "history.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
+@app.get("/learn", response_class=HTMLResponse)
+async def learn_page():
+    html_file_path = os.path.join(static_dir, "learn.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
 @app.post("/api/auth/login")
 async def login(user_credentials: UserLogin):
     user = authenticate_user(user_credentials.username, user_credentials.password)
@@ -325,4 +355,222 @@ async def destroy_deployment(
     except Exception as e:
         print(f"❌ Failed to destroy deployment {container_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to destroy deployment: {str(e)}")
+
+# New API endpoints for multi-page functionality
+
+@app.get("/api/auth/me")
+async def get_current_user_info(current_user: User = Depends(get_current_user)):
+    """Get current user information."""
+    return {
+        "authenticated": True,
+        "user": {
+            "id": current_user.id,
+            "username": current_user.username,
+            "email": current_user.email,
+            "github_username": current_user.github_username,
+            "auth_provider": current_user.auth_provider
+        }
+    }
+
+@app.post("/api/auth/logout")
+async def logout():
+    """Logout endpoint (client-side token removal)."""
+    return {"message": "Logged out successfully"}
+
+@app.get("/api/dashboard/stats")
+async def get_dashboard_stats(session: Session = Depends(get_session)):
+    """Get dashboard statistics for all users."""
+    try:
+        # Get total deployments
+        total_deployments = len(session.exec(select(Deployment)).all())
+        
+        # Get successful deployments
+        successful_deployments = len(session.exec(
+            select(Deployment).where(Deployment.status == "success")
+        ).all())
+        
+        # Get active users (users with at least one deployment)
+        active_users = len(session.exec(
+            select(User).where(User.id.in_(
+                select(Deployment.user_id).distinct()
+            ))
+        ).all())
+        
+        return {
+            "total_deployments": total_deployments,
+            "successful_deployments": successful_deployments,
+            "active_users": active_users,
+            "uptime": "99.9%"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+
+@app.get("/api/deployments/recent")
+async def get_recent_deployments(
+    session: Session = Depends(get_session),
+    limit: int = 10
+):
+    """Get recent deployments for all users."""
+    try:
+        statement = select(Deployment).order_by(Deployment.created_at.desc()).limit(limit)
+        deployments = session.exec(statement).all()
+        return deployments
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get recent deployments: {str(e)}")
+
+@app.get("/api/deployments/history")
+async def get_deployment_history(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+    status: str = None,
+    date_range: str = None,
+    search: str = None
+):
+    """Get deployment history for the current user with optional filters."""
+    try:
+        statement = select(Deployment).where(Deployment.user_id == current_user.id)
+        
+        # Apply filters
+        if status:
+            statement = statement.where(Deployment.status == status)
+        
+        if search:
+            statement = statement.where(Deployment.git_url.contains(search))
+        
+        # Apply date range filter
+        if date_range:
+            from datetime import datetime, timedelta
+            now = datetime.utcnow()
+            
+            if date_range == "today":
+                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif date_range == "week":
+                start_date = now - timedelta(days=7)
+            elif date_range == "month":
+                start_date = now - timedelta(days=30)
+            elif date_range == "year":
+                start_date = now - timedelta(days=365)
+            else:
+                start_date = None
+            
+            if start_date:
+                statement = statement.where(Deployment.created_at >= start_date)
+        
+        deployments = session.exec(statement.order_by(Deployment.created_at.desc())).all()
+        
+        # Calculate stats
+        total = len(deployments)
+        successful = len([d for d in deployments if d.status == "success"])
+        failed = len([d for d in deployments if d.status == "failed"])
+        
+        return {
+            "deployments": deployments,
+            "stats": {
+                "total": total,
+                "successful": successful,
+                "failed": failed,
+                "avg_time": "30s"  # Placeholder
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get deployment history: {str(e)}")
+
+@app.get("/api/repositories/user")
+async def get_user_repositories_for_projects(
+    current_user: User = Depends(get_current_user)
+):
+    """Get GitHub repositories for the authenticated user (for projects page)."""
+    if current_user.auth_provider != "github" or not current_user.github_access_token:
+        raise HTTPException(
+            status_code=400, 
+            detail="GitHub repositories only available for GitHub users"
+        )
+    
+    try:
+        repos = await github_oauth.get_user_repositories(
+            current_user.github_access_token, 
+            current_user.github_username
+        )
+        return repos
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to fetch repositories: {str(e)}"
+        )
+
+@app.get("/api/repositories/search")
+async def search_user_repositories(
+    q: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Search user repositories."""
+    if current_user.auth_provider != "github" or not current_user.github_access_token:
+        raise HTTPException(
+            status_code=400, 
+            detail="GitHub repositories only available for GitHub users"
+        )
+    
+    try:
+        repos = await github_oauth.get_user_repositories(
+            current_user.github_access_token, 
+            current_user.github_username
+        )
+        
+        # Filter repositories by search term
+        filtered_repos = [
+            repo for repo in repos 
+            if q.lower() in repo.get('name', '').lower() or 
+               q.lower() in repo.get('description', '').lower()
+        ]
+        
+        return filtered_repos
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to search repositories: {str(e)}"
+        )
+
+@app.delete("/api/deployments/{deployment_id}")
+async def delete_deployment_by_id(
+    deployment_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a specific deployment by ID."""
+    try:
+        deployment = session.exec(
+            select(Deployment).where(
+                Deployment.id == deployment_id,
+                Deployment.user_id == current_user.id
+            )
+        ).first()
+        
+        if not deployment:
+            raise HTTPException(status_code=404, detail="Deployment not found or access denied")
+        
+        session.delete(deployment)
+        session.commit()
+        
+        return {"message": "Deployment deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete deployment: {str(e)}")
+
+@app.delete("/api/deployments/clear")
+async def clear_all_deployments(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Clear all deployments for the current user."""
+    try:
+        deployments = session.exec(
+            select(Deployment).where(Deployment.user_id == current_user.id)
+        ).all()
+        
+        for deployment in deployments:
+            session.delete(deployment)
+        
+        session.commit()
+        return {"message": "All deployments cleared successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear deployments: {str(e)}")
         

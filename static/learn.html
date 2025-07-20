@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Learn More - DevOps Butler</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img">
+                <span class="logo-text">DevOps Butler</span>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/dashboard" class="nav-link">Dashboard</a>
+                <a href="/deploy" class="nav-link">Deploy</a>
+                <a href="/projects" class="nav-link">Projects</a>
+                <a href="/history" class="nav-link">History</a>
+                <a href="/learn" class="nav-link active">Learn More</a>
+                <div class="user-section" id="userSection" style="display: none;">
+                    <span id="username" class="username"></span>
+                    <button id="logoutBtn" class="btn btn-outline btn-small">Logout</button>
+                </div>
+                <div class="auth-buttons" id="authButtons">
+                    <a href="/login" class="btn btn-outline">Login</a>
+                    <a href="/login" class="btn btn-primary">Sign Up</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Learn Content -->
+    <main class="learn-main">
+        <div class="container">
+            <!-- Welcome Section -->
+            <section class="welcome-section">
+                <h1 class="learn-title">Learn More About DevOps Butler</h1>
+                <p class="learn-subtitle">Everything you need to know about automated cloud deployment</p>
+            </section>
+
+            <!-- Table of Contents -->
+            <div class="toc">
+                <h2>Table of Contents</h2>
+                <ul>
+                    <li><a href="#what-is">What is DevOps Butler?</a></li>
+                    <li><a href="#features">Features</a></li>
+                    <li><a href="#how-it-works">How It Works</a></li>
+                    <li><a href="#getting-started">Getting Started</a></li>
+                    <li><a href="#supported-apps">Supported Applications</a></li>
+                    <li><a href="#faq">FAQ</a></li>
+                </ul>
+            </div>
+
+            <!-- What is DevOps Butler -->
+            <section id="what-is" class="learn-section">
+                <h2>What is DevOps Butler?</h2>
+                <p>
+                    DevOps Butler is an automated cloud deployment assistant that simplifies the process of deploying applications from Git repositories. 
+                    It eliminates the complexity of manual Docker configuration, Nginx setup, and deployment orchestration.
+                </p>
+                <h3>Key Benefits:</h3>
+                <ul>
+                    <li><strong>Zero Configuration:</strong> Automatically detects your application type and configures everything</li>
+                    <li><strong>Instant Deployment:</strong> Deploy applications in seconds, not minutes</li>
+                    <li><strong>GitHub Integration:</strong> Direct deployment from your repositories</li>
+                    <li><strong>Real-time Monitoring:</strong> Watch deployments happen live</li>
+                    <li><strong>Clean URLs:</strong> Get professional URLs for your applications</li>
+                </ul>
+            </section>
+
+            <!-- Features -->
+            <section id="features" class="learn-section">
+                <h2>Features</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-rocket"></i>
+                        </div>
+                        <h3>Instant Deployment</h3>
+                        <p>Deploy your applications in seconds with automated Docker builds and Nginx configuration.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fab fa-github"></i>
+                        </div>
+                        <h3>GitHub Integration</h3>
+                        <p>Connect your GitHub account and deploy directly from your repositories with one click.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-cogs"></i>
+                        </div>
+                        <h3>Auto-Detection</h3>
+                        <p>Automatically detects your application type (React, Node.js, Python, etc.) and configures the appropriate Docker setup.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-chart-line"></i>
+                        </div>
+                        <h3>Real-time Logs</h3>
+                        <p>Watch your deployments in real-time with live logs and status updates.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-link"></i>
+                        </div>
+                        <h3>Clean URLs</h3>
+                        <p>Get professional URLs for your applications without complex domain configuration.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-history"></i>
+                        </div>
+                        <h3>Deployment History</h3>
+                        <p>Track all your deployments with detailed history and status information.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- How It Works -->
+            <section id="how-it-works" class="learn-section">
+                <h2>How It Works</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fab fa-github"></i>
+                        </div>
+                        <h3>1. Connect GitHub</h3>
+                        <p>Log in with your GitHub account to access your repositories.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-folder-open"></i>
+                        </div>
+                        <h3>2. Select Repository</h3>
+                        <p>Choose the repository you want to deploy from your GitHub account.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-search"></i>
+                        </div>
+                        <h3>3. Auto-Analysis</h3>
+                        <p>Butler analyzes your repository and detects the application type automatically.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-cogs"></i>
+                        </div>
+                        <h3>4. Build & Deploy</h3>
+                        <p>Docker builds your application and deploys it with Nginx configuration.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-link"></i>
+                        </div>
+                        <h3>5. Get URL</h3>
+                        <p>Receive a clean, professional URL for your deployed application.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Getting Started -->
+            <section id="getting-started" class="learn-section">
+                <h2>Getting Started</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-user-plus"></i>
+                        </div>
+                        <h3>Step 1: Sign Up</h3>
+                        <p>Create an account by logging in with your GitHub account.</p>
+                        <a href="/login" class="btn btn-primary">Get Started</a>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-folder-open"></i>
+                        </div>
+                        <h3>Step 2: Browse Repositories</h3>
+                        <p>Explore your GitHub repositories and select one to deploy.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-rocket"></i>
+                        </div>
+                        <h3>Step 3: Deploy</h3>
+                        <p>Click deploy and watch your application go live in seconds.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Supported Applications -->
+            <section id="supported-apps" class="learn-section">
+                <h2>Supported Applications</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fab fa-react"></i>
+                        </div>
+                        <h3>React Applications</h3>
+                        <p>Deploy React apps with automatic build optimization and static file serving.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fab fa-node-js"></i>
+                        </div>
+                        <h3>Node.js Applications</h3>
+                        <p>Deploy Node.js apps with automatic dependency installation and process management.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fab fa-python"></i>
+                        </div>
+                        <h3>Python Applications</h3>
+                        <p>Deploy Python apps (Flask, Django) with proper environment setup.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fab fa-js"></i>
+                        </div>
+                        <h3>JavaScript Applications</h3>
+                        <p>Deploy vanilla JavaScript apps and other frontend frameworks.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- FAQ -->
+            <section id="faq" class="learn-section">
+                <h2>Frequently Asked Questions</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <h3>Is DevOps Butler free to use?</h3>
+                        <p>Yes! DevOps Butler is completely free to use for all users.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>What repositories can I deploy?</h3>
+                        <p>You can deploy any public repository from your GitHub account that contains a valid application.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>How long do deployments take?</h3>
+                        <p>Most deployments complete within 30-60 seconds, depending on the size of your application.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>Can I deploy private repositories?</h3>
+                        <p>Currently, only public repositories are supported for deployment.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>What if my app doesn't have a Dockerfile?</h3>
+                        <p>DevOps Butler automatically generates a Dockerfile for your application based on its type.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>How do I access my deployed application?</h3>
+                        <p>After deployment, you'll receive a clean URL that you can use to access your application.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- CTA Section -->
+            <section class="cta-section">
+                <h2>Ready to Start Deploying?</h2>
+                <p>Join thousands of developers who trust DevOps Butler for their deployments.</p>
+                <a href="/login" class="btn btn-primary btn-large">
+                    <i class="fas fa-rocket"></i>
+                    Start Deploying Now
+                </a>
+            </section>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>DevOps Butler</h3>
+                    <p>Your automated cloud deployment assistant.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="/dashboard">Dashboard</a></li>
+                        <li><a href="/deploy">Deploy</a></li>
+                        <li><a href="/projects">Projects</a></li>
+                        <li><a href="/history">History</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="/learn">Documentation</a></li>
+                        <li><a href="/learn#features">Features</a></li>
+                        <li><a href="/learn#faq">FAQ</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 DevOps Butler. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/static/learn.js"></script>
+</body>
+</html> 

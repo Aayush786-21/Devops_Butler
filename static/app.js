@@ -3,6 +3,14 @@ let authToken = localStorage.getItem('authToken');
 let username = localStorage.getItem('username');
 let authProvider = localStorage.getItem('authProvider');
 
+const token = localStorage.getItem('authToken');
+const currentPath = window.location.pathname;
+const isAuthPage = ['/login', '/register', '/auth'].includes(currentPath);
+const protectedPages = ['/dashboard', '/deploy', '/projects', '/history'];
+if (token && isAuthPage) {
+  window.location.href = '/dashboard';
+}
+
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
   checkAuthStatus();
@@ -16,44 +24,45 @@ function checkAuthStatus() {
     
     if (authToken && username) {
         // User is logged in
-        userInfo.style.display = 'inline';
-        loginLink.style.display = 'none';
-        const providerIcon = authProvider === 'github' ? '🐙' : '👤';
-        usernameSpan.textContent = `${providerIcon} Welcome, ${username}!`;
-        
+        if (userInfo) userInfo.style.display = 'inline';
+        if (loginLink) loginLink.style.display = 'none';
+        if (usernameSpan) {
+            const providerIcon = authProvider === 'github' ? '🐙' : '👤';
+            usernameSpan.textContent = `${providerIcon} Welcome, ${username}!`;
+        }
         // Load deployment history for authenticated user
-        fetchAndDisplayHistory();
-        
+        if (typeof fetchAndDisplayHistory === 'function') fetchAndDisplayHistory();
         // Load GitHub repositories if user is GitHub user
-        if (authProvider === 'github') {
+        if (authProvider === 'github' && typeof loadUserGitHubRepositories === 'function') {
             loadUserGitHubRepositories();
         }
     } else {
         // User is not logged in
-        userInfo.style.display = 'none';
-        loginLink.style.display = 'inline';
-        
-        // Redirect to login if trying to access protected features
-        const currentPath = window.location.pathname;
-        if (currentPath === '/' && !authToken) {
-            // Show login prompt on main page
-            showToast('Please login to access DevOps Butler features', 'info');
+        if (userInfo) userInfo.style.display = 'none';
+        if (loginLink) loginLink.style.display = 'inline';
+        // Only redirect to /login if on a protected page
+        if (protectedPages.includes(currentPath)) {
+            window.location.href = '/login';
         }
+        // Do NOT redirect or block access on /, /login, /register, or /learn
     }
 }
 
 // Logout function
-document.getElementById('logoutBtn').addEventListener('click', function() {
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('username');
-    localStorage.removeItem('authProvider');
-    authToken = null;
-    username = null;
-    authProvider = null;
-    checkAuthStatus();
-    showToast('Logged out successfully', 'success');
-    window.location.reload();
-});
+const logoutBtn = document.getElementById('logoutBtn');
+if (logoutBtn) {
+    logoutBtn.addEventListener('click', function() {
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('username');
+        localStorage.removeItem('authProvider');
+        authToken = null;
+        username = null;
+        authProvider = null;
+        checkAuthStatus();
+        if (typeof showToast === 'function') showToast('Logged out successfully', 'success');
+        window.location.reload();
+    });
+}
 
 // Helper function to get authenticated headers
 function getAuthHeaders() {
@@ -64,19 +73,14 @@ function getAuthHeaders() {
     return headers;
 }
 
-// AOS Animation init
-AOS.init({
-  duration: 800,
-  once: true,
-});
-
 // --- Smooth Scroll for Navbar Links ---
 document.querySelectorAll('.nav-link, .nav-cta, .hero-buttons a').forEach(link => {
   link.addEventListener('click', function(e) {
     const href = this.getAttribute('href');
     if (href && href.startsWith('#')) {
       e.preventDefault();
-      document.querySelector(href).scrollIntoView({ behavior: 'smooth' });
+      const target = document.querySelector(href);
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
     }
   });
 });
@@ -94,76 +98,90 @@ function validateGitUrl(url) {
   return /^https?:\/\/.+\/.+\/.+/.test(trimmed) || /^git@.+:.+\/.+\.git$/.test(trimmed);
 }
 
-deployForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  
-  // Check authentication
-  if (!authToken) {
-    showToast('Please login to deploy applications', 'error');
-    window.location.href = '/login';
-    return;
-  }
-  
-  const form = e.target;
-  const data = new FormData(form);
-  // Add .env files if selected
-  const frontendEnv = document.getElementById('frontend-env').files[0];
-  const backendEnv = document.getElementById('backend-env').files[0];
-  if (frontendEnv) data.append('frontend_env', frontendEnv);
-  if (backendEnv) data.append('backend_env', backendEnv);
-
-  const gitUrl = gitUrlInput.value.trim();
-  if (!validateGitUrl(gitUrl)) {
-    gitUrlInput.classList.add('invalid');
-    deployStatus.textContent = 'Please enter a valid Git repository URL.';
-    deployStatus.style.color = 'var(--error)';
-    return;
-  }
-
-  gitUrlInput.classList.remove('invalid');
-  deployStatus.innerHTML = '🔵 STATUS: Initiating deployment... <span class="loader"></span>';
-  deployStatus.style.color = 'var(--primary)';
-  statusLogs.innerHTML = '';
-  
-  // Clear any existing deployment URL button
-  clearDeploymentUrlButton();
-  
-  connectWebSocket();
-
-  try {
-    const response = await fetch('/deploy', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: data
-    });
+if (deployForm) {
+  deployForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
     
-    if (response.status === 401) {
-      // Token expired or invalid
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('username');
-      showToast('Session expired. Please login again.', 'error');
+    // Check authentication
+    if (!authToken) {
+      if (typeof showToast === 'function') showToast('Please login to deploy applications', 'error');
       window.location.href = '/login';
       return;
     }
     
-    const result = await response.json();
-    if (response.ok) {
-      deployStatus.textContent = `✅ ${result.message}`;
-      deployStatus.style.color = 'var(--success)';
-    } else {
-      deployStatus.textContent = `🔴 ERROR: ${result.detail || 'Failed to start deployment.'}`;
-      deployStatus.style.color = 'var(--error)';
-    }
-  } catch (error) {
-    deployStatus.textContent = `🔴 NETWORK-ERROR: Could not reach the server.`;
-    deployStatus.style.color = 'var(--error)';
-  }
-});
+    const form = e.target;
+    const data = new FormData(form);
+    // Add .env files if selected
+    const frontendEnv = document.getElementById('frontend-env')?.files[0];
+    const backendEnv = document.getElementById('backend-env')?.files[0];
+    if (frontendEnv) data.append('frontend_env', frontendEnv);
+    if (backendEnv) data.append('backend_env', backendEnv);
 
-gitUrlInput.addEventListener('input', () => {
-  gitUrlInput.classList.remove('invalid');
-  deployStatus.textContent = '';
-});
+    const gitUrl = gitUrlInput ? gitUrlInput.value.trim() : '';
+    if (!validateGitUrl(gitUrl)) {
+      if (gitUrlInput) gitUrlInput.classList.add('invalid');
+      if (deployStatus) {
+        deployStatus.textContent = 'Please enter a valid Git repository URL.';
+        deployStatus.style.color = 'var(--error)';
+      }
+      return;
+    }
+
+    if (gitUrlInput) gitUrlInput.classList.remove('invalid');
+    if (deployStatus) {
+      deployStatus.innerHTML = '🔵 STATUS: Initiating deployment... <span class="loader"></span>';
+      deployStatus.style.color = 'var(--primary)';
+    }
+    if (statusLogs) statusLogs.innerHTML = '';
+    
+    // Clear any existing deployment URL button
+    clearDeploymentUrlButton();
+    
+    connectWebSocket();
+
+    try {
+      const response = await fetch('/deploy', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: data
+      });
+      
+      if (response.status === 401) {
+        // Token expired or invalid
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('username');
+        if (typeof showToast === 'function') showToast('Session expired. Please login again.', 'error');
+        window.location.href = '/login';
+        return;
+      }
+      
+      const result = await response.json();
+      if (response.ok) {
+        if (deployStatus) {
+          deployStatus.textContent = `✅ ${result.message}`;
+          deployStatus.style.color = 'var(--success)';
+        }
+      } else {
+        if (deployStatus) {
+          deployStatus.textContent = `🔴 ERROR: ${result.detail || 'Failed to start deployment.'}`;
+          deployStatus.style.color = 'var(--error)';
+        }
+      }
+    } catch (error) {
+      if (deployStatus) {
+        deployStatus.textContent = `🔴 NETWORK-ERROR: Could not reach the server.`;
+        deployStatus.style.color = 'var(--error)';
+      }
+    }
+  });
+}
+
+if (gitUrlInput) {
+  gitUrlInput.addEventListener('input', () => {
+    gitUrlInput.classList.remove('invalid');
+    if (deployStatus) deployStatus.textContent = '';
+  });
+}
 
 // --- WebSocket for Live Logs ---
 function connectWebSocket() {
@@ -268,12 +286,12 @@ function showDeploymentUrlButton(url) {
   setTimeout(() => buttonContainer.classList.add('animate'), 10);
   
   // Show a toast notification
-  showToast('🎉 Deployment completed successfully!', 'success');
+  if (typeof showToast === 'function') showToast('🎉 Deployment completed successfully!', 'success');
 }
 
 // --- Deployment History ---
-const historyTableBody = document.querySelector('#history-table tbody');
 async function fetchAndDisplayHistory() {
+  const historyTableBody = document.querySelector('#history-table tbody');
   if (!historyTableBody || !authToken) return;
   try {
     const response = await fetch('/deployments', {
@@ -284,7 +302,7 @@ async function fetchAndDisplayHistory() {
       // Token expired or invalid
       localStorage.removeItem('authToken');
       localStorage.removeItem('username');
-      showToast('Session expired. Please login again.', 'error');
+      if (typeof showToast === 'function') showToast('Session expired. Please login again.', 'error');
       window.location.href = '/login';
       return;
     }
@@ -328,14 +346,14 @@ async function fetchAndDisplayHistory() {
     const row = document.createElement('tr');
     row.innerHTML = `<td colspan="5" style="color:var(--error);text-align:center;">Could not fetch deployment history.</td>`;
     historyTableBody.appendChild(row);
-    showToast('Could not fetch deployment history.', 'error');
+    if (typeof showToast === 'function') showToast('Could not fetch deployment history.', 'error');
   }
 }
 
 // --- Destroy Deployment Function ---
 async function destroyDeployment(containerName) {
   if (!authToken) {
-    showToast('Please login to manage deployments', 'error');
+    if (typeof showToast === 'function') showToast('Please login to manage deployments', 'error');
     window.location.href = '/login';
     return;
   }
@@ -354,7 +372,7 @@ async function destroyDeployment(containerName) {
       // Token expired or invalid
       localStorage.removeItem('authToken');
       localStorage.removeItem('username');
-      showToast('Session expired. Please login again.', 'error');
+      if (typeof showToast === 'function') showToast('Session expired. Please login again.', 'error');
       window.location.href = '/login';
       return;
     }
@@ -362,16 +380,16 @@ async function destroyDeployment(containerName) {
     const result = await response.json();
     
     if (response.ok) {
-      showToast(`✅ ${result.message}`, 'success');
+      if (typeof showToast === 'function') showToast(`✅ ${result.message}`, 'success');
       addUILog(`🗑️ Destroyed deployment: ${containerName}`);
       // Refresh the history table to show updated status
       fetchAndDisplayHistory();
     } else {
-      showToast(`🔴 ERROR: ${result.detail}`, 'error');
+      if (typeof showToast === 'function') showToast(`🔴 ERROR: ${result.detail}`, 'error');
       addUILog(`🔴 Failed to destroy deployment: ${result.detail}`);
     }
   } catch (error) {
-    showToast(`🔴 NETWORK-ERROR: Could not destroy deployment.`, 'error');
+    if (typeof showToast === 'function') showToast(`🔴 NETWORK-ERROR: Could not destroy deployment.`, 'error');
     addUILog(`🔴 Network error while destroying deployment: ${error}`);
   }
 }
@@ -389,9 +407,9 @@ async function loadUserGitHubRepositories() {
     if (refreshBtn) refreshBtn.style.display = 'inline-block';
     
     // Show loading
-    reposLoading.style.display = 'block';
-    reposError.style.display = 'none';
-    reposList.innerHTML = '';
+    if (reposLoading) reposLoading.style.display = 'block';
+    if (reposError) reposError.style.display = 'none';
+    if (reposList) reposList.innerHTML = '';
     hideWelcomeMessage();
     
     try {
@@ -403,7 +421,7 @@ async function loadUserGitHubRepositories() {
             // Token expired or invalid
             localStorage.removeItem('authToken');
             localStorage.removeItem('username');
-            showToast('Session expired. Please login again.', 'error');
+            if (typeof showToast === 'function') showToast('Session expired. Please login again.', 'error');
             window.location.href = '/login';
             return;
         }
@@ -417,10 +435,10 @@ async function loadUserGitHubRepositories() {
         }
     } catch (error) {
         console.error('Failed to load repositories:', error);
-        reposError.textContent = 'Failed to load repositories. Please try again.';
-        reposError.style.display = 'block';
+        if (reposError) reposError.textContent = 'Failed to load repositories. Please try again.';
+        if (reposError) reposError.style.display = 'block';
     } finally {
-        reposLoading.style.display = 'none';
+        if (reposLoading) reposLoading.style.display = 'none';
     }
 }
 
@@ -431,7 +449,7 @@ async function searchPublicRepositories(username) {
     const refreshBtn = document.getElementById('refreshReposBtn');
     
     if (!username.trim()) {
-        showToast('Please enter a GitHub username', 'error');
+        if (typeof showToast === 'function') showToast('Please enter a GitHub username', 'error');
         return;
     }
     
@@ -439,9 +457,9 @@ async function searchPublicRepositories(username) {
     if (refreshBtn) refreshBtn.style.display = 'none';
     
     // Show loading
-    reposLoading.style.display = 'block';
-    reposError.style.display = 'none';
-    reposList.innerHTML = '';
+    if (reposLoading) reposLoading.style.display = 'block';
+    if (reposError) reposError.style.display = 'none';
+    if (reposList) reposList.innerHTML = '';
     hideWelcomeMessage();
     
     try {
@@ -455,10 +473,10 @@ async function searchPublicRepositories(username) {
         }
     } catch (error) {
         console.error('Failed to load repositories:', error);
-        reposError.textContent = 'Failed to load repositories. Please check the username and try again.';
-        reposError.style.display = 'block';
+        if (reposError) reposError.textContent = 'Failed to load repositories. Please check the username and try again.';
+        if (reposError) reposError.style.display = 'block';
     } finally {
-        reposLoading.style.display = 'none';
+        if (reposLoading) reposLoading.style.display = 'none';
     }
 }
 
@@ -527,13 +545,16 @@ function selectRepository(card) {
     const repoUrl = card.dataset.repoUrl;
     const repoName = card.dataset.repoName;
     
-    document.getElementById('git-url').value = repoUrl;
+    if (gitUrlInput) {
+      gitUrlInput.value = repoUrl;
+    }
     selectedRepo = repoUrl;
     
     // Scroll to deploy section
-    document.getElementById('deploy').scrollIntoView({ behavior: 'smooth' });
+    const deploySection = document.getElementById('deploy');
+    if (deploySection) deploySection.scrollIntoView({ behavior: 'smooth' });
     
-    showToast(`Selected repository: ${repoName}`, 'success');
+    if (typeof showToast === 'function') showToast(`Selected repository: ${repoName}`, 'success');
 }
 
 function formatDate(dateString) {
@@ -551,26 +572,35 @@ function formatDate(dateString) {
 }
 
 // Search repositories button
-document.getElementById('searchReposBtn')?.addEventListener('click', () => {
-    const username = document.getElementById('usernameSearch').value;
+const searchReposBtn = document.getElementById('searchReposBtn');
+if (searchReposBtn) {
+  searchReposBtn.addEventListener('click', () => {
+    const username = document.getElementById('usernameSearch')?.value;
     searchPublicRepositories(username);
-});
+  });
+}
 
 // Enter key in search input
-document.getElementById('usernameSearch')?.addEventListener('keypress', (e) => {
+const usernameSearch = document.getElementById('usernameSearch');
+if (usernameSearch) {
+  usernameSearch.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
-        const username = e.target.value;
-        searchPublicRepositories(username);
+      const username = e.target.value;
+      searchPublicRepositories(username);
     }
-});
+  });
+}
 
 // Refresh repositories button (for GitHub users)
-document.getElementById('refreshReposBtn')?.addEventListener('click', () => {
+const refreshReposBtn = document.getElementById('refreshReposBtn');
+if (refreshReposBtn) {
+  refreshReposBtn.addEventListener('click', () => {
     if (authProvider === 'github') {
-        loadUserGitHubRepositories();
-        showToast('Refreshing your repositories...', 'info');
+      loadUserGitHubRepositories();
+      if (typeof showToast === 'function') showToast('Refreshing your repositories...', 'info');
     }
-});
+  });
+}
 
 // --- Helper: Toast Notification ---
 function showToast(msg, type = 'info') {
@@ -606,8 +636,8 @@ function clearLogs() {
 const fab = document.getElementById('fabDeploy');
 if (fab) {
   fab.addEventListener('click', () => {
-    gitUrlInput.focus();
-    showToast('Paste your Git URL and hit Deploy!', 'info');
+    if (gitUrlInput) gitUrlInput.focus();
+    if (typeof showToast === 'function') showToast('Paste your Git URL and hit Deploy!', 'info');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 }
@@ -616,7 +646,7 @@ if (fab) {
 const clearBtn = document.getElementById('clearBtn');
 async function handleClearHistory() {
   if (!authToken) {
-    showToast('Please login to clear history', 'error');
+    if (typeof showToast === 'function') showToast('Please login to clear history', 'error');
     window.location.href = '/login';
     return;
   }
@@ -630,7 +660,7 @@ async function handleClearHistory() {
       // Token expired or invalid
       localStorage.removeItem('authToken');
       localStorage.removeItem('username');
-      showToast('Session expired. Please login again.', 'error');
+      if (typeof showToast === 'function') showToast('Session expired. Please login again.', 'error');
       window.location.href = '/login';
       return;
     }
@@ -649,3 +679,4 @@ async function handleClearHistory() {
 if (clearBtn) {
   clearBtn.addEventListener('click', handleClearHistory);
 }
+// End of app.js

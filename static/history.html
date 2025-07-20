@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>History - DevOps Butler</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img">
+                <span class="logo-text">DevOps Butler</span>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/dashboard" class="nav-link">Dashboard</a>
+                <a href="/deploy" class="nav-link">Deploy</a>
+                <a href="/projects" class="nav-link">Projects</a>
+                <a href="/history" class="nav-link active">History</a>
+                <a href="/learn" class="nav-link">Learn More</a>
+                <div class="user-section" id="userSection" style="display: none;">
+                    <span id="username" class="username"></span>
+                    <button id="logoutBtn" class="btn btn-outline btn-small">Logout</button>
+                </div>
+                <div class="auth-buttons" id="authButtons">
+                    <a href="/login" class="btn btn-outline">Login</a>
+                    <a href="/login" class="btn btn-primary">Sign Up</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- History Content -->
+    <main class="history-main">
+        <div class="container">
+            <!-- Welcome Section -->
+            <section class="welcome-section">
+                <h1 class="history-title">Deployment History</h1>
+                <p class="history-subtitle">Track and manage all your deployments</p>
+            </section>
+
+            <!-- Authentication Check -->
+            <div id="authRequired" class="auth-required" style="display: none;">
+                <div class="auth-message">
+                    <div class="auth-icon">
+                        <i class="fas fa-lock"></i>
+                    </div>
+                    <h2>Authentication Required</h2>
+                    <p>Please log in to view your deployment history.</p>
+                    <a href="/login" class="btn btn-primary">Login</a>
+                </div>
+            </div>
+
+            <!-- History Content -->
+            <div id="historyContent" class="history-content" style="display: none;">
+                <!-- Filters and Actions -->
+                <section class="filters-section">
+                    <div class="filters-container">
+                        <div class="filter-group">
+                            <label for="statusFilter">Status:</label>
+                            <select id="statusFilter" class="filter-select">
+                                <option value="">All Status</option>
+                                <option value="success">Successful</option>
+                                <option value="failed">Failed</option>
+                                <option value="starting">Starting</option>
+                                <option value="running">Running</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="dateFilter">Date Range:</label>
+                            <select id="dateFilter" class="filter-select">
+                                <option value="all">All Time</option>
+                                <option value="today">Today</option>
+                                <option value="week">This Week</option>
+                                <option value="month">This Month</option>
+                                <option value="year">This Year</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="searchFilter">Search:</label>
+                            <input type="text" id="searchFilter" placeholder="Search deployments..." class="filter-input" />
+                        </div>
+                        <div class="actions-group">
+                            <button id="refreshHistoryBtn" class="btn btn-outline">
+                                <i class="fas fa-sync-alt"></i>
+                                Refresh
+                            </button>
+                            <button id="clearHistoryBtn" class="btn btn-outline btn-danger">
+                                <i class="fas fa-trash"></i>
+                                Clear All
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Statistics -->
+                <section class="stats-section">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <i class="fas fa-rocket"></i>
+                            </div>
+                            <div class="stat-content">
+                                <h3 id="totalDeployments">0</h3>
+                                <p>Total Deployments</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <i class="fas fa-check-circle"></i>
+                            </div>
+                            <div class="stat-content">
+                                <h3 id="successfulDeployments">0</h3>
+                                <p>Successful</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <i class="fas fa-times-circle"></i>
+                            </div>
+                            <div class="stat-content">
+                                <h3 id="failedDeployments">0</h3>
+                                <p>Failed</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <i class="fas fa-clock"></i>
+                            </div>
+                            <div class="stat-content">
+                                <h3 id="avgDeploymentTime">0s</h3>
+                                <p>Avg. Time</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Deployments List -->
+                <section class="deployments-section">
+                    <div class="section-header">
+                        <h2>Deployments</h2>
+                        <div class="view-options">
+                            <button id="gridViewBtn" class="view-btn active">
+                                <i class="fas fa-th"></i>
+                            </button>
+                            <button id="listViewBtn" class="view-btn">
+                                <i class="fas fa-list"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Loading State -->
+                    <div id="loadingState" class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading deployment history...</p>
+                    </div>
+
+                    <!-- Error State -->
+                    <div id="errorState" class="error-state" style="display: none;">
+                        <div class="error-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <h3>Error Loading History</h3>
+                        <p id="errorMessage">Unable to load deployment history. Please try again.</p>
+                        <button id="retryBtn" class="btn btn-primary">Try Again</button>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div id="emptyState" class="empty-state" style="display: none;">
+                        <div class="empty-icon">
+                            <i class="fas fa-history"></i>
+                        </div>
+                        <h3>No deployments yet</h3>
+                        <p>Start by deploying your first application!</p>
+                        <a href="/deploy" class="btn btn-primary">Deploy Now</a>
+                    </div>
+
+                    <!-- Deployments Grid -->
+                    <div id="deploymentsGrid" class="deployments-grid">
+                        <!-- Deployments will be loaded here -->
+                    </div>
+
+                    <!-- Deployments List -->
+                    <div id="deploymentsList" class="deployments-list" style="display: none;">
+                        <!-- Deployments will be loaded here -->
+                    </div>
+
+                    <!-- Load More -->
+                    <div id="loadMoreContainer" class="load-more-container" style="display: none;">
+                        <button id="loadMoreBtn" class="btn btn-outline">
+                            Load More Deployments
+                        </button>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <!-- Deployment Template (Hidden) -->
+    <template id="deploymentTemplate">
+        <div class="deployment-card">
+            <div class="deployment-header">
+                <div class="deployment-info">
+                    <h3 class="deployment-name"></h3>
+                    <p class="deployment-url"></p>
+                </div>
+                <div class="deployment-status">
+                    <span class="status-badge"></span>
+                </div>
+            </div>
+            <div class="deployment-details">
+                <div class="detail-item">
+                    <i class="fas fa-calendar"></i>
+                    <span class="deployment-date"></span>
+                </div>
+                <div class="detail-item">
+                    <i class="fas fa-clock"></i>
+                    <span class="deployment-time"></span>
+                </div>
+                <div class="detail-item">
+                    <i class="fas fa-code-branch"></i>
+                    <span class="deployment-branch"></span>
+                </div>
+            </div>
+            <div class="deployment-actions">
+                <button class="btn btn-outline btn-small view-deployment-btn">
+                    <i class="fas fa-external-link-alt"></i>
+                    View
+                </button>
+                <button class="btn btn-primary btn-small redeploy-btn">
+                    <i class="fas fa-redo"></i>
+                    Redeploy
+                </button>
+                <button class="btn btn-outline btn-small btn-danger delete-deployment-btn">
+                    <i class="fas fa-trash"></i>
+                    Delete
+                </button>
+            </div>
+        </div>
+    </template>
+
+    <!-- Confirmation Modal -->
+    <div id="confirmationModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Confirm Action</h3>
+                <button id="closeModal" class="modal-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p id="modalMessage">Are you sure you want to perform this action?</p>
+            </div>
+            <div class="modal-footer">
+                <button id="cancelAction" class="btn btn-outline">Cancel</button>
+                <button id="confirmAction" class="btn btn-primary">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>DevOps Butler</h3>
+                    <p>Your automated cloud deployment assistant.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="/dashboard">Dashboard</a></li>
+                        <li><a href="/deploy">Deploy</a></li>
+                        <li><a href="/projects">Projects</a></li>
+                        <li><a href="/history">History</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="/learn">Documentation</a></li>
+                        <li><a href="/learn#features">Features</a></li>
+                        <li><a href="/learn#faq">FAQ</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 DevOps Butler. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/static/history.js"></script>
+</body>
+</html> 

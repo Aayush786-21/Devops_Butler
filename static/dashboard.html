@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - DevOps Butler</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img">
+                <span class="logo-text">DevOps Butler</span>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/dashboard" class="nav-link active">Dashboard</a>
+                <a href="/deploy" class="nav-link">Deploy</a>
+                <a href="/projects" class="nav-link">Projects</a>
+                <a href="/history" class="nav-link">History</a>
+                <a href="/learn" class="nav-link">Learn More</a>
+                <div class="user-section" id="userSection" style="display: none;">
+                    <span id="username" class="username"></span>
+                    <button id="logoutBtn" class="btn btn-outline btn-small">Logout</button>
+                </div>
+                <div class="auth-buttons" id="authButtons">
+                    <a href="/login" class="btn btn-outline">Login</a>
+                    <a href="/login" class="btn btn-primary">Sign Up</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Dashboard Content -->
+    <main class="dashboard-main">
+        <div class="container">
+            <!-- Welcome Section -->
+            <section class="welcome-section">
+                <h1 class="dashboard-title">Dashboard</h1>
+                <p class="dashboard-subtitle">Overview of DevOps Butler activity</p>
+            </section>
+
+            <!-- Stats Cards -->
+            <section class="stats-section">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-rocket"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="totalDeployments">0</h3>
+                            <p>Total Deployments</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-check-circle"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="successfulDeployments">0</h3>
+                            <p>Successful</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="activeUsers">0</h3>
+                            <p>Active Users</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="uptime">99.9%</h3>
+                            <p>System Uptime</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Recent Deployments -->
+            <section class="recent-deployments">
+                <div class="section-header">
+                    <h2>Recent Deployments</h2>
+                    <a href="/history" class="btn btn-outline">View All</a>
+                </div>
+                <div class="deployments-grid" id="recentDeployments">
+                    <!-- Recent deployments will be loaded here -->
+                </div>
+                <div class="empty-state" id="emptyDeployments" style="display: none;">
+                    <div class="empty-icon">
+                        <i class="fas fa-rocket"></i>
+                    </div>
+                    <h3>No deployments yet</h3>
+                    <p>Start by deploying your first application!</p>
+                    <a href="/deploy" class="btn btn-primary">Deploy Now</a>
+                </div>
+            </section>
+
+            <!-- System Status -->
+            <section class="system-status">
+                <h2>System Status</h2>
+                <div class="status-grid">
+                    <div class="status-card">
+                        <div class="status-header">
+                            <h3>Docker Engine</h3>
+                            <span class="status-badge status-healthy">Healthy</span>
+                        </div>
+                        <p>Container orchestration system is running smoothly</p>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-header">
+                            <h3>Nginx Proxy</h3>
+                            <span class="status-badge status-healthy">Healthy</span>
+                        </div>
+                        <p>Reverse proxy is active and routing traffic</p>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-header">
+                            <h3>Database</h3>
+                            <span class="status-badge status-healthy">Healthy</span>
+                        </div>
+                        <p>Deployment records are being stored properly</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Quick Actions -->
+            <section class="quick-actions">
+                <h2>Quick Actions</h2>
+                <div class="actions-grid">
+                    <a href="/deploy" class="action-card">
+                        <div class="action-icon">
+                            <i class="fas fa-plus"></i>
+                        </div>
+                        <h3>New Deployment</h3>
+                        <p>Deploy a new application from your repository</p>
+                    </a>
+                    <a href="/projects" class="action-card">
+                        <div class="action-icon">
+                            <i class="fab fa-github"></i>
+                        </div>
+                        <h3>Browse Repositories</h3>
+                        <p>Explore your GitHub repositories</p>
+                    </a>
+                    <a href="/history" class="action-card">
+                        <div class="action-icon">
+                            <i class="fas fa-history"></i>
+                        </div>
+                        <h3>View History</h3>
+                        <p>Check your deployment history</p>
+                    </a>
+                    <a href="/learn" class="action-card">
+                        <div class="action-icon">
+                            <i class="fas fa-book"></i>
+                        </div>
+                        <h3>Documentation</h3>
+                        <p>Learn how to use DevOps Butler</p>
+                    </a>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>DevOps Butler</h3>
+                    <p>Your automated cloud deployment assistant.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="/dashboard">Dashboard</a></li>
+                        <li><a href="/deploy">Deploy</a></li>
+                        <li><a href="/projects">Projects</a></li>
+                        <li><a href="/history">History</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="/learn">Documentation</a></li>
+                        <li><a href="/learn#features">Features</a></li>
+                        <li><a href="/learn#pricing">Pricing</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 DevOps Butler. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html> 

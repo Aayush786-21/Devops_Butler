@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Projects - DevOps Butler</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img">
+                <span class="logo-text">DevOps Butler</span>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/dashboard" class="nav-link">Dashboard</a>
+                <a href="/deploy" class="nav-link">Deploy</a>
+                <a href="/projects" class="nav-link active">Projects</a>
+                <a href="/history" class="nav-link">History</a>
+                <a href="/learn" class="nav-link">Learn More</a>
+                <div class="user-section" id="userSection" style="display: none;">
+                    <span id="username" class="username"></span>
+                    <button id="logoutBtn" class="btn btn-outline btn-small">Logout</button>
+                </div>
+                <div class="auth-buttons" id="authButtons">
+                    <a href="/login" class="btn btn-outline">Login</a>
+                    <a href="/login" class="btn btn-primary">Sign Up</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Projects Content -->
+    <main class="projects-main">
+        <div class="container">
+            <!-- Welcome Section -->
+            <section class="welcome-section">
+                <h1 class="projects-title">Your Projects</h1>
+                <p class="projects-subtitle">Browse and manage your GitHub repositories</p>
+            </section>
+
+            <!-- Authentication Check -->
+            <div id="authRequired" class="auth-required" style="display: none;">
+                <div class="auth-message">
+                    <div class="auth-icon">
+                        <i class="fas fa-lock"></i>
+                    </div>
+                    <h2>Authentication Required</h2>
+                    <p>Please log in with your GitHub account to view your repositories.</p>
+                    <a href="/login" class="btn btn-primary">Login with GitHub</a>
+                </div>
+            </div>
+
+            <!-- Projects Content -->
+            <div id="projectsContent" class="projects-content" style="display: none;">
+                <!-- Search and Filter -->
+                <section class="search-section">
+                    <div class="search-container">
+                        <div class="search-box">
+                            <input type="text" id="repoSearch" placeholder="Search your repositories..." />
+                            <button id="searchBtn" class="btn btn-primary">
+                                <i class="fas fa-search"></i>
+                                Search
+                            </button>
+                        </div>
+                        <div class="filter-options">
+                            <select id="sortBy" class="filter-select">
+                                <option value="updated">Recently Updated</option>
+                                <option value="created">Recently Created</option>
+                                <option value="name">Name A-Z</option>
+                                <option value="stars">Most Stars</option>
+                            </select>
+                            <select id="languageFilter" class="filter-select">
+                                <option value="">All Languages</option>
+                                <option value="JavaScript">JavaScript</option>
+                                <option value="Python">Python</option>
+                                <option value="TypeScript">TypeScript</option>
+                                <option value="Java">Java</option>
+                                <option value="Go">Go</option>
+                                <option value="Rust">Rust</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Repository List -->
+                <section class="repositories-section">
+                    <div class="section-header">
+                        <h2>Your Repositories</h2>
+                        <div class="repo-actions">
+                            <button id="refreshReposBtn" class="btn btn-outline">
+                                <i class="fas fa-sync-alt"></i>
+                                Refresh
+                            </button>
+                            <button id="loadMoreBtn" class="btn btn-primary" style="display: none;">
+                                Load More
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Loading State -->
+                    <div id="loadingState" class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading your repositories...</p>
+                    </div>
+
+                    <!-- Error State -->
+                    <div id="errorState" class="error-state" style="display: none;">
+                        <div class="error-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <h3>Error Loading Repositories</h3>
+                        <p id="errorMessage">Unable to load your repositories. Please try again.</p>
+                        <button id="retryBtn" class="btn btn-primary">Try Again</button>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div id="emptyState" class="empty-state" style="display: none;">
+                        <div class="empty-icon">
+                            <i class="fab fa-github"></i>
+                        </div>
+                        <h3>No repositories found</h3>
+                        <p>We couldn't find any repositories for your account.</p>
+                        <a href="https://github.com/new" target="_blank" class="btn btn-primary">
+                            <i class="fab fa-github"></i>
+                            Create Repository
+                        </a>
+                    </div>
+
+                    <!-- Repositories Grid -->
+                    <div id="repositoriesGrid" class="repositories-grid">
+                        <!-- Repositories will be loaded here -->
+                    </div>
+                </section>
+
+                <!-- Quick Deploy Section -->
+                <section class="quick-deploy-section">
+                    <h2>Quick Deploy</h2>
+                    <p>Deploy any public repository by entering its URL:</p>
+                    <div class="quick-deploy-form">
+                        <input type="text" id="quickDeployUrl" placeholder="https://github.com/username/repository" />
+                        <button id="quickDeployBtn" class="btn btn-primary">
+                            <i class="fas fa-rocket"></i>
+                            Deploy
+                        </button>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <!-- Repository Template (Hidden) -->
+    <template id="repoTemplate">
+        <div class="repo-card">
+            <div class="repo-header">
+                <div class="repo-info">
+                    <h3 class="repo-name"></h3>
+                    <p class="repo-description"></p>
+                </div>
+                <div class="repo-stats">
+                    <span class="repo-language"></span>
+                    <span class="repo-stars">
+                        <i class="fas fa-star"></i>
+                        <span class="stars-count"></span>
+                    </span>
+                </div>
+            </div>
+            <div class="repo-footer">
+                <div class="repo-meta">
+                    <span class="repo-updated"></span>
+                    <span class="repo-visibility"></span>
+                </div>
+                <div class="repo-actions">
+                    <button class="btn btn-outline btn-small view-repo-btn">
+                        <i class="fas fa-external-link-alt"></i>
+                        View
+                    </button>
+                    <button class="btn btn-primary btn-small deploy-repo-btn">
+                        <i class="fas fa-rocket"></i>
+                        Deploy
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>DevOps Butler</h3>
+                    <p>Your automated cloud deployment assistant.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="/dashboard">Dashboard</a></li>
+                        <li><a href="/deploy">Deploy</a></li>
+                        <li><a href="/projects">Projects</a></li>
+                        <li><a href="/history">History</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="/learn">Documentation</a></li>
+                        <li><a href="/learn#features">Features</a></li>
+                        <li><a href="/learn#faq">FAQ</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 DevOps Butler. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/static/projects.js"></script>
+</body>
+</html> 
