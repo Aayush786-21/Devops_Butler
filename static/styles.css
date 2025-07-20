@@ -1,18 +1,18 @@
-/* Root Variables */
+/* Root Variables - Light Glassmorphism Theme */
 :root {
-  --background: #0f172a;
-  --card-bg: rgba(255, 255, 255, 0.1);
-  --glass-blur: blur(20px);
+  --background: linear-gradient(135deg, #f8fafc 0%, #e0e7ef 100%);
+  --card-bg: rgba(255, 255, 255, 0.7);
+  --glass-blur: blur(24px);
   --primary: #4f46e5;
   --success: #22c55e;
   --error: #ef4444;
-  --text: #f8fafc;
-  --text-light: #cbd5e1;
+  --text: #23244a;
+  --text-light: #64748b;
   --text-secondary: #94a3b8;
-  --gradient-purple: linear-gradient(135deg, #6d28d9, #8b5cf6);
-  --gradient-1: linear-gradient(135deg, #6366f1, #60a5fa);
-  --gradient-2: linear-gradient(135deg, #9333ea, #e879f9);
-  --gradient-3: linear-gradient(135deg, #0ea5e9, #22d3ee);
+  --gradient-purple: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+  --gradient-1: linear-gradient(135deg, #f8fafc 0%, #e0e7ef 100%);
+  --gradient-2: linear-gradient(135deg, #cfd9df 0%, #e2ebf0 100%);
+  --gradient-3: linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%);
   --font-mono: 'Courier New', monospace;
 }
 
@@ -30,17 +30,31 @@ body {
   overflow-x: hidden;
 }
 
+/* Glassmorphism Card */
+.card, .auth-card, .dashboard-card, .stat-card, .feature-card, .repo-card, .status-card, .action-card, .deployment-form, .projects-main, .deploy-form-container, .history-table-container {
+  background: var(--card-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-radius: 20px;
+  box-shadow: 0 8px 32px rgba(60, 60, 100, 0.08);
+  border: 1px solid rgba(200, 200, 255, 0.18);
+}
+
 /* Navbar */
 .navbar {
   position: fixed;
   width: 100%;
   top: 0;
   z-index: 99;
-  padding: 1rem 2rem;
+  padding: 0.5rem 2rem;
+  min-height: 56px;
+  height: 56px;
   backdrop-filter: var(--glass-blur);
-  background: rgba(15, 23, 42, 0.4);
+  background: rgba(255, 255, 255, 0.7);
   display: flex;
   justify-content: center;
+  align-items: center;
+  box-shadow: 0 2px 16px rgba(60, 60, 100, 0.04);
 }
 
 .nav-container {
@@ -55,14 +69,19 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  height: 48px;
 }
 
 .logo-img {
-  width: 48px;
-  height: 48px;
-  max-width: 48px;
-  max-height: 48px;
+  width: 40px;
+  height: 40px;
+  max-width: 40px;
+  max-height: 40px;
   border-radius: 8px;
+  object-fit: contain;
+  vertical-align: middle;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(60, 60, 100, 0.08);
 }
 
 .logo-text {
@@ -89,7 +108,7 @@ body {
 
 .nav-link:hover, .nav-link.active {
   color: var(--primary);
-  background: rgba(79, 70, 229, 0.1);
+  background: rgba(79, 70, 229, 0.08);
 }
 
 .auth-buttons {
@@ -109,8 +128,7 @@ body {
   font-weight: 500;
 }
 
-.btn {
-  padding: 0.6rem 1.4rem;
+.btn, .btn-primary, .btn-outline, .btn-danger {
   border-radius: 8px;
   font-weight: 500;
   cursor: pointer;
@@ -120,16 +138,18 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  font-size: 1rem;
 }
 
 .btn-primary {
-  background: var(--gradient-1);
-  color: white;
+  background: var(--gradient-purple);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.08);
 }
 
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+  box-shadow: 0 4px 15px rgba(79, 70, 229, 0.12);
 }
 
 .btn-outline {
@@ -166,7 +186,7 @@ body {
 
 /* Main Content */
 main {
-  margin-top: 80px;
+  margin-top: 70px !important;
   min-height: calc(100vh - 80px);
 }
 
@@ -1421,9 +1441,10 @@ main {
 
 /* Footer */
 .footer {
-  background: rgba(255, 255, 255, 0.02);
-  padding: 3rem 0 1rem;
-  margin-top: 4rem;
+  background: rgba(255,255,255,0.7);
+  color: var(--text-light);
+  border-top: 1px solid #e0e7ef;
+  box-shadow: 0 -2px 16px rgba(60, 60, 100, 0.04);
 }
 
 .footer-content {
@@ -1564,16 +1585,21 @@ main {
 }
 
 @media (max-width: 600px) {
-  .logo-img {
-    width: 36px;
-    height: 36px;
-    max-width: 36px;
-    max-height: 36px;
+  .navbar {
+    padding: 0.3rem 1rem;
+    min-height: 44px;
+    height: 44px;
   }
-  .auth-header img {
-    width: 60px;
-    height: 60px;
-    max-width: 60px;
-    max-height: 60px;
+  .logo-img {
+    width: 32px;
+    height: 32px;
+    max-width: 32px;
+    max-height: 32px;
+  }
+  .nav-logo {
+    height: 32px;
+  }
+  main, .dashboard-main, .container {
+    margin-top: 54px !important;
   }
 }

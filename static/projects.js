@@ -70,19 +70,25 @@ function showUnauthenticatedUser() {
 // Load user repositories
 async function loadUserRepositories() {
     showLoadingState();
-    
     try {
-        const response = await fetch('/api/repositories/user');
-        const repositories = await response.json();
-        
-        if (response.ok) {
-            displayRepositories(repositories);
+        const response = await fetch('/api/user/repositories', {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
+        });
+        if (response.status === 401) {
+            showErrorState('You are not authenticated. Please log in again.');
+            return;
+        }
+        const data = await response.json();
+        if (response.ok && data.repositories) {
+            displayRepositories(data.repositories);
+        } else if (data.detail && data.detail.includes('GitHub')) {
+            showErrorState('You are not connected with GitHub. Please log in with GitHub to see your repositories.');
         } else {
-            showErrorState('Failed to load repositories');
+            showErrorState('Failed to load repositories. Please try again.');
         }
     } catch (error) {
         console.error('Error loading repositories:', error);
-        showErrorState('Network error. Please try again.');
+        showErrorState('Network error or not connected to GitHub. Please check your connection or log in with GitHub.');
     }
 }
 
@@ -265,13 +271,13 @@ async function handleSearch() {
     showLoadingState();
     
     try {
-        const response = await fetch(`/api/repositories/search?q=${encodeURIComponent(searchTerm)}`);
+        const response = await fetch(`/api/repositories/${encodeURIComponent(searchTerm)}`);
         const repositories = await response.json();
         
-        if (response.ok) {
+        if (response.ok && Array.isArray(repositories)) {
             displayRepositories(repositories);
         } else {
-            showErrorState('Search failed');
+            showErrorState('No public repositories found or failed to load.');
         }
     } catch (error) {
         console.error('Search error:', error);

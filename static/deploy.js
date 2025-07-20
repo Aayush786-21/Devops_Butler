@@ -35,7 +35,7 @@ async function checkAuthStatus() {
                 window.location.href = '/dashboard';
             } else {
                 showAuthenticatedUser(data.user);
-                loadUserRepositories();
+                // Do NOT call loadUserRepositories() here
             }
         } else {
             if (!isAuthPage) {
@@ -208,15 +208,20 @@ async function handleRepoSearch() {
     const searchTerm = searchInput.value.trim();
     
     if (!searchTerm) {
-        loadUserRepositories();
+        // Only load user repositories if user explicitly clicks search with empty input
+        await loadUserRepositories();
         return;
     }
     
     try {
-        const response = await fetch(`/api/repositories/search?q=${encodeURIComponent(searchTerm)}`);
+        const response = await fetch(`/api/repositories/${encodeURIComponent(searchTerm)}`);
         const repositories = await response.json();
         
-        displayRepositories(repositories);
+        if (response.ok && Array.isArray(repositories)) {
+            displayRepositories(repositories);
+        } else {
+            showRepositoriesError('No public repositories found or failed to load.');
+        }
     } catch (error) {
         console.error('Error searching repositories:', error);
         showRepositoriesError('Failed to search repositories');

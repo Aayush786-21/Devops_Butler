@@ -7,96 +7,252 @@
   <link rel="stylesheet" href="/static/styles.css"/>
   <link rel="icon" type="image/png" href="/icons/logo.png"/>
   <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet"/>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet"/>
   <style>
+    /* Enhanced Root Variables */
+    :root {
+      --glass-bg: rgba(255, 255, 255, 0.08);
+      --glass-border: rgba(255, 255, 255, 0.15);
+      --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+      --input-focus-glow: rgba(79, 70, 229, 0.25);
+      --success-color: #10b981;
+      --error-color: #ef4444;
+      --text-primary: #ffffff;
+      --text-secondary: rgba(255, 255, 255, 0.7);
+      --accent-color: #4f46e5;
+      --accent-hover: #6366f1;
+      --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --gradient-purple: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --gradient-1: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      --gradient-2: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+      --gradient-3: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      overflow-x: hidden;
+    }
+
+    /* Enhanced Background Animation */
+    .bg-animation {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+      overflow: hidden;
+    }
+
+    .floating-shapes {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    .shape {
+      position: absolute;
+      border-radius: 50%;
+      opacity: 0.6;
+      animation: float 20s infinite ease-in-out;
+      filter: blur(1px);
+    }
+
+    .shape:nth-child(1) { animation-delay: 0s; }
+    .shape:nth-child(2) { animation-delay: -4s; }
+    .shape:nth-child(3) { animation-delay: -8s; }
+    .shape:nth-child(4) { animation-delay: -12s; }
+    .shape:nth-child(5) { animation-delay: -16s; }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0px) rotate(0deg); }
+      25% { transform: translateY(-20px) rotate(90deg); }
+      50% { transform: translateY(10px) rotate(180deg); }
+      75% { transform: translateY(-30px) rotate(270deg); }
+    }
+
+    /* Enhanced Auth Container */
     .auth-container {
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 2rem;
+      position: relative;
     }
     
+    /* Glass Morphism Card with Enhanced Effects */
     .auth-card {
-      background: rgba(255, 255, 255, 0.1);
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 20px;
-      padding: 3rem;
+      background: var(--glass-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      border-radius: 24px;
+      padding: 2.5rem;
       width: 100%;
-      max-width: 400px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      max-width: 420px;
+      box-shadow: var(--glass-shadow);
+      position: relative;
+      overflow: hidden;
+      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .auth-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    }
+
+    .auth-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+      border-color: rgba(255, 255, 255, 0.2);
     }
     
+    /* Enhanced Header */
     .auth-header {
       text-align: center;
-      margin-bottom: 2rem;
+      margin-bottom: 2.5rem;
+      position: relative;
     }
-    
+
+    .auth-header::after {
+      content: '';
+      position: absolute;
+      bottom: -1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60px;
+      height: 2px;
+      background: var(--gradient-primary);
+      border-radius: 1px;
+    }
     .auth-header img {
-      width: 80px;
-      height: 80px;
-      margin-bottom: 1rem;
+      width: 72px;
+      height: 72px;
+      margin-bottom: 1.5rem;
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(79, 70, 229, 0.3);
+      transition: transform 0.3s ease;
+    }
+
+    .auth-header img:hover {
+      transform: scale(1.05) rotate(5deg);
     }
     
     .auth-header h1 {
       color: var(--text-primary);
-      margin-bottom: 0.5rem;
-      font-size: 1.8rem;
+      margin: 0 0 0.75rem 0;
+      font-size: 2rem;
+      font-weight: 700;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
     }
     
     .auth-header p {
       color: var(--text-secondary);
-      font-size: 0.9rem;
+      font-size: 1rem;
+      margin: 0;
+      font-weight: 400;
     }
     
+    /* Enhanced Form Styling */
     .auth-form {
       display: flex;
       flex-direction: column;
-      gap: 1.5rem;
+      gap: 1.75rem;
     }
     
-    .auth-form .input-group {
+    .input-group {
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 0.75rem;
+      position: relative;
+    }
+
+    .input-group label {
+      color: var(--text-primary);
+      font-weight: 500;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
     }
     
-    .auth-form input {
-      padding: 1rem;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 10px;
-      background: rgba(255, 255, 255, 0.1);
+    .input-group input {
+      padding: 1rem 1.25rem;
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.05);
       color: var(--text-primary);
       font-size: 1rem;
-      transition: all 0.3s ease;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
     }
-    
-    .auth-form input:focus {
+
+    .input-group input:focus {
       outline: none;
       border-color: var(--accent-color);
-      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+      background: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 0 0 4px var(--input-focus-glow);
+      transform: translateY(-1px);
     }
     
-    .auth-form input::placeholder {
+    .input-group input::placeholder {
       color: var(--text-secondary);
+      transition: opacity 0.3s ease;
+    }
+
+    .input-group input:focus::placeholder {
+      opacity: 0.6;
     }
     
+    /* Enhanced Button Styling */
     .auth-btn {
-      padding: 1rem;
+      padding: 1rem 1.5rem;
       border: none;
-      border-radius: 10px;
+      border-radius: 12px;
       background: var(--gradient-primary);
       color: white;
       font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.3s ease;
-      margin-top: 1rem;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      margin-top: 0.5rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .auth-btn::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+      transition: left 0.5s;
+    }
+
+    .auth-btn:hover::before {
+      left: 100%;
     }
     
     .auth-btn:hover {
       transform: translateY(-2px);
-      box-shadow: 0 8px 25px rgba(79, 70, 229, 0.3);
+      box-shadow: 0 12px 28px rgba(79, 70, 229, 0.4);
+    }
+
+    .auth-btn:active {
+      transform: translateY(0);
     }
     
     .auth-btn:disabled {
@@ -104,23 +260,23 @@
       cursor: not-allowed;
       transform: none;
     }
+
+    .auth-btn:disabled:hover {
+      transform: none;
+      box-shadow: none;
+    }
     
+    /* Enhanced Links and Toggle */
     .auth-links {
       text-align: center;
       margin-top: 2rem;
       padding-top: 2rem;
       border-top: 1px solid rgba(255, 255, 255, 0.1);
     }
-    
-    .auth-links a {
-      color: var(--accent-color);
-      text-decoration: none;
-      font-weight: 500;
-      transition: color 0.3s ease;
-    }
-    
-    .auth-links a:hover {
-      color: var(--accent-hover);
+
+    .auth-links p {
+      color: var(--text-secondary);
+      margin: 0;
     }
     
     .auth-toggle {
@@ -128,65 +284,142 @@
       border: none;
       color: var(--accent-color);
       cursor: pointer;
-      font-size: 0.9rem;
-      margin-top: 1rem;
+      font-size: 1rem;
+      font-weight: 500;
+      transition: all 0.3s ease;
+      padding: 0.25rem 0.5rem;
+      border-radius: 6px;
+    }
+
+    .auth-toggle:hover {
+      color: var(--accent-hover);
+      background: rgba(79, 70, 229, 0.1);
     }
     
+    /* Enhanced Error and Success Messages */
     .form-error {
-      color: #ef4444;
+      color: var(--error-color);
       font-size: 0.9rem;
-      margin-top: 0.5rem;
+      margin-top: 1rem;
       text-align: center;
+      padding: 0.75rem;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: 8px;
+      animation: shake 0.5s ease-in-out;
     }
     
     .form-success {
-      color: #10b981;
+      color: var(--success-color);
       font-size: 0.9rem;
-      margin-top: 0.5rem;
+      margin-top: 1rem;
       text-align: center;
+      padding: 0.75rem;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      border-radius: 8px;
+      animation: slideIn 0.5s ease-out;
     }
-    
-    .auth-divider {
-      text-align: center;
-      margin: 1.5rem 0;
-      position: relative;
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-5px); }
+      75% { transform: translateX(5px); }
     }
-    
-    .auth-divider::before {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 0;
-      right: 0;
-      height: 1px;
-      background: rgba(255, 255, 255, 0.2);
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
-    
-    .auth-divider span {
-      background: rgba(15, 23, 42, 0.9);
-      padding: 0 1rem;
-      color: var(--text-secondary);
-      font-size: 0.9rem;
+
+    /* Loading Animation */
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 1s ease-in-out infinite;
+      margin-right: 10px;
     }
-    
-    .github-btn {
-      background: #24292e !important;
-      border: 1px solid rgba(255, 255, 255, 0.1) !important;
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      gap: 0.5rem !important;
-      margin-top: 0 !important;
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
-    
-    .github-btn:hover {
-      background: #2f363d !important;
-      border-color: rgba(255, 255, 255, 0.2) !important;
+
+    /* Enhanced Toast Notification */
+    #toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 1rem 1.5rem;
+      background: var(--glass-bg);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      color: var(--text-primary);
+      font-weight: 500;
+      box-shadow: var(--glass-shadow);
+      transform: translateX(400px);
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 1000;
+    }
+
+    #toast.show {
+      transform: translateX(0);
+    }
+
+    /* Responsive Design */
+    @media (max-width: 480px) {
+      .auth-container {
+        padding: 1rem;
+      }
+      
+      .auth-card {
+        padding: 2rem 1.5rem;
+        border-radius: 20px;
+      }
+      
+      .auth-header h1 {
+        font-size: 1.75rem;
+      }
+      
+      .auth-header img {
+        width: 64px;
+        height: 64px;
+      }
+      
+      .input-group input {
+        padding: 0.875rem 1rem;
+        font-size: 16px; /* Prevents zoom on iOS */
+      }
+    }
+
+    /* Accessibility Enhancements */
+    .auth-btn:focus,
+    .auth-toggle:focus,
+    .input-group input:focus {
+      outline: 2px solid var(--accent-color);
+      outline-offset: 2px;
+    }
+
+    /* Reduced Motion Support */
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+      
+      .shape {
+        animation: none;
+      }
     }
   </style>
 </head>
 <body>
-  <!-- Background Animation -->
+  <!-- Enhanced Background Animation -->
   <div class="bg-animation">
     <div class="floating-shapes">
       <div class="shape" style="background: var(--gradient-purple); top: 20%; left: 10%; width: 100px; height: 100px;"></div>
@@ -198,8 +431,8 @@
   </div>
 
   <div class="auth-container">
-    <!-- Login Form -->
-    <div class="auth-card" id="loginForm" data-aos="fade-up">
+    <!-- Enhanced Login Form -->
+    <div class="auth-card" id="loginForm" data-aos="fade-up" data-aos-duration="1000">
       <div class="auth-header">
         <img src="/icons/devops.png" alt="DevOps Butler" />
         <h1>Welcome Back</h1>
@@ -223,32 +456,14 @@
         
         <div id="loginError" class="form-error" style="display: none;"></div>
       </form>
-      <!-- TEST LOGIN FORM (for stepwise debugging) -->
-      <form id="testLoginForm" style="margin-top:2rem; border:1px solid #ccc; padding:1rem; background:#222;">
-        <div style="margin-bottom:0.5rem; color:#fff;">Test Login (no JS, direct POST):</div>
-        <input type="text" name="username" placeholder="Username" style="margin-bottom:0.5rem;" required />
-        <input type="password" name="password" placeholder="Password" style="margin-bottom:0.5rem;" required />
-        <button type="submit" id="testLoginBtn">Test Login</button>
-      </form>
-      
-      <div class="auth-divider">
-        <span>or</span>
-      </div>
-      
-      <button class="auth-btn github-btn" id="githubLoginBtn">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-        </svg>
-        Continue with GitHub
-      </button>
       
       <div class="auth-links">
         <p>Don't have an account? <button class="auth-toggle" onclick="toggleForm()">Sign Up</button></p>
       </div>
     </div>
 
-    <!-- Register Form -->
-    <div class="auth-card" id="registerForm" style="display: none;" data-aos="fade-up">
+    <!-- Enhanced Register Form -->
+    <div class="auth-card" id="registerForm" style="display: none;" data-aos="fade-up" data-aos-duration="1000">
       <div class="auth-header">
         <img src="/icons/devops.png" alt="DevOps Butler" />
         <h1>Create Account</h1>
@@ -290,14 +505,65 @@
     </div>
   </div>
 
-  <!-- Toast Notification -->
+  <!-- Enhanced Toast Notification -->
   <div id="toast"></div>
 
   <!-- Scripts -->
   <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
   <script src="/static/auth.js"></script>
   <script>
-    AOS.init({ duration: 800, once: true });
+    AOS.init({ 
+      duration: 1000, 
+      once: true,
+      easing: 'ease-out-cubic'
+    });
+
+    // Enhanced form toggle with smooth animation
+    function toggleForm() {
+      const loginForm = document.getElementById('loginForm');
+      const registerForm = document.getElementById('registerForm');
+      
+      if (loginForm.style.display !== 'none') {
+        loginForm.style.animation = 'fadeOut 0.3s ease-out forwards';
+        setTimeout(() => {
+          loginForm.style.display = 'none';
+          registerForm.style.display = 'block';
+          registerForm.style.animation = 'fadeIn 0.3s ease-out forwards';
+        }, 300);
+      } else {
+        registerForm.style.animation = 'fadeOut 0.3s ease-out forwards';
+        setTimeout(() => {
+          registerForm.style.display = 'none';
+          loginForm.style.display = 'block';
+          loginForm.style.animation = 'fadeIn 0.3s ease-out forwards';
+        }, 300);
+      }
+    }
+
+    // Add fade animations
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes fadeOut {
+        from { opacity: 1; transform: translateY(0); }
+        to { opacity: 0; transform: translateY(-20px); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    // Enhanced input animations
+    document.querySelectorAll('.input-group input').forEach(input => {
+      input.addEventListener('focus', function() {
+        this.parentElement.style.transform = 'translateY(-2px)';
+      });
+      
+      input.addEventListener('blur', function() {
+        this.parentElement.style.transform = 'translateY(0)';
+      });
+    });
   </script>
 </body>
 </html> 

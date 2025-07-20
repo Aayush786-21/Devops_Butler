@@ -15,6 +15,7 @@ if (token && isAuthPage) {
 document.addEventListener('DOMContentLoaded', () => {
   checkAuthStatus();
   clearDeploymentUrlButton(); // Ensure clean state on page load
+  attachLogoutHandler();
 });
 
 function checkAuthStatus() {
@@ -62,6 +63,28 @@ if (logoutBtn) {
         if (typeof showToast === 'function') showToast('Logged out successfully', 'success');
         window.location.reload();
     });
+}
+
+function handleLogout() {
+    if (!confirm('Are you sure you want to logout?')) {
+        return;
+    }
+    // Clear tokens only (do not clear deployment/history data)
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('username');
+    localStorage.removeItem('authProvider');
+    // Try to call backend logout
+    fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      .finally(() => {
+        window.location.href = '/login';
+      });
+}
+
+function attachLogoutHandler() {
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) {
+        logoutBtn.onclick = handleLogout;
+    }
 }
 
 // Helper function to get authenticated headers
