@@ -507,3 +507,138 @@ async function handleLogout() {
         console.error('Error during logout:', error);
     }
 } 
+
+// --- GitHub Repositories ---
+let selectedRepo = null;
+
+async function searchPublicRepositories(username) {
+    const reposList = document.getElementById('repositories-list');
+    const reposLoading = document.getElementById('repos-loading');
+    const reposError = document.getElementById('repos-error');
+    const refreshBtn = document.getElementById('refreshReposBtn');
+    if (!username.trim()) {
+        showToast('Please enter a GitHub username', 'error');
+        return;
+    }
+    if (refreshBtn) refreshBtn.style.display = 'none';
+    reposLoading.style.display = 'block';
+    reposError.style.display = 'none';
+    reposList.innerHTML = '';
+    hideWelcomeMessage();
+    try {
+        const response = await fetch(`/api/repositories/${username.trim()}`);
+        const data = await response.json();
+        if (response.ok && data.repositories) {
+            displayRepositories(data.repositories, `${username}'s repositories`);
+        } else {
+            throw new Error(data.detail || 'Failed to load repositories');
+        }
+    } catch (error) {
+        reposError.textContent = 'Failed to load repositories. Please check the username and try again.';
+        reposError.style.display = 'block';
+    } finally {
+        reposLoading.style.display = 'none';
+    }
+}
+
+async function loadDemoRepositories() {
+    const reposList = document.getElementById('repositories-list');
+    const reposLoading = document.getElementById('repos-loading');
+    const reposError = document.getElementById('repos-error');
+    const refreshBtn = document.getElementById('refreshReposBtn');
+    if (refreshBtn) refreshBtn.style.display = 'none';
+    reposLoading.style.display = 'block';
+    reposError.style.display = 'none';
+    reposList.innerHTML = '';
+    hideWelcomeMessage();
+    try {
+        const response = await fetch('/api/repositories/demo_user');
+        const data = await response.json();
+        if (response.ok && data.repositories) {
+            displayRepositories(data.repositories, 'Popular repositories you can deploy');
+        } else {
+            throw new Error(data.detail || 'Failed to load demo repositories');
+        }
+    } catch (error) {
+        reposError.textContent = 'Failed to load demo repositories. Please try again.';
+        reposError.style.display = 'block';
+    } finally {
+        reposLoading.style.display = 'none';
+    }
+}
+
+function hideWelcomeMessage() {
+    const welcomeMsg = document.getElementById('repos-welcome');
+    if (welcomeMsg) welcomeMsg.style.display = 'none';
+}
+
+function displayRepositories(repositories, title = 'Repositories') {
+    const reposList = document.getElementById('repositories-list');
+    if (!reposList) return;
+    if (repositories.length === 0) {
+        reposList.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: var(--text-secondary); padding: 2rem;"><p>No repositories found. Try a different username or check if the user has public repositories.</p></div>`;
+        return;
+    }
+    reposList.innerHTML = repositories.map(repo => `
+        <div class="repo-card" data-repo-url="${repo.clone_url}" data-repo-name="${repo.full_name}">
+            <div class="repo-header">
+                <div>
+                    <div class="repo-name">${repo.name}</div>
+                    <div class="repo-full-name">${repo.full_name}</div>
+                </div>
+                <span class="repo-visibility ${repo.private ? 'private' : 'public'}">
+                    ${repo.private ? '🔒 Private' : '🌐 Public'}
+                </span>
+            </div>
+            <div class="repo-description">
+                ${repo.description || 'No description available'}
+            </div>
+            <div class="repo-meta">
+                <span class="repo-language">${repo.language || 'Unknown'}</span>
+                <span class="repo-updated">Updated ${formatDate(repo.updated_at)}</span>
+            </div>
+        </div>
+    `).join('');
+    document.querySelectorAll('.repo-card').forEach(card => {
+        card.addEventListener('click', () => selectRepository(card));
+    });
+}
+
+function selectRepository(card) {
+    document.querySelectorAll('.repo-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    const repoUrl = card.dataset.repoUrl;
+    const repoName = card.dataset.repoName;
+    document.getElementById('git-url').value = repoUrl;
+    selectedRepo = repoUrl;
+    document.getElementById('deploy').scrollIntoView({ behavior: 'smooth' });
+    showToast(`Selected repository: ${repoName}`, 'success');
+}
+
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffTime = Math.abs(now - date);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    if (diffDays === 1) return 'today';
+    if (diffDays === 2) return 'yesterday';
+    if (diffDays < 7) return `${diffDays - 1} days ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+    if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
+    return `${Math.floor(diffDays / 365)} years ago`;
+}
+
+document.getElementById('searchReposBtn')?.addEventListener('click', () => {
+    const username = document.getElementById('usernameSearch').value;
+    searchPublicRepositories(username);
+});
+document.getElementById('usernameSearch')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        const username = e.target.value;
+        searchPublicRepositories(username);
+    }
+});
+document.getElementById('showDemoReposBtn')?.addEventListener('click', () => {
+    loadDemoRepositories();
+    showToast('Loading demo repositories...', 'info');
+}); 

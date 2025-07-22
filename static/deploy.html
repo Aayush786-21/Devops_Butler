@@ -286,6 +286,35 @@
             <h1 class="page-title">Deploy Application</h1>
             <p class="page-subtitle">Automate your deployments with a single click</p>
         </div>
+        <!-- GitHub Repositories Section -->
+        <section class="section" id="repositories" data-aos="fade-up">
+            <h2 class="section-title">🐙 GitHub Repositories</h2>
+            <div class="card">
+                <div class="repos-header">
+                    <div class="repos-search">
+                        <input type="text" id="usernameSearch" placeholder="Enter GitHub username (e.g., facebook, vercel)" />
+                        <button id="searchReposBtn" class="btn btn-primary">🔍 Search</button>
+                    </div>
+                    <div class="repos-actions">
+                        <button id="refreshReposBtn" class="btn btn-secondary" style="display: none;">🔄 Refresh</button>
+                        <button id="showDemoReposBtn" class="btn btn-secondary">🎯 Show Demo</button>
+                    </div>
+                </div>
+                <div id="repositories-list" class="repositories-grid">
+                    <!-- GitHub repositories will be loaded here -->
+                </div>
+                <div id="repos-loading" class="loading-spinner" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Loading repositories...</p>
+                </div>
+                <div id="repos-error" class="error-message" style="display: none;"></div>
+                <div id="repos-welcome" class="welcome-message">
+                    <p>🔍 Search for any GitHub username to see their public repositories</p>
+                    <p>🎯 Or click "Show Demo" to see popular repositories you can deploy</p>
+                </div>
+            </div>
+        </section>
+        <!-- Deploy Section (keep as before, but make sure the repo selection auto-fills the git-url input) -->
         <div class="deploy-card">
             <!-- Keep all current deploy form logic here -->
             <h2>Deployment Details</h2>
