@@ -1,6 +1,28 @@
 import asyncio
 from typing import Optional
 
+async def ensure_network_exists(network_name: str):
+    # Check if the network exists
+    proc = await asyncio.create_subprocess_exec(
+        "docker", "network", "ls", "--filter", f"name={network_name}", "--format", "{{.Name}}",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await proc.communicate()
+    networks = stdout.decode().splitlines()
+    if network_name not in networks:
+        print(f"Network '{network_name}' not found. Creating it...")
+        create_proc = await asyncio.create_subprocess_exec(
+            "docker", "network", "create", network_name,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        await create_proc.communicate()
+        if create_proc.returncode == 0:
+            print(f"✅ Created Docker network: {network_name}")
+        else:
+            print(f"❌ Failed to create Docker network: {network_name}")
+    else:
+        print(f"Docker network '{network_name}' already exists.")
+
 async def run_container(
     image_name: str,
     container_name: str,
@@ -8,6 +30,9 @@ async def run_container(
     internal_port: Optional[int] = None
 ):
     print(f"Attempting to run container: {container_name}")
+
+    # Ensure the Docker network exists
+    await ensure_network_exists("devops-butler-net")
 
     # Stop old container if it exists - wait for completion
     print(f"Stopping old container if it exists: {container_name}")

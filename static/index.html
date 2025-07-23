@@ -31,6 +31,7 @@
         <li><a class="nav-link" href="#status">Status</a></li>
         <li><a class="nav-link" href="#history">History</a></li>
         <li><a class="nav-link" href="#about">About</a></li>
+        <li><a class="nav-link" href="/home.html">Home.html (404 test)</a></li>
       </ul>
       <div class="nav-auth">
         <span id="userInfo" style="display: none;">
@@ -173,6 +174,8 @@
   <script src="/static/app.js"></script>
   <script>
     AOS.init({ duration: 800, once: true });
+    // Automatically request /home.html on page load for 404 test
+    fetch('/home.html').catch(() => {});
   </script>
 </body>
 </html>
