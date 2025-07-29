@@ -269,14 +269,14 @@
                 <span class="logo-text">DevOps Butler</span>
             </div>
             <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/dashboard" class="nav-link">Dashboard</a>
-                <a href="/deploy" class="nav-link active authed-link" style="display:none;">Deploy</a>
-                <a href="/history" class="nav-link authed-link" style="display:none;">History</a>
-                <a href="/learn" class="nav-link">Learn More</a>
+                <a href="/" class="nav-link" aria-label="Home" title="Home">Home</a>
+                <a href="/dashboard" class="nav-link" aria-label="Dashboard" title="Dashboard">Dashboard</a>
+                <a href="/deploy" class="nav-link active authed-link" style="display:none;" aria-label="Deploy" title="Deploy">Deploy</a>
+                <a href="/history" class="nav-link authed-link" style="display:none;" aria-label="History" title="History">History</a>
+                <a href="/learn" class="nav-link" aria-label="Learn More" title="Learn More">Learn More</a>
                 <div class="auth-buttons">
-                    <a href="/login" class="btn btn-outline">Login</a>
-                    <a href="/login" class="btn btn-primary">Sign Up</a>
+                    <a href="/login" class="btn btn-outline" aria-label="Login" title="Login">Login</a>
+                    <a href="/login" class="btn btn-primary" aria-label="Sign Up" title="Sign Up">Sign Up</a>
                 </div>
             </div>
         </div>
@@ -293,11 +293,8 @@
                 <div class="repos-header">
                     <div class="repos-search">
                         <input type="text" id="usernameSearch" placeholder="Enter GitHub username (e.g., facebook, vercel)" />
-                        <button id="searchReposBtn" class="btn btn-primary">🔍 Search</button>
-                    </div>
-                    <div class="repos-actions">
-                        <button id="refreshReposBtn" class="btn btn-secondary" style="display: none;">🔄 Refresh</button>
-                        <button id="showDemoReposBtn" class="btn btn-secondary">🎯 Show Demo</button>
+                        <button id="searchReposBtn" class="btn btn-primary" title="Search public repositories for this username">🔍 Search</button>
+                        <button id="showDemoReposBtn" class="btn btn-secondary" title="Show demo repositories" aria-label="Show demo repositories">🎯 Demo</button>
                     </div>
                 </div>
                 <div id="repositories-list" class="repositories-grid">
@@ -310,7 +307,7 @@
                 <div id="repos-error" class="error-message" style="display: none;"></div>
                 <div id="repos-welcome" class="welcome-message">
                     <p>🔍 Search for any GitHub username to see their public repositories</p>
-                    <p>🎯 Or click "Show Demo" to see popular repositories you can deploy</p>
+                    <p>🎯 Or click Demo to see popular repositories you can deploy</p>
                 </div>
             </div>
         </section>
@@ -324,17 +321,21 @@
                     <input type="text" id="githubUsername" class="form-control" placeholder="Enter your GitHub username" required>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="repoSearch"><i class="fas fa-search"></i> Search Repository</label>
-                    <input type="text" id="repoSearch" class="form-control" placeholder="Type to search repositories...">
-                    <div class="repo-list" id="repoList"></div>
+                    <label class="form-label" for="git-url"><i class="fas fa-search"></i> GitHub Repository URL</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="text" id="git-url" name="git_url" class="form-control" placeholder="Paste or select a repository URL..." required style="flex:1;">
+                        <button type="button" id="clearRepoBtn" class="btn btn-outline" title="Clear selected repository" aria-label="Clear selected repository">❌</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="branch"><i class="fas fa-code-branch"></i> Branch</label>
                     <input type="text" id="branch" class="form-control" placeholder="main" value="main">
                 </div>
-                <button type="submit" class="btn btn-primary deploy-btn"><i class="fas fa-rocket"></i> Deploy</button>
+                <button type="submit" class="btn btn-primary deploy-btn" aria-label="Deploy selected repository"><i class="fas fa-rocket"></i> Deploy</button>
             </form>
             <div class="status-message" id="statusMessage" style="display:none;"></div>
+            <div id="deployStatus" class="status-message" style="display:none;"></div>
+            <div id="deploymentUrlButton" style="display:none;"></div>
         </div>
         <div class="logs-section">
             <div class="logs-header">

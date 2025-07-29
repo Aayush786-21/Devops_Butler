@@ -516,26 +516,26 @@
       duration: 1000, 
       once: true,
       easing: 'ease-out-cubic'
-    });
-
-    // Enhanced form toggle with smooth animation
-    function toggleForm() {
-      const loginForm = document.getElementById('loginForm');
-      const registerForm = document.getElementById('registerForm');
-      
-      if (loginForm.style.display !== 'none') {
-        loginForm.style.animation = 'fadeOut 0.3s ease-out forwards';
-        setTimeout(() => {
-          loginForm.style.display = 'none';
-          registerForm.style.display = 'block';
-          registerForm.style.animation = 'fadeIn 0.3s ease-out forwards';
-        }, 300);
-      } else {
-        registerForm.style.animation = 'fadeOut 0.3s ease-out forwards';
-        setTimeout(() => {
-          registerForm.style.display = 'none';
-          loginForm.style.display = 'block';
-          loginForm.style.animation = 'fadeIn 0.3s ease-out forwards';
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="nav-container">
+      <div class="nav-logo">
+        <img src="/icons/logo.png" alt="DevOps Butler" class="logo-img" />
+        <span class="logo-text">DevOps Butler</span>
+      </div>
+      <div class="nav-links">
+        <a href="/" class="nav-link" aria-label="Home" title="Home">Home</a>
+        <a href="/dashboard" class="nav-link" aria-label="Dashboard" title="Dashboard">Dashboard</a>
+        <a href="/deploy" class="nav-link authed-link" style="display:none;" aria-label="Deploy" title="Deploy">Deploy</a>
+        <a href="/history" class="nav-link authed-link" style="display:none;" aria-label="History" title="History">History</a>
+        <a href="/learn" class="nav-link" aria-label="Learn More" title="Learn More">Learn More</a>
+        <div class="auth-buttons">
+          <a href="/login" class="btn btn-outline" aria-label="Login" title="Login">Login</a>
+          <a href="/login" class="btn btn-primary" aria-label="Sign Up" title="Sign Up">Sign Up</a>
+        </div>
+      </div>
+    </div>
+  </nav>
         }, 300);
       }
     }
