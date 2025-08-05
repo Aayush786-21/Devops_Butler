@@ -31,7 +31,7 @@
         <li><a class="nav-link" href="#status">Status</a></li>
         <li><a class="nav-link" href="#history">History</a></li>
         <li><a class="nav-link" href="#about">About</a></li>
-        <li><a class="nav-link" href="/home.html">Home.html (404 test)</a></li>
+        <!-- Removed test button and 404 test link -->
       </ul>
       <div class="nav-auth">
         <span id="userInfo" style="display: none;">
@@ -74,7 +74,6 @@
         </div>
         <div class="repos-actions">
           <button id="refreshReposBtn" class="btn btn-secondary" style="display: none;">🔄 Refresh</button>
-          <button id="showDemoReposBtn" class="btn btn-secondary">🎯 Show Demo</button>
         </div>
       </div>
       <div id="repositories-list" class="repositories-grid">
@@ -87,7 +86,6 @@
       <div id="repos-error" class="error-message" style="display: none;"></div>
       <div id="repos-welcome" class="welcome-message">
         <p>🔍 Search for any GitHub username to see their public repositories</p>
-        <p>🎯 Or click "Show Demo" to see popular repositories you can deploy</p>
       </div>
     </div>
   </section>
@@ -96,22 +94,31 @@
   <section class="section" id="deploy" data-aos="fade-up">
     <h2 class="section-title">Deploy Your App</h2>
     <div class="card">
-      <form class="deploy-form" enctype="multipart/form-data">
-        <div class="input-group">
-          <label for="git-url">Git Repository URL</label>
-          <input type="text" id="git-url" name="git_url" placeholder="https://github.com/your/repo" required />
+      <div id="deploy-barrier">
+        <form class="deploy-form" enctype="multipart/form-data">
+          <div class="input-group">
+            <label for="git-url">Git Repository URL</label>
+            <input type="text" id="git-url" name="git_url" placeholder="https://github.com/your/repo" required />
+          </div>
+          <div class="input-group">
+            <label>Frontend .env</label>
+            <input type="file" id="frontend-env" name="frontend_env" accept=".env" />
+          </div>
+          <div class="input-group">
+            <label>Backend .env</label>
+            <input type="file" id="backend-env" name="backend_env" accept=".env" />
+          </div>
+          <button type="submit" class="deploy-btn btn-primary">🚀 Deploy</button>
+        </form>
+        <div id="deploy-status" class="fade-in"></div>
+        <div id="deploy-success" style="display:none; text-align:center; margin-top:1.5rem;">
+          <h3 style="color:var(--success); font-size:1.3em; margin-bottom:1rem;">🎉 Your application is now deployed!</h3>
+          <button id="openAppBtn" class="btn btn-primary" style="font-size:1.1em; padding:0.7em 2em;">Open Application</button>
         </div>
-        <div class="input-group">
-          <label>Frontend .env</label>
-          <input type="file" id="frontend-env" name="frontend_env" accept=".env" />
+        <div id="deploy-login-barrier" style="display:none; text-align:center; color:var(--error); margin-top:1rem; font-size:1.1em;">
+          <b>🔒 Please <a href="/login" style="color:var(--primary);text-decoration:underline;">login</a> or <a href="/login" style="color:var(--primary);text-decoration:underline;">sign up</a> to deploy your projects.</b>
         </div>
-        <div class="input-group">
-          <label>Backend .env</label>
-          <input type="file" id="backend-env" name="backend_env" accept=".env" />
-        </div>
-        <button type="submit" class="deploy-btn btn-primary">🚀 Deploy</button>
-      </form>
-      <div id="deploy-status" class="fade-in"></div>
+      </div>
     </div>
   </section>
 
@@ -129,22 +136,27 @@
   <section class="section" id="history" data-aos="fade-up">
     <h2 class="section-title">Deployment History</h2>
     <div class="card">
-      <table class="history-table" id="history-table">
-        <thead>
-          <tr>
-            <th>Project</th>
-            <th>Status</th>
-            <th>URL</th>
-            <th>Time</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <!-- JS will populate this -->
-        </tbody>
-      </table>
-      <br />
-      <button id="clearBtn" class="btn btn-secondary" style="float: right;">Clear History</button>
+      <div id="history-barrier">
+        <table class="history-table" id="history-table">
+          <thead>
+            <tr>
+              <th>Project</th>
+              <th>Status</th>
+              <th>URL</th>
+              <th>Time</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- JS will populate this -->
+          </tbody>
+        </table>
+        <br />
+        <button id="clearBtn" class="btn btn-secondary" style="float: right;">Clear History</button>
+        <div id="history-login-barrier" style="display:none; text-align:center; color:var(--error); margin-top:1rem; font-size:1.1em;">
+          <b>🔒 Please <a href="/login" style="color:var(--primary);text-decoration:underline;">login</a> or <a href="/login" style="color:var(--primary);text-decoration:underline;">sign up</a> to view your deployment history.</b>
+        </div>
+      </div>
     </div>
   </section>
 

@@ -6,36 +6,59 @@ let authProvider = localStorage.getItem('authProvider');
 // Check authentication status on page load
 document.addEventListener('DOMContentLoaded', function() {
     checkAuthStatus();
+    enforceDeployBarrier();
+    enforceHistoryBarrier();
 });
+// Hide deploy form and show login barrier if not authenticated
+function enforceDeployBarrier() {
+  const deployForm = document.querySelector('.deploy-form');
+  const deployLoginBarrier = document.getElementById('deploy-login-barrier');
+  if (!authToken) {
+    if (deployForm) deployForm.style.display = 'none';
+    if (deployLoginBarrier) deployLoginBarrier.style.display = 'block';
+  } else {
+    if (deployForm) deployForm.style.display = '';
+    if (deployLoginBarrier) deployLoginBarrier.style.display = 'none';
+  }
+}
+
+// Hide history table and show login barrier if not authenticated
+function enforceHistoryBarrier() {
+  const historyTable = document.getElementById('history-table');
+  const clearBtn = document.getElementById('clearBtn');
+  const historyLoginBarrier = document.getElementById('history-login-barrier');
+  if (!authToken) {
+    if (historyTable) historyTable.style.display = 'none';
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (historyLoginBarrier) historyLoginBarrier.style.display = 'block';
+  } else {
+    if (historyTable) historyTable.style.display = '';
+    if (clearBtn) clearBtn.style.display = '';
+    if (historyLoginBarrier) historyLoginBarrier.style.display = 'none';
+  }
+}
 
 function checkAuthStatus() {
     const userInfo = document.getElementById('userInfo');
     const loginLink = document.getElementById('loginLink');
     const usernameSpan = document.getElementById('username');
-    
     if (authToken && username) {
-        // User is logged in
         userInfo.style.display = 'inline';
         loginLink.style.display = 'none';
         const providerIcon = authProvider === 'github' ? '🐙' : '👤';
         usernameSpan.textContent = `${providerIcon} Welcome, ${username}!`;
-        
-        // Load deployment history for authenticated user
         fetchAndDisplayHistory();
-        
-        // Load GitHub repositories if user is GitHub user
         if (authProvider === 'github') {
             loadUserGitHubRepositories();
         }
     } else {
-        // User is not logged in
         userInfo.style.display = 'none';
         loginLink.style.display = 'inline';
-        
-        // Redirect to login if trying to access protected features
+        // Show login barrier overlays
+        enforceDeployBarrier();
+        enforceHistoryBarrier();
         const currentPath = window.location.pathname;
         if (currentPath === '/' && !authToken) {
-            // Show login prompt on main page
             showToast('Please login to access DevOps Butler features', 'info');
         }
     }
@@ -84,8 +107,43 @@ document.querySelectorAll('.nav-link, .nav-cta, .hero-buttons a').forEach(link =
 const deployForm = document.querySelector('.deploy-form');
 const gitUrlInput = document.getElementById('git-url');
 const deployStatus = document.getElementById('deploy-status');
+const deploySuccess = document.getElementById('deploy-success');
+const openAppBtn = document.getElementById('openAppBtn');
 const statusLogs = document.getElementById('status-logs');
 let socket = null;
+
+function showConfetti() {
+  // Use canvas-confetti if available
+  if (window.confetti) {
+    window.confetti({
+      particleCount: 120,
+      spread: 80,
+      origin: { y: 0.6 }
+    });
+  } else {
+    // fallback: add a class for CSS confetti if you have it
+    const confettiDiv = document.getElementById('confetti-container');
+    if (confettiDiv) {
+      confettiDiv.classList.add('confetti-active');
+      setTimeout(() => confettiDiv.classList.remove('confetti-active'), 3000);
+    }
+  }
+}
+
+function showDeploySuccess(url) {
+  if (deploySuccess) {
+    deploySuccess.style.display = 'block';
+    if (openAppBtn) {
+      openAppBtn.onclick = () => window.open(url, '_blank');
+    }
+    showConfetti();
+  }
+}
+
+function hideDeploySuccess() {
+  if (deploySuccess) deploySuccess.style.display = 'none';
+  if (openAppBtn) openAppBtn.onclick = null;
+}
 
 function validateGitUrl(url) {
   // Accepts any https git repo (optionally supports SSH)
@@ -95,14 +153,13 @@ function validateGitUrl(url) {
 
 deployForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  
+  hideDeploySuccess();
   // Check authentication
   if (!authToken) {
     showToast('Please login to deploy applications', 'error');
     window.location.href = '/login';
     return;
   }
-  
   const form = e.target;
   const data = new FormData(form);
   // Add .env files if selected
@@ -131,7 +188,6 @@ deployForm.addEventListener('submit', async (e) => {
       headers: getAuthHeaders(),
       body: data
     });
-    
     if (response.status === 401) {
       // Token expired or invalid
       localStorage.removeItem('authToken');
@@ -140,11 +196,13 @@ deployForm.addEventListener('submit', async (e) => {
       window.location.href = '/login';
       return;
     }
-    
     const result = await response.json();
     if (response.ok) {
       deployStatus.textContent = `✅ ${result.message}`;
       deployStatus.style.color = 'var(--success)';
+      if (result.deployed_url) {
+        showDeploySuccess(result.deployed_url);
+      }
     } else {
       deployStatus.textContent = `🔴 ERROR: ${result.detail || 'Failed to start deployment.'}`;
       deployStatus.style.color = 'var(--error)';
@@ -158,6 +216,7 @@ deployForm.addEventListener('submit', async (e) => {
 gitUrlInput.addEventListener('input', () => {
   gitUrlInput.classList.remove('invalid');
   deployStatus.textContent = '';
+  hideDeploySuccess();
 });
 
 // --- WebSocket for Live Logs ---
@@ -379,37 +438,6 @@ async function searchPublicRepositories(username) {
 }
 
 async function loadDemoRepositories() {
-    const reposList = document.getElementById('repositories-list');
-    const reposLoading = document.getElementById('repos-loading');
-    const reposError = document.getElementById('repos-error');
-    const refreshBtn = document.getElementById('refreshReposBtn');
-    
-    // Hide refresh button for demo
-    if (refreshBtn) refreshBtn.style.display = 'none';
-    
-    // Show loading
-    reposLoading.style.display = 'block';
-    reposError.style.display = 'none';
-    reposList.innerHTML = '';
-    hideWelcomeMessage();
-    
-    try {
-        // Use demo user to get demo repositories
-        const response = await fetch('/api/repositories/demo_user');
-        const data = await response.json();
-        
-        if (response.ok && data.repositories) {
-            displayRepositories(data.repositories, 'Popular repositories you can deploy');
-        } else {
-            throw new Error(data.detail || 'Failed to load demo repositories');
-        }
-    } catch (error) {
-        console.error('Failed to load demo repositories:', error);
-        reposError.textContent = 'Failed to load demo repositories. Please try again.';
-        reposError.style.display = 'block';
-    } finally {
-        reposLoading.style.display = 'none';
-    }
 }
 
 function hideWelcomeMessage() {
@@ -514,11 +542,6 @@ document.getElementById('usernameSearch')?.addEventListener('keypress', (e) => {
     }
 });
 
-// Show demo repositories button
-document.getElementById('showDemoReposBtn')?.addEventListener('click', () => {
-    loadDemoRepositories();
-    showToast('Loading demo repositories...', 'info');
-});
 
 // Refresh repositories button (for GitHub users)
 document.getElementById('refreshReposBtn')?.addEventListener('click', () => {
