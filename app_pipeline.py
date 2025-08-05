@@ -552,43 +552,23 @@ async def run_pipeline(repo_url: str, user_id: int = None):
             await manager.broadcast("🤖 No config found. Engaging AI Analyst to create a Dockerfile...")
             generated_dockerfile_content = await generate_dockerfile(repo_dir)
             if generated_dockerfile_content:
-                with open(os.path.join(repo_dir, "Dockerfile"), "w") as f:
-                    f.write(generated_dockerfile_content)
-                await manager.broadcast("✅ AI created a Dockerfile. Proceeding with standard build...")
-                
-                # --- NEW PORT DISCOVERY LOGIC FOR AI-GENERATED DOCKERFILE ---
-                dockerfile_path = os.path.join(repo_dir, 'Dockerfile')
-                internal_port = find_exposed_port(dockerfile_path)
-                
-                if not internal_port:
-                    await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Could not determine EXPOSE port from AI-generated Dockerfile.")
-                    with Session(engine) as session:
-                        deployment_to_update = session.get(Deployment, db_deployment.id)
-                        if deployment_to_update:
-                            deployment_to_update.status = "failed"
-                            session.add(deployment_to_update)
-                            session.commit()
-                    await manager.broadcast("🔴 STATUS: Pipeline failed.")
-                    return None, None
+                # Save the Dockerfile in the repo directory for Docker build
+                dockerfile_path = os.path.join(repo_dir, "Dockerfile")
+                with open(dockerfile_path, "w") as dockerfile:
+                    dockerfile.write(generated_dockerfile_content)
+                print(f"✅ Dockerfile saved at {dockerfile_path}")
 
-                await manager.broadcast(f"✅ [{new_container_name}] Discovered EXPOSE port from AI Dockerfile: {internal_port}")
-                # ------------------------------------------------------------
+                # Also save a copy in generated_dockerfiles for reference
+                reference_dockerfile_path = f"/Users/aayush/Documents/Devops_Butler/generated_dockerfiles/{repo_name}.Dockerfile"
+                with open(reference_dockerfile_path, "w") as dockerfile:
+                    dockerfile.write(generated_dockerfile_content)
+                print(f"✅ Reference Dockerfile saved at {reference_dockerfile_path}")
 
-                # Now, proceed with the NORMAL Dockerfile path logic!
+                # Build the Docker image
                 image_name = await docker_build(new_container_name, repo_dir)
                 if not image_name:
-                    await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Docker build failed.")
-                    with Session(engine) as session:
-                        deployment_to_update = session.get(Deployment, db_deployment.id)
-                        if deployment_to_update:
-                            deployment_to_update.status = "failed"
-                            session.add(deployment_to_update)
-                            session.commit()
-                    await manager.broadcast("🔴 STATUS: Pipeline failed.")
-                    return None, None
-                run_success = await run_container(image_name, new_container_name)
-                if not run_success:
-                    await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Failed to start container.")
+                    print(f"❌ Failed to build Docker image for {new_container_name}")
+                    # Update deployment status to failed
                     with Session(engine) as session:
                         deployment_to_update = session.get(Deployment, db_deployment.id)
                         if deployment_to_update:
@@ -598,9 +578,36 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                     await manager.broadcast("🔴 STATUS: Pipeline failed.")
                     return None, None
 
-                await manager.broadcast(f"✅ [{new_container_name}] Container started successfully.")
+                # Discover exposed port from generated Dockerfile
+                internal_port = find_exposed_port(dockerfile_path)
+                if not internal_port:
+                    internal_port = 8888  # Default fallback
+                    print(f"⚠️ Could not determine EXPOSE port, using default: {internal_port}")
+
+                # Run the container
+                desired_port = internal_port
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    if s.connect_ex(('localhost', desired_port)) == 0:
+                        print(f"Port {desired_port} is busy, finding a free one...")
+                        desired_port = find_free_port(desired_port + 1)
+                        print(f"Using free port {desired_port}")
+
+                run_success = await run_container(image_name, new_container_name, host_port=desired_port, internal_port=internal_port)
+                if not run_success:
+                    print(f"❌ Failed to start container {new_container_name}")
+                    # Update deployment status to failed
+                    with Session(engine) as session:
+                        deployment_to_update = session.get(Deployment, db_deployment.id)
+                        if deployment_to_update:
+                            deployment_to_update.status = "failed"
+                            session.add(deployment_to_update)
+                            session.commit()
+                    await manager.broadcast("🔴 STATUS: Pipeline failed.")
+                    return None, None
+
+                print(f"✅ Container {new_container_name} started successfully.")
                 
-                print(f"🔧 VERIFICATION: Creating Nginx config with repo_name='{repo_name}', container_name='{new_container_name}', port={internal_port}")
+                # Create Nginx config
                 nginx_success = create_nginx_config(repo_name, new_container_name, internal_port)
                 if not nginx_success:
                     await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Failed to create Nginx config.")
@@ -612,8 +619,11 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                             session.commit()
                     await manager.broadcast("🔴 STATUS: Pipeline failed.")
                     return None, None
+
+                # Reload Nginx
                 await reload_nginx()
-                server_url = f"http://{repo_name}.localhost:8888"
+
+                server_url = f"http://{repo_name}.localhost:{desired_port}"
                 with Session(engine) as session:
                     deployment_to_update = session.get(Deployment, db_deployment.id)
                     if deployment_to_update:
@@ -621,19 +631,59 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                         deployment_to_update.deployed_url = server_url
                         session.add(deployment_to_update)
                         session.commit()
-                await manager.broadcast(f"🚀 SUCCESS! AI-powered Dockerfile deployment is live at: {server_url}")
+                await manager.broadcast(f"🚀 SUCCESS! Application deployed at: {server_url}")
                 return new_container_name, [server_url]
             else:
-                await manager.broadcast(f"🔴 [{new_container_name}] FATAL: AI Analyst failed to generate a Dockerfile.")
+                print("❌ Failed to generate Dockerfile.")
+                # Update deployment status to failed
                 with Session(engine) as session:
                     deployment_to_update = session.get(Deployment, db_deployment.id)
                     if deployment_to_update:
                         deployment_to_update.status = "failed"
                         session.add(deployment_to_update)
                         session.commit()
+                await manager.broadcast("🔴 STATUS: Pipeline failed.")
                 return None, None
     finally:
         # This 'finally' block ensures the temp directory is always cleaned up
         print(f"Cleaning up workspace: {repo_dir}")
         shutil.rmtree(repo_dir)
-    
+        # Debugging: Check if the container is running
+        print(f"🔍 Checking container status for {new_container_name}")
+        container_status = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "ps", "--filter", f"name={new_container_name}", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True
+        )
+        if new_container_name not in container_status.stdout:
+            print(f"❌ Container {new_container_name} is not running. Logs:")
+            container_logs = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "logs", new_container_name],
+                capture_output=True,
+                text=True
+            )
+            print(container_logs.stdout)
+
+        # Debugging: Check Nginx configuration
+        print(f"🔍 Checking Nginx configuration for {repo_name}")
+        nginx_config_path = f"/opt/homebrew/etc/nginx/servers/{repo_name}.conf"
+        if not os.path.exists(nginx_config_path):
+            print(f"❌ Nginx configuration file {nginx_config_path} does not exist.")
+        else:
+            with open(nginx_config_path, "r") as nginx_config:
+                print(f"Nginx configuration for {repo_name}:")
+                print(nginx_config.read())
+
+        # Debugging: Test port accessibility
+        print(f"🔍 Testing port accessibility for {server_url}")
+        port_test = await asyncio.to_thread(
+            subprocess.run,
+            ["curl", "-I", server_url],
+            capture_output=True,
+            text=True
+        )
+        if port_test.returncode != 0:
+            print(f"❌ Port test failed for {server_url}. Curl output:")
+            print(port_test.stderr)

@@ -15,6 +15,7 @@ def create_nginx_config(repo_name: str, container_name: str, internal_port: int)
         container_name: The unique container name (used for Docker network routing)
         internal_port: The internal port the application is listening on inside the container
     """
+    print(f"🔧 Attempting to create Nginx config for repo: {repo_name}, container: {container_name}, port: {internal_port}")
     server_name = f"{repo_name}.localhost"
     config_path = os.path.join(NGINX_SITES_AVAILABLE, f"{repo_name}.conf")  # Use the clean repo_name for the file
 
@@ -38,10 +39,10 @@ server {{
         # This writes the file to your Mac, and the volume mount does the rest.
         with open(config_path, "w") as config_file:
             config_file.write(config_content)
-        print("✅ Successfully created Nginx config file.")
+        print(f"✅ Successfully created Nginx config for {repo_name}")
         return True
     except Exception as e:
-        print(f"❌ Failed to create Nginx config file: {e}")
+        print(f"❌ Failed to create Nginx config for {repo_name}. Error: {e}")
         return False
 
 def delete_nginx_config(repo_name: str):

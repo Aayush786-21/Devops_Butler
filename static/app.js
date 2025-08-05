@@ -213,6 +213,12 @@ deployForm.addEventListener('submit', async (e) => {
       } else {
         console.warn('[DEBUG] No deployed_url in result');
       }
+      // Show Dockerfile button if available
+      if (result.dockerfile_path) {
+        showGeneratedDockerfile(result.dockerfile_path);
+      } else {
+        console.warn('[DEBUG] No Dockerfile path in result');
+      }
     } else {
       deployStatus.textContent = `🔴 ERROR: ${result.detail || 'Failed to start deployment.'}`;
       deployStatus.style.color = 'var(--error)';
@@ -637,4 +643,16 @@ async function handleClearHistory() {
 }
 if (clearBtn) {
   clearBtn.addEventListener('click', handleClearHistory);
+}
+
+// --- Generated Dockerfile Logic ---
+function showGeneratedDockerfile(dockerfilePath) {
+  const dockerfileButton = document.getElementById('dockerfileBtn');
+  if (dockerfileButton) {
+    dockerfileButton.style.display = 'block';
+    dockerfileButton.onclick = () => window.open(dockerfilePath, '_blank');
+    console.log('[DEBUG] Dockerfile button set to open:', dockerfilePath);
+  } else {
+    console.warn('[DEBUG] Dockerfile button not found');
+  }
 }

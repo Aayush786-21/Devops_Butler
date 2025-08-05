@@ -186,12 +186,12 @@ async def deploy(
                 f.write(await backend_env.read())
 
         # Run pipeline with user context
-        container_name, deployed_urls = await run_pipeline(git_url, user_id=current_user.id)
-        if deployed_urls and isinstance(deployed_urls, list) and len(deployed_urls) > 0:
+        dockerfile_path, deployed_urls = await run_pipeline(git_url, user_id=current_user.id)
+        if dockerfile_path and deployed_urls:
             deployed_url = deployed_urls[0]
-            return {"message": f"Deployment successful!", "deployed_url": deployed_url}
+            return {"message": "Deployment successful!", "deployed_url": deployed_url, "dockerfile_path": dockerfile_path}
         else:
-            return {"message": "Deployment started, but no deployed URL was returned.", "deployed_url": None}
+            return {"message": "Deployment started, but no Dockerfile or deployed URL was returned.", "deployed_url": None, "dockerfile_path": None}
     except Exception as e:
         print(f"❌ Deployment failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Deployment failed: {str(e)}")
@@ -334,4 +334,3 @@ async def destroy_deployment(
     except Exception as e:
         print(f"❌ Failed to destroy deployment {container_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to destroy deployment: {str(e)}")
-        
