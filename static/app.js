@@ -131,14 +131,21 @@ function showConfetti() {
 }
 
 function showDeploySuccess(url) {
+  console.log('[DEBUG] showDeploySuccess called with url:', url);
   if (deploySuccess) {
     deploySuccess.style.display = 'block';
     if (openAppBtn) {
       openAppBtn.onclick = () => window.open(url, '_blank');
+      console.log('[DEBUG] openAppBtn found and onclick set');
+    } else {
+      console.warn('[DEBUG] openAppBtn not found');
     }
     showConfetti();
+  } else {
+    console.warn('[DEBUG] deploySuccess not found');
   }
 }
+
 
 function hideDeploySuccess() {
   if (deploySuccess) deploySuccess.style.display = 'none';
@@ -197,11 +204,14 @@ deployForm.addEventListener('submit', async (e) => {
       return;
     }
     const result = await response.json();
+    console.log('[DEBUG] /deploy response:', result);
     if (response.ok) {
       deployStatus.textContent = `✅ ${result.message}`;
       deployStatus.style.color = 'var(--success)';
       if (result.deployed_url) {
         showDeploySuccess(result.deployed_url);
+      } else {
+        console.warn('[DEBUG] No deployed_url in result');
       }
     } else {
       deployStatus.textContent = `🔴 ERROR: ${result.detail || 'Failed to start deployment.'}`;

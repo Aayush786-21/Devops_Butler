@@ -176,7 +176,7 @@ async def deploy(
     try:
         import tempfile, os
         repo_dir = tempfile.mkdtemp(prefix="butler-run-")
-        
+
         # Save env files if provided
         if frontend_env:
             with open(os.path.join(repo_dir, "frontend.env"), "wb") as f:
@@ -184,10 +184,14 @@ async def deploy(
         if backend_env:
             with open(os.path.join(repo_dir, "backend.env"), "wb") as f:
                 f.write(await backend_env.read())
-        
+
         # Run pipeline with user context
-        result = await run_pipeline(git_url, user_id=current_user.id)
-        return result
+        container_name, deployed_urls = await run_pipeline(git_url, user_id=current_user.id)
+        if deployed_urls and isinstance(deployed_urls, list) and len(deployed_urls) > 0:
+            deployed_url = deployed_urls[0]
+            return {"message": f"Deployment successful!", "deployed_url": deployed_url}
+        else:
+            return {"message": "Deployment started, but no deployed URL was returned.", "deployed_url": None}
     except Exception as e:
         print(f"❌ Deployment failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Deployment failed: {str(e)}")
