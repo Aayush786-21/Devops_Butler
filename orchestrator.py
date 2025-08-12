@@ -284,8 +284,8 @@ async def destroy_deployment(
         repo_name = extract_repo_name(deployment.git_url)
         
         # Step 1: Remove nginx configuration
-        print(f"⏩ STEP: Removing nginx config for {repo_name}")
-        nginx_removed = delete_nginx_config(repo_name)
+        print(f"⏩ STEP: Removing nginx config for {deployment.project_id}")
+        nginx_removed = delete_nginx_config(deployment.project_id)
         if not nginx_removed:
             print(f"⚠️ Warning: Failed to remove nginx config for {repo_name}")
         

@@ -6,11 +6,79 @@ import asyncio
 import tempfile
 import re
 from urllib.parse import urlparse
-from docker_build import docker_build
+from docker_build import docker_build, cleanup_old_images
 from docker_up import docker_up
 from docker_run import run_container
 from connection_manager import manager
 from nginx_manager import create_nginx_config, reload_nginx, delete_nginx_config
+
+async def ensure_nginx_proxy_running():
+    """
+    Ensures the nginx proxy container is running before deployment.
+    Creates the nginx container if it doesn't exist.
+    """
+    nginx_container_name = "butler-nginx-proxy"
+    
+    # Check if nginx container is already running
+    result = await asyncio.to_thread(
+        subprocess.run,
+        ["docker", "inspect", "--format", "{{.State.Running}}", nginx_container_name],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode == 0 and result.stdout.strip() == "true":
+        print("✅ Nginx proxy container is already running")
+        return True
+    
+    # Check if container exists but is stopped
+    result = await asyncio.to_thread(
+        subprocess.run,
+        ["docker", "inspect", nginx_container_name],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode == 0:
+        # Container exists but is stopped, start it
+        print("🔄 Starting existing nginx proxy container...")
+        start_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "start", nginx_container_name],
+            capture_output=True,
+            text=True
+        )
+        if start_result.returncode == 0:
+            print("✅ Nginx proxy container started successfully")
+            return True
+        else:
+            print(f"❌ Failed to start nginx proxy container: {start_result.stderr}")
+            return False
+    
+    # Container doesn't exist, create it
+    print("🚀 Creating new nginx proxy container...")
+    create_result = await asyncio.to_thread(
+        subprocess.run,
+        [
+            "docker", "run", "-d",
+            "--name", nginx_container_name,
+            "--network", "devops-butler-net",
+            "-p", "8888:80",
+            "-v", "/opt/homebrew/etc/nginx/servers:/etc/nginx/conf.d",
+            "nginx:alpine"
+        ],
+        capture_output=True,
+        text=True
+    )
+    
+    if create_result.returncode == 0:
+        print("✅ Nginx proxy container created and started successfully")
+        # Wait a moment for nginx to fully start
+        await asyncio.sleep(2)
+        return True
+    else:
+        print(f"❌ Failed to create nginx proxy container: {create_result.stderr}")
+        return False
 from sqlmodel import Session, select
 from database import engine  
 from login import Deployment
@@ -166,6 +234,40 @@ def patch_compose_ports(compose_file_path):
         yaml.safe_dump(compose_data, f)
 
 
+def patch_compose_network(compose_file_path):
+    """
+    Patch the docker-compose file to ensure all services use the devops-butler-net network.
+    """
+    with open(compose_file_path, 'r') as f:
+        compose_data = yaml.safe_load(f)
+
+    # Ensure networks section exists
+    if 'networks' not in compose_data:
+        compose_data['networks'] = {}
+    
+    # Add devops-butler-net as external network
+    compose_data['networks']['devops-butler-net'] = {
+        'external': True
+    }
+    
+    # Add network to all services
+    services = compose_data.get('services', {})
+    for service_name, service in services.items():
+        if 'networks' not in service:
+            service['networks'] = []
+        
+        # Add devops-butler-net if not already present
+        if 'devops-butler-net' not in service['networks']:
+            service['networks'].append('devops-butler-net')
+        
+        print(f"✅ Added devops-butler-net network to service: {service_name}")
+    
+    with open(compose_file_path, 'w') as f:
+        yaml.safe_dump(compose_data, f)
+    
+    print("✅ Successfully patched docker-compose file with network configuration")
+
+
 def patch_env_files_in_compose(compose_file_path, repo_dir):
     import yaml, os
     with open(compose_file_path, 'r') as f:
@@ -275,6 +377,10 @@ async def destroy_deployment(container_name: str, repo_name: str):
 
 
 async def run_pipeline(repo_url: str, user_id: int = None):
+    # Initialize state variables
+    final_status = "failed"
+    server_url = None
+    
     # Validate the Git URL first
     if not validate_git_url(repo_url):
         error_msg = f"❌ Invalid Git repository URL: {repo_url}. Please provide a valid Git repository URL (e.g., https://github.com/user/repo)."
@@ -285,13 +391,21 @@ async def run_pipeline(repo_url: str, user_id: int = None):
     # Clean up any orphaned Nginx configs first
     await cleanup_orphaned_configs()
     
+    # Ensure nginx proxy container is running
+    nginx_ready = await ensure_nginx_proxy_running()
+    if not nginx_ready:
+        error_msg = "❌ Failed to start nginx proxy container"
+        await manager.broadcast(error_msg)
+        print(error_msg)
+        return None, None
+    
     # Extract repository name for pretty URLs
     repo_name = extract_repo_name(repo_url)
     # The unique name for the *new* container we are about to create
-    new_container_name = f"{repo_name}-{str(uuid.uuid4())[:4]}"  # A good pattern is name + short unique id
+    new_container_name = f"{repo_name}-{str(uuid.uuid4())[:8]}"  # Use longer unique ID
     
     # --- VERIFICATION PRINT ---
-    print(f"PIPELINE STARTED. Master Name: {new_container_name}")
+    print(f"PIPELINE STARTED. Container Name: {new_container_name}")
     print(f"Clean Repo Name: {repo_name}")
     # ------------------------
     
@@ -324,7 +438,7 @@ async def run_pipeline(repo_url: str, user_id: int = None):
         session.commit()
         session.refresh(db_deployment)
     await manager.broadcast(f"🔵 STATUS: Starting pipeline for {repo_url} [ID: {new_container_name}]")
-    await manager.broadcast(f"🌐 Will be available at: http://{repo_name}.localhost:8888")
+    await manager.broadcast(f"🌐 Will be available at: http://{new_container_name}.localhost:8888")
     await asyncio.sleep(1)
 
     # Instead of a local directory, create a unique temporary one
@@ -332,6 +446,7 @@ async def run_pipeline(repo_url: str, user_id: int = None):
     print(f"Created temporary workspace: {repo_dir}")
 
     try:
+        final_status = "starting"
         await manager.broadcast(f"Running pipeline for {repo_url}")
         await asyncio.sleep(1)
         
@@ -419,6 +534,7 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                     f.write(patched_yaml)
                 print(f"AI-patched docker-compose file written to {compose_file}")
             patch_compose_ports(compose_file) # Patch ports before running compose (fallback/manual)
+            patch_compose_network(compose_file) # Ensure all services use devops-butler-net network
             patch_env_files_in_compose(compose_file, repo_dir) # Patch env files before running compose
             service_ports = await docker_up(repo_dir)
             if service_ports:
@@ -428,7 +544,12 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                 primary_port = primary_service['internal_port']
                 await manager.broadcast(f"⏩ STEP: Setting up Nginx for primary service '{primary_container_name}' on internal port {primary_port}")
                 print(f"🔧 VERIFICATION: Creating Nginx config with repo_name='{repo_name}', container_name='{primary_container_name}', port={primary_port}")
-                nginx_success = create_nginx_config(repo_name, primary_container_name, primary_port)
+                nginx_success = create_nginx_config(
+                    project_id=f"{repo_name}-{primary_container_name}",
+                    repo_name=repo_name,
+                    container_name=primary_container_name,
+                    internal_port=primary_port
+                )
                 if not nginx_success:
                     await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Failed to create Nginx config.")
                     with Session(engine) as session:
@@ -441,14 +562,7 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                     return None, None
                 await reload_nginx()
                 server_url = f"http://{repo_name}.localhost:8888"
-                with Session(engine) as session:
-                    deployment_to_update = session.get(Deployment, db_deployment.id)
-                    if deployment_to_update:
-                        deployment_to_update.status = "success"
-                        deployment_to_update.deployed_url = server_url
-                        session.add(deployment_to_update)
-                        session.commit()
-                await manager.broadcast(f"🚀 SUCCESS! Deployed to: {server_url}")
+                final_status = "success"
                 return new_container_name, service_ports
             else:
                 await manager.broadcast("❌ STEP-FAILED: Docker Compose failed to expose any services.")
@@ -522,7 +636,12 @@ async def run_pipeline(repo_url: str, user_id: int = None):
             
             # Step 3: Create the Nginx config with the discovered internal port
             print(f"🔧 VERIFICATION: Creating Nginx config with repo_name='{repo_name}', container_name='{new_container_name}', port={internal_port}")
-            nginx_success = create_nginx_config(repo_name, new_container_name, internal_port)
+            nginx_success = create_nginx_config(
+                project_id=f"{repo_name}-{new_container_name}",
+                repo_name=repo_name,
+                container_name=new_container_name,
+                internal_port=internal_port
+            )
             if not nginx_success:
                 await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Failed to create Nginx config.")
                 with Session(engine) as session:
@@ -538,14 +657,7 @@ async def run_pipeline(repo_url: str, user_id: int = None):
             await reload_nginx()
 
             server_url = f"http://{repo_name}.localhost:{desired_port}" # Use the found/assigned port
-            with Session(engine) as session:
-                deployment_to_update = session.get(Deployment, db_deployment.id)
-                if deployment_to_update:
-                    deployment_to_update.status = "success"
-                    deployment_to_update.deployed_url = server_url
-                    session.add(deployment_to_update)
-                    session.commit()
-            await manager.broadcast(f"🚀 SUCCESS! Application deployed at: {server_url}")
+            final_status = "success"
             return new_container_name, [server_url]
         # Priority 3: AI fallback
         else:
@@ -565,6 +677,22 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                 print(f"✅ Reference Dockerfile saved at {reference_dockerfile_path}")
 
                 # Build the Docker image
+                # Patch for PHP projects: Install oniguruma dependency if any docker-php-ext-install is present
+                dockerfile_full_path = os.path.join(repo_dir, "Dockerfile")
+                with open(dockerfile_full_path, "r") as f:
+                    dockerfile_content = f.read()
+
+                # Regex to find any 'RUN docker-php-ext-install' command
+                pattern = r"^(RUN\s+docker-php-ext-install.*)$"
+                # Replacement to prepend the oniguruma dependency installation on a new line
+                replacement = r"RUN apt-get update && apt-get install -y libonig-dev pkg-config\n\1"
+
+                if re.search(pattern, dockerfile_content, re.MULTILINE):
+                    fixed_dockerfile_content = re.sub(pattern, replacement, dockerfile_content, flags=re.MULTILINE)
+                    with open(dockerfile_full_path, "w") as f:
+                        f.write(fixed_dockerfile_content)
+                    print("✅ Patched Dockerfile to install oniguruma dependency for PHP extensions")
+
                 image_name = await docker_build(new_container_name, repo_dir)
                 if not image_name:
                     print(f"❌ Failed to build Docker image for {new_container_name}")
@@ -607,8 +735,13 @@ async def run_pipeline(repo_url: str, user_id: int = None):
 
                 print(f"✅ Container {new_container_name} started successfully.")
                 
-                # Create Nginx config
-                nginx_success = create_nginx_config(repo_name, new_container_name, internal_port)
+                # Create Nginx config - use consistent port (8888 for nginx proxy)
+                nginx_success = create_nginx_config(
+                    project_id=f"{repo_name}-{new_container_name}",
+                    repo_name=repo_name,
+                    container_name=new_container_name,
+                    internal_port=internal_port
+                )
                 if not nginx_success:
                     await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Failed to create Nginx config.")
                     with Session(engine) as session:
@@ -623,15 +756,9 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                 # Reload Nginx
                 await reload_nginx()
 
-                server_url = f"http://{repo_name}.localhost:{desired_port}"
-                with Session(engine) as session:
-                    deployment_to_update = session.get(Deployment, db_deployment.id)
-                    if deployment_to_update:
-                        deployment_to_update.status = "success"
-                        deployment_to_update.deployed_url = server_url
-                        session.add(deployment_to_update)
-                        session.commit()
-                await manager.broadcast(f"🚀 SUCCESS! Application deployed at: {server_url}")
+                # Always use port 8888 for nginx proxy access
+                server_url = f"http://{repo_name}.localhost:8888"
+                final_status = "success"
                 return new_container_name, [server_url]
             else:
                 print("❌ Failed to generate Dockerfile.")
@@ -645,45 +772,35 @@ async def run_pipeline(repo_url: str, user_id: int = None):
                 await manager.broadcast("🔴 STATUS: Pipeline failed.")
                 return None, None
     finally:
-        # This 'finally' block ensures the temp directory is always cleaned up
-        print(f"Cleaning up workspace: {repo_dir}")
-        shutil.rmtree(repo_dir)
-        # Debugging: Check if the container is running
-        print(f"🔍 Checking container status for {new_container_name}")
-        container_status = await asyncio.to_thread(
-            subprocess.run,
-            ["docker", "ps", "--filter", f"name={new_container_name}", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True
-        )
-        if new_container_name not in container_status.stdout:
-            print(f"❌ Container {new_container_name} is not running. Logs:")
-            container_logs = await asyncio.to_thread(
-                subprocess.run,
-                ["docker", "logs", new_container_name],
-                capture_output=True,
-                text=True
-            )
-            print(container_logs.stdout)
+        # This block is GUARANTEED to run.
+        print(f"--- Pipeline Concluding: Status is '{final_status}' ---")
+        
+        # Update the database with the final outcome
+        with Session(engine) as session:
+            deployment_to_update = session.get(Deployment, db_deployment.id)
+            if deployment_to_update:
+                deployment_to_update.status = final_status
+                if server_url:  # Only add the URL if it was successful
+                    deployment_to_update.deployed_url = server_url
+                session.add(deployment_to_update)
+                session.commit()
+        
+        # Clean up the temporary workspace
+        if os.path.exists(repo_dir):
+            print(f"Cleaning up workspace: {repo_dir}")
+            shutil.rmtree(repo_dir)
+        
+        # Clean up old Docker images to save disk space (keep last 3 images per repo)
+        try:
+            print(f"🧹 Cleaning up old images for {repo_name}...")
+            await cleanup_old_images(repo_name, keep_count=3)
+        except Exception as e:
+            print(f"⚠️ Warning: Image cleanup failed: {e}")
 
-        # Debugging: Check Nginx configuration
-        print(f"🔍 Checking Nginx configuration for {repo_name}")
-        nginx_config_path = f"/opt/homebrew/etc/nginx/servers/{repo_name}.conf"
-        if not os.path.exists(nginx_config_path):
-            print(f"❌ Nginx configuration file {nginx_config_path} does not exist.")
+        # Broadcast the final status
+        if final_status == "success":
+            await manager.broadcast(f"🚀 SUCCESS! Deployment is live at: {server_url}")
         else:
-            with open(nginx_config_path, "r") as nginx_config:
-                print(f"Nginx configuration for {repo_name}:")
-                print(nginx_config.read())
-
-        # Debugging: Test port accessibility
-        print(f"🔍 Testing port accessibility for {server_url}")
-        port_test = await asyncio.to_thread(
-            subprocess.run,
-            ["curl", "-I", server_url],
-            capture_output=True,
-            text=True
-        )
-        if port_test.returncode != 0:
-            print(f"❌ Port test failed for {server_url}. Curl output:")
-            print(port_test.stderr)
+            # The 'server_url' error came from here!
+            # Now we just report a generic failure.
+            await manager.broadcast(f"🔴 ERROR: Deployment failed. Check server logs for details.")

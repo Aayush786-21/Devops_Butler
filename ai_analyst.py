@@ -4,6 +4,7 @@ import re  # Import the regular expressions module
 import google.generativeai as genai
 from config import GOOGLE_API_KEY # Import our securely loaded key
 import glob
+from ai_rate_limiter import rate_limiter
 
 # type: ignore[attr-defined]
 genai.configure(api_key=GOOGLE_API_KEY)
