@@ -157,7 +157,11 @@ class GitHubOAuth:
                 "language": "JavaScript",
                 "updated_at": "2024-01-15T10:30:00Z",
                 "private": False,
-                "fork": False
+                "fork": False,
+                "owner": {
+                    "login": "facebook",
+                    "avatar_url": "https://avatars.githubusercontent.com/u/69631?v=4"
+                }
             },
             {
                 "name": "vue",
@@ -168,7 +172,11 @@ class GitHubOAuth:
                 "language": "JavaScript",
                 "updated_at": "2024-01-14T15:45:00Z",
                 "private": False,
-                "fork": False
+                "fork": False,
+                "owner": {
+                    "login": "vuejs",
+                    "avatar_url": "https://avatars.githubusercontent.com/u/6128107?v=4"
+                }
             },
             {
                 "name": "django",
@@ -179,7 +187,11 @@ class GitHubOAuth:
                 "language": "Python",
                 "updated_at": "2024-01-13T09:20:00Z",
                 "private": False,
-                "fork": False
+                "fork": False,
+                "owner": {
+                    "login": "django",
+                    "avatar_url": "https://avatars.githubusercontent.com/u/27804?v=4"
+                }
             },
             {
                 "name": "flask",
@@ -190,7 +202,11 @@ class GitHubOAuth:
                 "language": "Python",
                 "updated_at": "2024-01-12T14:10:00Z",
                 "private": False,
-                "fork": False
+                "fork": False,
+                "owner": {
+                    "login": "pallets",
+                    "avatar_url": "https://avatars.githubusercontent.com/u/16748505?v=4"
+                }
             },
             {
                 "name": "next.js",
@@ -201,7 +217,11 @@ class GitHubOAuth:
                 "language": "JavaScript",
                 "updated_at": "2024-01-11T11:25:00Z",
                 "private": False,
-                "fork": False
+                "fork": False,
+                "owner": {
+                    "login": "vercel",
+                    "avatar_url": "https://avatars.githubusercontent.com/u/14985020?v=4"
+                }
             },
             {
                 "name": "fastapi",
@@ -212,41 +232,78 @@ class GitHubOAuth:
                 "language": "Python",
                 "updated_at": "2024-01-10T16:40:00Z",
                 "private": False,
-                "fork": False
+                "fork": False,
+                "owner": {
+                    "login": "tiangolo",
+                    "avatar_url": "https://avatars.githubusercontent.com/u/1326112?v=4"
+                }
             }
         ]
         return demo_repos
     
     async def get_public_repositories_by_username(self, username: str) -> List[Dict[str, Any]]:
         """Get public repositories for any GitHub username without authentication."""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"https://api.github.com/users/{username}/repos",
-                headers={"Accept": "application/vnd.github.v3+json"},
-                params={
-                    "sort": "updated",
-                    "per_page": 30,
-                    "type": "public"
-                }
-            )
-            
-            if response.status_code == 200:
-                repos = response.json()
-                return [
-                    {
-                        "name": repo["name"],
-                        "full_name": repo["full_name"],
-                        "html_url": repo["html_url"],
-                        "clone_url": repo["clone_url"],
-                        "description": repo.get("description", ""),
-                        "language": repo.get("language"),
-                        "updated_at": repo["updated_at"],
-                        "private": repo["private"],
-                        "fork": repo["fork"]
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                print(f"🔍 Fetching repositories for user: {username}")
+                response = await client.get(
+                    f"https://api.github.com/users/{username}/repos",
+                    headers={
+                        "Accept": "application/vnd.github.v3+json",
+                        "User-Agent": "DevOps-Butler/1.0"
+                    },
+                    params={
+                        "sort": "updated",
+                        "per_page": 30,
+                        "type": "owner"
                     }
-                    for repo in repos
-                ]
-            return []
+                )
+                
+                print(f"📊 GitHub API Response: {response.status_code}")
+                
+                if response.status_code == 200:
+                    repos = response.json()
+                    print(f"✅ Found {len(repos)} repositories for {username}")
+                    
+                    return [
+                        {
+                            "name": repo["name"],
+                            "full_name": repo["full_name"],
+                            "html_url": repo["html_url"],
+                            "clone_url": repo["clone_url"],
+                            "description": repo.get("description", ""),
+                            "language": repo.get("language"),
+                            "updated_at": repo["updated_at"],
+                            "private": repo["private"],
+                            "fork": repo["fork"],
+                            "owner": {
+                                "login": repo["owner"]["login"],
+                                "avatar_url": repo["owner"].get("avatar_url", "")
+                            }
+                        }
+                        for repo in repos
+                    ]
+                elif response.status_code == 404:
+                    print(f"⚠️ User '{username}' not found on GitHub")
+                    raise Exception(f"GitHub user '{username}' not found. Please check the username and try again.")
+                elif response.status_code == 403:
+                    print(f"⚠️ GitHub API rate limit exceeded")
+                    raise Exception("GitHub API rate limit exceeded. Please try again later.")
+                else:
+                    print(f"❌ GitHub API error {response.status_code}: {response.text}")
+                    raise Exception(f"GitHub API error (status {response.status_code}). Please try again later.")
+        
+        except httpx.TimeoutException:
+            print(f"❌ Timeout while fetching repositories for {username}")
+            raise Exception("Request timeout. Please check your internet connection and try again.")
+        except httpx.RequestError as e:
+            print(f"❌ Network error while fetching repositories: {e}")
+            raise Exception("Network error. Please check your internet connection and try again.")
+        except Exception as e:
+            print(f"❌ Error fetching repositories for {username}: {e}")
+            if "GitHub user" in str(e) or "rate limit" in str(e) or "timeout" in str(e).lower() or "network" in str(e).lower():
+                raise e  # Re-raise our custom exceptions
+            raise Exception(f"Failed to load repositories: {str(e)}")
     
     async def authenticate_or_create_user(self, github_user_data: Dict[str, Any], access_token: str = None) -> Optional[User]:
         """Authenticate existing user or create new one from GitHub data."""

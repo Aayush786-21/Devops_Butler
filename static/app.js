@@ -426,6 +426,9 @@ async function searchPublicRepositories(username) {
         return;
     }
     
+    // Convert username to lowercase for consistency
+    username = username.trim().toLowerCase();
+    
     // Hide refresh button for public searches
     if (refreshBtn) refreshBtn.style.display = 'none';
     
@@ -436,18 +439,35 @@ async function searchPublicRepositories(username) {
     hideWelcomeMessage();
     
     try {
-        const response = await fetch(`/api/repositories/${username.trim()}`);
+        const response = await fetch(`/api/repositories/${username}`);
         const data = await response.json();
         
         if (response.ok && data.repositories) {
-            displayRepositories(data.repositories, `${username}'s repositories`);
+            displayRepositories(data.repositories, `${data.username}'s repositories`);
         } else {
             throw new Error(data.detail || 'Failed to load repositories');
         }
     } catch (error) {
         console.error('Failed to load repositories:', error);
-        reposError.textContent = 'Failed to load repositories. Please check the username and try again.';
+        let errorMessage = 'Failed to load repositories.';
+        
+        if (error.message.includes('not found')) {
+            errorMessage = `GitHub user '${username}' not found. Please check the username and try again.`;
+        } else if (error.message.includes('rate limit')) {
+            errorMessage = 'GitHub API rate limit exceeded. Please try again later.';
+        } else if (error.message.includes('network') || error.message.includes('timeout')) {
+            errorMessage = 'Network error. Please check your connection and try again.';
+        }
+        
+        reposError.textContent = errorMessage;
         reposError.style.display = 'block';
+        
+        // Show helpful suggestion for demo
+        if (username !== 'demo_user' && !error.message.includes('rate limit')) {
+            setTimeout(() => {
+                showToast('💡 Try searching for "facebook", "vercel", or "demo_user" to see sample repositories', 'info');
+            }, 2000);
+        }
     } finally {
         reposLoading.style.display = 'none';
     }
@@ -501,12 +521,24 @@ function displayRepositories(repositories, title = 'Repositories') {
                 <span class="repo-language">${repo.language || 'Unknown'}</span>
                 <span class="repo-updated">Updated ${formatDate(repo.updated_at)}</span>
             </div>
+            <div class="repo-actions">
+                <button class="btn btn-primary btn-sm" onclick="viewRepositoryTree('${repo.owner.login}', '${repo.name}')">
+                    📁 Browse Files
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="selectRepository(this.closest('.repo-card'))">
+                    🚀 Deploy
+                </button>
+            </div>
         </div>
     `).join('');
     
     // Add click handlers
     document.querySelectorAll('.repo-card').forEach(card => {
-        card.addEventListener('click', () => selectRepository(card));
+        card.addEventListener('click', (e) => {
+            if (!e.target.classList.contains('btn')) {
+                selectRepository(card);
+            }
+        });
     });
 }
 
@@ -542,6 +574,12 @@ function formatDate(dateString) {
     if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
     if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
     return `${Math.floor(diffDays / 365)} years ago`;
+}
+
+// Repository Tree Navigation
+function viewRepositoryTree(owner, repo) {
+    // Navigate to repository tree view (no authentication required for public repos)
+    window.location.href = `/repository-tree?owner=${owner}&repo=${repo}`;
 }
 
 // Search repositories button

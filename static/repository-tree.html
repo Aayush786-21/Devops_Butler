@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repository Tree - DevOps Butler</title>
+    <link rel="stylesheet" href="/static/styles.css"/>
+    <link rel="icon" type="image/png" href="/icons/logo.png"/>
+    <style>
+        .repository-tree-container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        
+        .tree-header {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+        
+        .breadcrumb-item {
+            color: var(--text-light);
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        
+        .breadcrumb-item:hover {
+            color: var(--primary);
+        }
+        
+        .breadcrumb-separator {
+            color: var(--text-light);
+        }
+        
+        .tree-content {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 1rem;
+            min-height: 600px;
+        }
+        
+        .tree-sidebar {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1rem;
+            box-shadow: var(--shadow-lg);
+            overflow-y: auto;
+            max-height: 600px;
+        }
+        
+        .tree-item {
+            display: flex;
+            align-items: center;
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+        }
+        
+        .tree-item:hover {
+            background: var(--bg-secondary);
+            transform: translateX(2px);
+        }
+        
+        .tree-item.active {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .tree-item-icon {
+            margin-right: 0.5rem;
+            font-size: 1rem;
+        }
+        
+        .tree-item.folder .tree-item-icon {
+            color: #fbbf24;
+        }
+        
+        .tree-item.file .tree-item-icon {
+            color: var(--text-light);
+        }
+        
+        .tree-item-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .file-content {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow-lg);
+            overflow-y: auto;
+            max-height: 600px;
+        }
+        
+        .file-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .file-name {
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+        
+        .file-size {
+            color: var(--text-light);
+            font-size: 0.9rem;
+        }
+        
+        .file-content pre {
+            background: var(--bg-secondary);
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .loading-tree {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            color: var(--text-light);
+        }
+        
+        .loading-tree .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--border-color);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .back-button {
+            background: var(--bg-secondary);
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .back-button:hover {
+            background: var(--border-color);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-light);
+        }
+        
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="repository-tree-container">
+        <div class="tree-header">
+            <div class="breadcrumb" id="breadcrumb">
+                <span class="breadcrumb-item" onclick="navigateToRoot()">Repositories</span>
+                <span class="breadcrumb-separator">/</span>
+                <span class="breadcrumb-item" id="current-repo">Loading...</span>
+            </div>
+            <button class="back-button" onclick="goBackToRepos()">
+                ← Back to Repositories
+            </button>
+        </div>
+        
+        <div class="tree-content">
+            <div class="tree-sidebar">
+                <div id="tree-loading" class="loading-tree">
+                    <div class="spinner"></div>
+                    <p>Loading repository structure...</p>
+                </div>
+                <div id="tree-container" style="display: none;">
+                    <!-- Tree items will be populated here -->
+                </div>
+            </div>
+            
+            <div class="file-content">
+                <div id="file-loading" class="loading-tree" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Loading file content...</p>
+                </div>
+                <div id="file-container">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📁</div>
+                        <p>Select a file to view its content</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/repository-tree.js"></script>
+</body>
+</html>

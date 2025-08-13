@@ -17,6 +17,7 @@ from nginx_manager import delete_nginx_config, reload_nginx
 import asyncio
 from auth import authenticate_user, create_user, create_access_token, get_current_user
 from github_oauth import github_oauth
+from repository_tree_api import router as repository_tree_router
 from datetime import timedelta
 
 class Project(BaseModel):
@@ -45,6 +46,9 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 app.mount("/icons", StaticFiles(directory="icons"), name="icons")
 
+# Include repository tree API routes
+app.include_router(repository_tree_router)
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     html_file_path = os.path.join(static_dir, "index.html")
@@ -54,6 +58,12 @@ async def read_root():
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
     html_file_path = os.path.join(static_dir, "login.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
+@app.get("/repository-tree", response_class=HTMLResponse)
+async def repository_tree_page():
+    html_file_path = os.path.join(static_dir, "repository-tree.html")
     with open(html_file_path, "r") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
@@ -186,12 +196,38 @@ async def deploy(
                 f.write(await backend_env.read())
 
         # Run pipeline with user context
-        dockerfile_path, deployed_urls = await run_pipeline(git_url, user_id=current_user.id)
-        if dockerfile_path and deployed_urls:
-            deployed_url = deployed_urls[0]
-            return {"message": "Deployment successful!", "deployed_url": deployed_url, "dockerfile_path": dockerfile_path}
-        else:
-            return {"message": "Deployment started, but no Dockerfile or deployed URL was returned.", "deployed_url": None, "dockerfile_path": None}
+        result = await run_pipeline(git_url, user_id=current_user.id)
+        if result and len(result) == 2:
+            container_name, deployed_urls_or_service_ports = result
+            if container_name and deployed_urls_or_service_ports:
+                # Handle different return formats from run_pipeline
+                if isinstance(deployed_urls_or_service_ports, list):
+                    # Simple deployment - list of URLs
+                    deployed_url = deployed_urls_or_service_ports[0]
+                elif isinstance(deployed_urls_or_service_ports, dict):
+                    # Docker compose deployment - service ports dict
+                    # Extract the first service's URL
+                    first_service = list(deployed_urls_or_service_ports.keys())[0]
+                    service_info = deployed_urls_or_service_ports[first_service]
+                    if 'external_url' in service_info:
+                        deployed_url = service_info['external_url']
+                    else:
+                        # Fallback to constructing URL
+                        repo_name = extract_repo_name(git_url)
+                        deployed_url = f"http://{repo_name}.localhost:8888"
+                else:
+                    # Fallback
+                    repo_name = extract_repo_name(git_url)
+                    deployed_url = f"http://{repo_name}.localhost:8888"
+                    
+                return {
+                    "message": "Deployment successful!", 
+                    "deployed_url": deployed_url, 
+                    "container_name": container_name
+                }
+        
+        # If we get here, something went wrong
+        raise Exception("Pipeline returned invalid or empty result")
     except Exception as e:
         print(f"❌ Deployment failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Deployment failed: {str(e)}")

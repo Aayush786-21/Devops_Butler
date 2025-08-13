@@ -173,6 +173,8 @@ async def ai_patch_docker_compose(compose_file_path: str) -> str | None:
         You are an expert DevOps engineer. Here is a docker-compose.yaml file. Please:
         - Ensure all services use the external Docker network 'devops-butler-net'.
         - If any host ports are already in use, assign the next available free port.
+        - Remove any volume mounts that bind to `/app/node_modules`, `/app/.next`, or other problematic paths that cause Docker sharing issues on macOS.
+        - Remove any volumes that mount node_modules, .next, dist, or build directories from the host.
         - Make any other adjustments needed for best practices on a local multi-container deployment.
         - Return only the fixed YAML content.
 

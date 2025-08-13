@@ -310,8 +310,7 @@ async def cleanup_old_images(repo_name: str, keep_count: int = 3) -> None:
         list_command = [
             "docker", "images",
             "--filter", f"reference=local-registry/{repo_name}",
-            "--format", "{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
-            "--sort=created"
+            "--format", "{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}"
         ]
         
         result = await asyncio.to_thread(
@@ -336,16 +335,30 @@ async def cleanup_old_images(repo_name: str, keep_count: int = 3) -> None:
                         if not image_ref.endswith(':latest'):
                             print(f"🗑️ Removing old image: {image_ref} ({image_id[:12]})")
                             
-                            remove_command = ["docker", "rmi", image_ref]
-                            await asyncio.to_thread(
-                                subprocess.run,
-                                remove_command,
-                                capture_output=True
-                            )
+                            try:
+                                remove_command = ["docker", "rmi", image_ref]
+                                remove_result = await asyncio.to_thread(
+                                    subprocess.run,
+                                    remove_command,
+                                    capture_output=True,
+                                    text=True
+                                )
+                                
+                                if remove_result.returncode != 0:
+                                    print(f"⚠️ Warning: Failed to remove {image_ref}: {remove_result.stderr}")
+                                    
+                            except Exception as remove_error:
+                                print(f"⚠️ Warning: Exception while removing {image_ref}: {remove_error}")
                 
                 print(f"✅ Cleanup completed, kept {min(len(lines), keep_count)} most recent images")
             else:
                 print(f"📦 Only {len(lines)} images found, no cleanup needed")
+        elif result.returncode != 0:
+            print(f"⚠️ Warning: Failed to list images for {repo_name}: {result.stderr}")
+        else:
+            print(f"ℹ️ No images found for {repo_name}")
         
+    except subprocess.SubprocessError as e:
+        print(f"⚠️ Subprocess error during image cleanup: {e}")
     except Exception as e:
-        print(f"⚠️ Error during image cleanup: {e}")
+        print(f"⚠️ Unexpected error during image cleanup: {e}")

@@ -14,70 +14,21 @@ from nginx_manager import create_nginx_config, reload_nginx, delete_nginx_config
 
 async def ensure_nginx_proxy_running():
     """
-    Ensures the nginx proxy container is running before deployment.
-    Creates the nginx container if it doesn't exist.
+    Ensures the nginx proxy container is running before deployment using bulletproof methods.
     """
-    nginx_container_name = "butler-nginx-proxy"
+    from nginx_manager import create_bulletproof_nginx_container, validate_nginx_config
     
-    # Check if nginx container is already running
-    result = await asyncio.to_thread(
-        subprocess.run,
-        ["docker", "inspect", "--format", "{{.State.Running}}", nginx_container_name],
-        capture_output=True,
-        text=True
-    )
+    print("🛡️ Ensuring bulletproof nginx proxy is ready...")
     
-    if result.returncode == 0 and result.stdout.strip() == "true":
-        print("✅ Nginx proxy container is already running")
-        return True
+    # First validate and clean any problematic configs
+    await validate_nginx_config()
     
-    # Check if container exists but is stopped
-    result = await asyncio.to_thread(
-        subprocess.run,
-        ["docker", "inspect", nginx_container_name],
-        capture_output=True,
-        text=True
-    )
-    
-    if result.returncode == 0:
-        # Container exists but is stopped, start it
-        print("🔄 Starting existing nginx proxy container...")
-        start_result = await asyncio.to_thread(
-            subprocess.run,
-            ["docker", "start", nginx_container_name],
-            capture_output=True,
-            text=True
-        )
-        if start_result.returncode == 0:
-            print("✅ Nginx proxy container started successfully")
-            return True
-        else:
-            print(f"❌ Failed to start nginx proxy container: {start_result.stderr}")
-            return False
-    
-    # Container doesn't exist, create it
-    print("🚀 Creating new nginx proxy container...")
-    create_result = await asyncio.to_thread(
-        subprocess.run,
-        [
-            "docker", "run", "-d",
-            "--name", nginx_container_name,
-            "--network", "devops-butler-net",
-            "-p", "8888:80",
-            "-v", "/opt/homebrew/etc/nginx/servers:/etc/nginx/conf.d",
-            "nginx:alpine"
-        ],
-        capture_output=True,
-        text=True
-    )
-    
-    if create_result.returncode == 0:
-        print("✅ Nginx proxy container created and started successfully")
-        # Wait a moment for nginx to fully start
-        await asyncio.sleep(2)
+    # Use the bulletproof container creation
+    if await create_bulletproof_nginx_container():
+        print("✅ Bulletproof nginx proxy is ready")
         return True
     else:
-        print(f"❌ Failed to create nginx proxy container: {create_result.stderr}")
+        print("❌ Failed to ensure nginx proxy readiness")
         return False
 from sqlmodel import Session, select
 from database import engine  
@@ -136,11 +87,7 @@ def validate_git_url(git_url: str) -> bool:
 def extract_repo_name(git_url: str) -> str:
     """
     Extracts the repository name from a Git URL.
-    Handles various Git URL formats:
-    - https://github.com/user/repo.git
-    - https://github.com/user/repo
-    - git@github.com:user/repo.git
-    - git@github.com:user/repo
+    Handles various Git URL formats and creates a more unique identifier.
     """
     try:
         # Remove .git extension if present
@@ -150,24 +97,40 @@ def extract_repo_name(git_url: str) -> str:
         if clean_url.startswith('git@'):
             # Extract the part after the colon
             repo_part = clean_url.split(':')[-1]
-            # Get the last part (repo name)
-            repo_name = repo_part.split('/')[-1]
+            # Get user and repo parts
+            parts = repo_part.split('/')
+            if len(parts) >= 2:
+                user_name = parts[-2]
+                repo_name = parts[-1]
+            else:
+                user_name = "unknown"
+                repo_name = parts[-1] if parts else "unknown"
         else:
             # Handle HTTPS URLs (https://github.com/user/repo)
             parsed = urlparse(clean_url)
             path_parts = parsed.path.strip('/').split('/')
-            repo_name = path_parts[-1] if path_parts else "unknown"
+            if len(path_parts) >= 2:
+                user_name = path_parts[-2]
+                repo_name = path_parts[-1]
+            else:
+                user_name = "unknown"
+                repo_name = path_parts[-1] if path_parts else "unknown"
         
-        # Clean up the repo name (remove any special characters)
+        # Clean up names (remove any special characters)
+        user_name = re.sub(r'[^a-zA-Z0-9-]', '-', user_name)
         repo_name = re.sub(r'[^a-zA-Z0-9-]', '-', repo_name)
-        # Ensure it starts with a letter or number
-        if repo_name and not repo_name[0].isalnum():
-            repo_name = 'repo-' + repo_name
         
-        return repo_name.lower()
+        # Create a more unique identifier that includes user
+        unique_name = f"{user_name}-{repo_name}"
+        
+        # Ensure it starts with a letter or number
+        if unique_name and not unique_name[0].isalnum():
+            unique_name = 'repo-' + unique_name
+        
+        return unique_name.lower()
     except Exception as e:
         print(f"Error extracting repo name from {git_url}: {e}")
-        return "unknown-repo"
+        return f"unknown-repo-{str(uuid.uuid4())[:8]}"
 
 
 def find_exposed_port(dockerfile_path: str) -> int | None:
@@ -185,6 +148,69 @@ def find_exposed_port(dockerfile_path: str) -> int | None:
                 return port
         return None
     except FileNotFoundError:
+        return None
+
+
+async def detect_running_port(container_name: str) -> int | None:
+    """
+    Detects what port a running container is actually listening on by inspecting its logs and processes.
+    """
+    try:
+        # First, try to get port info from container logs
+        logs_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "logs", "--tail", "50", container_name],
+            capture_output=True,
+            text=True
+        )
+        
+        if logs_result.returncode == 0:
+            logs = logs_result.stdout
+            print(f"📋 Container logs for port detection:\n{logs[-500:]}")
+            
+            # Common patterns for port detection in logs
+            port_patterns = [
+                r'listening on.*?:(\d+)',
+                r'server.*?running.*?on.*?:(\d+)',
+                r'Local:\s+http://localhost:(\d+)',
+                r'➜\s+Local:\s+http://localhost:(\d+)',
+                r'listening.*?port\s+(\d+)',
+                r'started.*?on.*?port\s+(\d+)',
+                r'server.*?listening.*?(\d+)',
+                r'running.*?on.*?port\s+(\d+)',
+            ]
+            
+            for pattern in port_patterns:
+                matches = re.findall(pattern, logs, re.IGNORECASE)
+                if matches:
+                    detected_port = int(matches[-1])  # Use the most recent match
+                    print(f"🔍 Detected port {detected_port} from container logs")
+                    return detected_port
+        
+        # If log parsing fails, try to inspect the container's network settings
+        inspect_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "inspect", container_name, "--format", "{{json .NetworkSettings.Ports}}"],
+            capture_output=True,
+            text=True
+        )
+        
+        if inspect_result.returncode == 0:
+            import json
+            ports_data = json.loads(inspect_result.stdout.strip())
+            print(f"🔍 Container port mappings: {ports_data}")
+            
+            # Look for exposed ports
+            for port_spec, mappings in ports_data.items():
+                if '/' in port_spec:
+                    port_num = int(port_spec.split('/')[0])
+                    print(f"🔍 Found exposed port {port_num} from container inspection")
+                    return port_num
+        
+        return None
+        
+    except Exception as e:
+        print(f"⚠️ Error detecting running port for {container_name}: {e}")
         return None
 
 
@@ -794,8 +820,10 @@ async def run_pipeline(repo_url: str, user_id: int = None):
         try:
             print(f"🧹 Cleaning up old images for {repo_name}...")
             await cleanup_old_images(repo_name, keep_count=3)
+            print(f"✅ Image cleanup completed successfully")
         except Exception as e:
             print(f"⚠️ Warning: Image cleanup failed: {e}")
+            # Don't let cleanup failures affect the deployment result
 
         # Broadcast the final status
         if final_status == "success":

@@ -177,45 +177,465 @@ async def is_container_running(container_name: str) -> bool:
         # This will happen if the container doesn't exist at all
         return False
 
-async def reload_nginx():
+async def validate_nginx_config() -> bool:
     """
-    Waits for the Nginx proxy to be running, then gracefully reloads it.
+    Validate all nginx configuration files before reload.
+    Returns True if all configs are valid, False otherwise.
+    """
+    try:
+        config_dir = "/opt/homebrew/etc/nginx/servers"
+        if not os.path.exists(config_dir):
+            print("✅ No config directory, validation passed")
+            return True
+        
+        config_files = [f for f in os.listdir(config_dir) if f.endswith('.conf')]
+        
+        for config_file in config_files:
+            config_path = os.path.join(config_dir, config_file)
+            try:
+                with open(config_path, 'r') as f:
+                    content = f.read()
+                
+                # Extract container name from proxy_pass
+                import re
+                match = re.search(r'proxy_pass http://([^:]+):', content)
+                if match:
+                    container_name = match.group(1)
+                    
+                    # Check if container exists and is running
+                    result = await asyncio.to_thread(
+                        subprocess.run,
+                        ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if result.returncode != 0 or result.stdout.strip() != "true":
+                        print(f"⚠️ Invalid config: {config_file} references non-running container {container_name}")
+                        print(f"🗑️ Removing invalid config: {config_file}")
+                        os.remove(config_path)
+                        
+            except Exception as e:
+                print(f"⚠️ Error validating {config_file}: {e}")
+                print(f"🗑️ Removing problematic config: {config_file}")
+                try:
+                    os.remove(config_path)
+                except:
+                    pass
+        
+        print("✅ Nginx configuration validation completed")
+        return True
+        
+    except Exception as e:
+        print(f"⚠️ Error during config validation: {e}")
+        return False
+
+
+async def verify_nginx_health(container_name: str) -> bool:
+    """
+    Verify nginx container health with custom checks that don't rely on external tools.
+    """
+    try:
+        # Check 1: Container is running
+        running_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
+            capture_output=True,
+            text=True
+        )
+        
+        if running_result.returncode != 0 or running_result.stdout.strip() != "true":
+            print(f"⚠️ Container {container_name} is not running")
+            return False
+        
+        # Check 2: Nginx process is running inside the container
+        process_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "exec", container_name, "pgrep", "nginx"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if process_result.returncode != 0:
+            print(f"⚠️ Nginx process not found in container {container_name}")
+            return False
+        
+        # Check 3: Test nginx configuration
+        config_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "exec", container_name, "nginx", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if config_result.returncode != 0:
+            print(f"⚠️ Nginx configuration test failed in container {container_name}")
+            return False
+        
+        # Check 4: Try to connect to port 8888 from host
+        try:
+            import socket
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5)
+                result = s.connect_ex(('localhost', 8888))
+                if result == 0:
+                    print(f"✅ Nginx is responding on port 8888")
+                    return True
+                else:
+                    print(f"⚠️ Nginx not responding on port 8888 (connection failed)")
+                    return False
+        except Exception as e:
+            print(f"⚠️ Error testing port 8888: {e}")
+            return False
+        
+    except asyncio.TimeoutError:
+        print(f"⚠️ Health check timed out for container {container_name}")
+        return False
+    except Exception as e:
+        print(f"⚠️ Error during health check for {container_name}: {e}")
+        return False
+
+
+async def ensure_nginx_network() -> bool:
+    """
+    Ensure the devops-butler-net network exists.
+    """
+    try:
+        # Check if network exists
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "network", "inspect", "devops-butler-net"],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            print("✅ devops-butler-net network exists")
+            return True
+        
+        # Create network if it doesn't exist
+        print("🔧 Creating devops-butler-net network...")
+        create_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "network", "create", "devops-butler-net"],
+            capture_output=True,
+            text=True
+        )
+        
+        if create_result.returncode == 0:
+            print("✅ devops-butler-net network created")
+            return True
+        else:
+            print(f"❌ Failed to create network: {create_result.stderr}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error ensuring network: {e}")
+        return False
+
+
+async def create_bulletproof_nginx_container() -> bool:
+    """
+    Create a bulletproof nginx container with proper error handling.
     """
     nginx_container_name = "butler-nginx-proxy"
-    print("Ensuring Nginx proxy container is running...")
-
-    max_wait_attempts = 5
-    is_running = False
-    for attempt in range(max_wait_attempts):
-        is_running = await is_container_running(nginx_container_name)
-        if is_running:
-            print("✅ Nginx proxy is running.")
-            break
-        print(f"    (Attempt {attempt+1}) Nginx proxy not ready, waiting...")
-        await asyncio.sleep(1)
-
-    if not is_running:
-        print("❌ Nginx proxy did not start. Attempting a full restart...")
-        # Your fallback logic can go here
-        await asyncio.to_thread(subprocess.run, ["docker", "restart", nginx_container_name])
-        await asyncio.sleep(2) # Give it time to come up after a restart
-        return
-
-    print("Reloading Nginx configuration...")
+    
     try:
-        reload_command = ["docker", "exec", nginx_container_name, "nginx", "-s", "reload"]
-        await asyncio.to_thread(subprocess.run, reload_command, check=True, capture_output=True)
-        print("✅ Nginx reloaded successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Graceful reload failed, even though container is running: {e.stderr}")
-        # As a final fallback, you could still do a full restart here if needed.
+        # Ensure network exists
+        if not await ensure_nginx_network():
+            return False
+        
+        # Validate and clean configs before starting
+        await validate_nginx_config()
+        
+        # Remove any existing container
+        print("🧹 Cleaning up existing nginx container...")
+        await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "stop", nginx_container_name],
+            capture_output=True
+        )
+        await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "rm", nginx_container_name],
+            capture_output=True
+        )
+        
+        # Create default nginx config to ensure container starts successfully
+        default_config_path = os.path.join(NGINX_SITES_AVAILABLE, "default.conf")
+        default_config_content = """
+# Increase hash bucket size for long server names
+server_names_hash_bucket_size 128;
+
+server {
+    listen 80 default_server;
+    server_name _;
+    
+    location / {
+        return 200 'DevOps Butler Proxy is running';
+        add_header Content-Type text/plain;
+    }
+    
+    location /health {
+        return 200 'OK';
+        add_header Content-Type text/plain;
+    }
+}
+"""
+        
         try:
-            print("Attempting fallback: restarting nginx container...")
-            restart_command = ["docker", "restart", nginx_container_name]
-            await asyncio.to_thread(subprocess.run, restart_command, check=True)
-            print("✅ Nginx container restarted successfully.")
-        except subprocess.CalledProcessError as restart_error:
-            print(f"❌ Failed to restart Nginx container: {restart_error}")
+            os.makedirs(os.path.dirname(default_config_path), exist_ok=True)
+            with open(default_config_path, "w") as f:
+                f.write(default_config_content)
+            print("✅ Created default nginx configuration")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not create default config: {e}")
+        
+        # Create new container with enhanced settings and startup script
+        print("🚀 Creating bulletproof nginx container...")
+        
+        # Create a startup script that validates configs before starting nginx
+        startup_script = """
+#!/bin/sh
+set -e
+
+echo "NGINX_STARTUP: Validating configuration files..."
+
+# Check if there are any config files
+if [ ! -d "/etc/nginx/conf.d" ] || [ -z "$(ls -A /etc/nginx/conf.d 2>/dev/null)" ]; then
+    echo "NGINX_STARTUP: No config files found, using default"
+else
+    # Test each config file
+    for conf_file in /etc/nginx/conf.d/*.conf; do
+        if [ -f "$conf_file" ]; then
+            echo "NGINX_STARTUP: Testing $conf_file"
+            if ! nginx -t -c /etc/nginx/nginx.conf 2>/dev/null; then
+                echo "NGINX_STARTUP: Invalid config found, removing $conf_file"
+                rm -f "$conf_file"
+            fi
+        fi
+    done
+fi
+
+# Wait for any upstream containers to be available
+echo "NGINX_STARTUP: Checking upstream containers..."
+if [ -d "/etc/nginx/conf.d" ]; then
+    UPSTREAM_HOSTS=$(grep -rh 'proxy_pass' /etc/nginx/conf.d/ 2>/dev/null | sed -e 's/.*http:\\/\\///' -e 's/:.*//' -e 's/;//' | sort -u | tr '\\n' ' ' | xargs)
+    
+    if [ -n "$UPSTREAM_HOSTS" ]; then
+        echo "NGINX_STARTUP: Found upstream hosts: $UPSTREAM_HOSTS"
+        
+        for host in $UPSTREAM_HOSTS; do
+            echo "NGINX_STARTUP: Waiting for $host to be available..."
+            timeout=60
+            elapsed=0
+            
+            while ! nslookup "$host" >/dev/null 2>&1; do
+                if [ $elapsed -ge $timeout ]; then
+                    echo "NGINX_STARTUP: WARNING - $host not available after ${timeout}s, continuing anyway"
+                    break
+                fi
+                sleep 2
+                elapsed=$((elapsed + 2))
+            done
+            
+            if [ $elapsed -lt $timeout ]; then
+                echo "NGINX_STARTUP: $host is available"
+            fi
+        done
+    fi
+fi
+
+echo "NGINX_STARTUP: Starting nginx..."
+exec nginx -g 'daemon off;'
+"""
+        
+        create_command = [
+            "docker", "run", "-d",
+            "--name", nginx_container_name,
+            "--network", "devops-butler-net",
+            "-p", "8888:80",
+            "-v", "/opt/homebrew/etc/nginx/servers:/etc/nginx/conf.d",
+            "--restart", "unless-stopped",  # Auto-restart only on failure, not manual stops
+            "--health-cmd", "nginx -t && curl -f http://localhost:80/health || exit 1",
+            "--health-interval", "30s",
+            "--health-timeout", "10s",
+            "--health-retries", "3",
+            "--health-start-period", "10s",
+            "nginx:alpine",
+            "sh", "-c", startup_script
+        ]
+        
+        result = await asyncio.to_thread(
+            subprocess.run,
+            create_command,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            print("✅ Bulletproof nginx container created")
+            
+            # Custom health verification - check if nginx is actually responding
+            print("🔍 Verifying nginx container health...")
+            await asyncio.sleep(2)  # Give nginx time to start
+            
+            # Verify container is running and nginx is responding
+            healthy = await verify_nginx_health(nginx_container_name)
+            if healthy:
+                print("✅ Nginx container is verified healthy and ready")
+                return True
+            else:
+                print("⚠️ Nginx container may have issues, but it's running")
+                return True  # Still consider it successful if container is running
+        else:
+            print(f"❌ Failed to create nginx container: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error creating nginx container: {e}")
+        return False
+
+
+async def reload_nginx():
+    """
+    Bulletproof nginx reload with comprehensive error handling and self-healing.
+    """
+    nginx_container_name = "butler-nginx-proxy"
+    
+    # Step 1: Validate all configurations before attempting reload
+    print("🔍 Validating nginx configurations...")
+    if not await validate_nginx_config():
+        print("⚠️ Config validation found issues, but continuing...")
+    
+    # Step 2: Check if container exists and is running
+    print("🔍 Checking nginx proxy status...")
+    container_exists = False
+    container_running = False
+    
+    try:
+        # Check if container exists
+        inspect_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "inspect", nginx_container_name],
+            capture_output=True,
+            text=True
+        )
+        
+        if inspect_result.returncode == 0:
+            container_exists = True
+            
+            # Check if it's running
+            running_result = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "inspect", "--format", "{{.State.Running}}", nginx_container_name],
+                capture_output=True,
+                text=True
+            )
+            
+            if running_result.returncode == 0 and running_result.stdout.strip() == "true":
+                container_running = True
+                print("✅ Nginx container is running")
+            else:
+                print("⚠️ Nginx container exists but is not running")
+        else:
+            print("⚠️ Nginx container does not exist")
+            
+    except Exception as e:
+        print(f"⚠️ Error checking container status: {e}")
+    
+    # Step 3: Handle different scenarios
+    if not container_exists or not container_running:
+        print("🔧 Creating new nginx container...")
+        if await create_bulletproof_nginx_container():
+            print("✅ Nginx container created and ready")
+            return True
+        else:
+            print("❌ Failed to create nginx container")
+            return False
+    
+    # Step 4: Test nginx configuration before reload
+    print("🔍 Testing nginx configuration...")
+    try:
+        test_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "exec", nginx_container_name, "nginx", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if test_result.returncode != 0:
+            print(f"❌ Nginx configuration test failed: {test_result.stderr}")
+            print("🔧 Recreating nginx container with valid configs...")
+            if await create_bulletproof_nginx_container():
+                print("✅ Nginx container recreated successfully")
+                return True
+            else:
+                print("❌ Failed to recreate nginx container")
+                return False
+                
+    except asyncio.TimeoutError:
+        print("⚠️ Nginx config test timed out")
+    except Exception as e:
+        print(f"⚠️ Error testing nginx config: {e}")
+    
+    # Step 5: Attempt graceful reload
+    print("🔄 Attempting graceful nginx reload...")
+    try:
+        reload_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "exec", nginx_container_name, "nginx", "-s", "reload"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if reload_result.returncode == 0:
+            print("✅ Nginx reloaded successfully")
+            return True
+        else:
+            print(f"⚠️ Graceful reload failed: {reload_result.stderr}")
+            
+    except asyncio.TimeoutError:
+        print("⚠️ Nginx reload timed out")
+    except Exception as e:
+        print(f"⚠️ Error during nginx reload: {e}")
+    
+    # Step 6: Fallback to container restart
+    print("🔄 Falling back to container restart...")
+    try:
+        restart_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "restart", nginx_container_name],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if restart_result.returncode == 0:
+            # Wait for container to be ready
+            await asyncio.sleep(3)
+            print("✅ Nginx container restarted successfully")
+            return True
+        else:
+            print(f"⚠️ Container restart failed: {restart_result.stderr}")
+            
+    except asyncio.TimeoutError:
+        print("⚠️ Container restart timed out")
+    except Exception as e:
+        print(f"⚠️ Error during container restart: {e}")
+    
+    # Step 7: Final fallback - recreate container
+    print("🚨 Final fallback: recreating nginx container...")
+    if await create_bulletproof_nginx_container():
+        print("✅ Nginx container recreated as final fallback")
+        return True
+    else:
+        print("❌ All nginx recovery attempts failed")
+        return False
 
 def get_dockerfile_content() -> str:
     """

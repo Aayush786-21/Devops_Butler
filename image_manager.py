@@ -25,8 +25,7 @@ async def list_butler_images() -> List[Dict[str, Any]]:
         list_command = [
             "docker", "images",
             "--filter", "reference=local-registry/*",
-            "--format", "{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}\t{{.Size}}",
-            "--sort=created"
+            "--format", "{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}\t{{.Size}}"
         ]
         
         result = await asyncio.to_thread(
