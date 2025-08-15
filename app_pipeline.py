@@ -153,10 +153,30 @@ def find_exposed_port(dockerfile_path: str) -> int | None:
 
 async def detect_running_port(container_name: str) -> int | None:
     """
-    Detects what port a running container is actually listening on by inspecting its logs and processes.
+    Detects what port a running container is actually listening on by inspecting its logs, processes, and configuration.
+    Enhanced to handle nginx containers and various application types.
     """
     try:
-        # First, try to get port info from container logs
+        # First, check if this is an nginx container by inspecting the image
+        inspect_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "inspect", container_name, "--format", "{{.Config.Image}}"],
+            capture_output=True,
+            text=True
+        )
+        
+        is_nginx = False
+        if inspect_result.returncode == 0:
+            image_name = inspect_result.stdout.strip().lower()
+            is_nginx = 'nginx' in image_name
+            print(f"🔍 Container image: {image_name}, is_nginx: {is_nginx}")
+        
+        # For nginx containers, default to port 80
+        if is_nginx:
+            print(f"🌐 Detected nginx container, using port 80")
+            return 80
+        
+        # For non-nginx containers, try to detect from logs
         logs_result = await asyncio.to_thread(
             subprocess.run,
             ["docker", "logs", "--tail", "50", container_name],
@@ -165,10 +185,10 @@ async def detect_running_port(container_name: str) -> int | None:
         )
         
         if logs_result.returncode == 0:
-            logs = logs_result.stdout
-            print(f"📋 Container logs for port detection:\n{logs[-500:]}")
+            logs = logs_result.stdout + logs_result.stderr  # Check both stdout and stderr
+            print(f"📋 Container logs for port detection (last 500 chars):\n{logs[-500:]}")
             
-            # Common patterns for port detection in logs
+            # Enhanced patterns for port detection in logs
             port_patterns = [
                 r'listening on.*?:(\d+)',
                 r'server.*?running.*?on.*?:(\d+)',
@@ -178,34 +198,89 @@ async def detect_running_port(container_name: str) -> int | None:
                 r'started.*?on.*?port\s+(\d+)',
                 r'server.*?listening.*?(\d+)',
                 r'running.*?on.*?port\s+(\d+)',
+                r'Listening on port (\d+)',
+                r'Server running on .*:(\d+)',
+                r'listening on (\d+)',
+                r'.*:(\d+)',  # Generic pattern as last resort
             ]
             
             for pattern in port_patterns:
                 matches = re.findall(pattern, logs, re.IGNORECASE)
                 if matches:
-                    detected_port = int(matches[-1])  # Use the most recent match
-                    print(f"🔍 Detected port {detected_port} from container logs")
-                    return detected_port
+                    # Filter out common non-port numbers
+                    valid_ports = [int(m) for m in matches if 1024 <= int(m) <= 65535 or int(m) == 80]
+                    if valid_ports:
+                        detected_port = valid_ports[-1]  # Use the most recent valid match
+                        print(f"🔍 Detected port {detected_port} from container logs")
+                        return detected_port
         
         # If log parsing fails, try to inspect the container's network settings
-        inspect_result = await asyncio.to_thread(
+        ports_inspect_result = await asyncio.to_thread(
             subprocess.run,
             ["docker", "inspect", container_name, "--format", "{{json .NetworkSettings.Ports}}"],
             capture_output=True,
             text=True
         )
         
-        if inspect_result.returncode == 0:
+        if ports_inspect_result.returncode == 0:
             import json
-            ports_data = json.loads(inspect_result.stdout.strip())
+            ports_data = json.loads(ports_inspect_result.stdout.strip())
             print(f"🔍 Container port mappings: {ports_data}")
             
-            # Look for exposed ports
+            # Look for exposed ports, prioritize common web ports
+            port_priority = [80, 8080, 3000, 8000, 5000, 4000, 8888, 9000]
+            found_ports = []
+            
             for port_spec, mappings in ports_data.items():
                 if '/' in port_spec:
                     port_num = int(port_spec.split('/')[0])
-                    print(f"🔍 Found exposed port {port_num} from container inspection")
-                    return port_num
+                    found_ports.append(port_num)
+            
+            # Return the highest priority port if found
+            for priority_port in port_priority:
+                if priority_port in found_ports:
+                    print(f"🔍 Found priority port {priority_port} from container inspection")
+                    return priority_port
+            
+            # If no priority port found, return the first exposed port
+            if found_ports:
+                detected_port = found_ports[0]
+                print(f"🔍 Found exposed port {detected_port} from container inspection")
+                return detected_port
+        
+        # Try to check what process is listening inside the container
+        try:
+            netstat_result = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "exec", container_name, "sh", "-c", "netstat -tuln 2>/dev/null || ss -tuln 2>/dev/null || echo 'no netstat'"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if netstat_result.returncode == 0 and 'no netstat' not in netstat_result.stdout:
+                netstat_output = netstat_result.stdout
+                print(f"🔍 Netstat output: {netstat_output}")
+                
+                # Parse netstat output to find listening ports
+                listen_pattern = r':(\d+)\s'
+                matches = re.findall(listen_pattern, netstat_output)
+                if matches:
+                    # Filter and prioritize ports
+                    valid_ports = [int(m) for m in matches if int(m) >= 80]
+                    port_priority = [80, 8080, 3000, 8000, 5000, 4000, 8888, 9000]
+                    
+                    for priority_port in port_priority:
+                        if priority_port in valid_ports:
+                            print(f"🔍 Found listening port {priority_port} from netstat")
+                            return priority_port
+                    
+                    if valid_ports:
+                        detected_port = valid_ports[0]
+                        print(f"🔍 Found listening port {detected_port} from netstat")
+                        return detected_port
+        except Exception as e:
+            print(f"⚠️ Could not run netstat in container: {e}")
         
         return None
         
@@ -606,22 +681,16 @@ async def run_pipeline(repo_url: str, user_id: int = None):
             await manager.broadcast(f"[{new_container_name}] Analysis complete: Dockerfile found.")
             await asyncio.sleep(1)
 
-            # --- NEW PORT DISCOVERY LOGIC ---
+            # --- ENHANCED PORT DISCOVERY LOGIC ---
             dockerfile_path = os.path.join(repo_dir, 'Dockerfile')
             internal_port = find_exposed_port(dockerfile_path)
             
-            if not internal_port:
-                await manager.broadcast(f"🔴 [{new_container_name}] FATAL: Could not determine EXPOSE port from Dockerfile.")
-                with Session(engine) as session:
-                    deployment_to_update = session.get(Deployment, db_deployment.id)
-                    if deployment_to_update:
-                        deployment_to_update.status = "failed"
-                        session.add(deployment_to_update)
-                        session.commit()
-                await manager.broadcast("🔴 STATUS: Pipeline failed.")
-                return None, None
-
-            await manager.broadcast(f"✅ [{new_container_name}] Discovered EXPOSE port: {internal_port}")
+            # If no EXPOSE port found, we'll detect it after container starts
+            if internal_port:
+                await manager.broadcast(f"✅ [{new_container_name}] Discovered EXPOSE port: {internal_port}")
+            else:
+                await manager.broadcast(f"ℹ️ [{new_container_name}] No EXPOSE port found, will detect after container starts")
+                internal_port = 80  # Default assumption for containers
             # --------------------------------
 
             # Step 1: Build the image
@@ -660,7 +729,20 @@ async def run_pipeline(repo_url: str, user_id: int = None):
 
             await manager.broadcast(f"✅ [{new_container_name}] Container started successfully.")
             
-            # Step 3: Create the Nginx config with the discovered internal port
+            # Step 3: Wait a moment and detect the actual running port
+            await asyncio.sleep(3)  # Give container time to start
+            await manager.broadcast(f"🔍 [{new_container_name}] Detecting actual running port...")
+            
+            detected_port = await detect_running_port(new_container_name)
+            if detected_port:
+                print(f"🎯 Detected actual running port: {detected_port}")
+                internal_port = detected_port  # Use the detected port
+                await manager.broadcast(f"✅ [{new_container_name}] Using detected port: {internal_port}")
+            else:
+                print(f"⚠️ Could not detect running port, using default: {internal_port}")
+                await manager.broadcast(f"⚠️ [{new_container_name}] Port detection failed, using default: {internal_port}")
+            
+            # Step 4: Create the Nginx config with the discovered internal port
             print(f"🔧 VERIFICATION: Creating Nginx config with repo_name='{repo_name}', container_name='{new_container_name}', port={internal_port}")
             nginx_success = create_nginx_config(
                 project_id=f"{repo_name}-{new_container_name}",

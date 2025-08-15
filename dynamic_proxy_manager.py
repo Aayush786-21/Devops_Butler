@@ -167,12 +167,12 @@ server {{
     <title>DevOps Butler - Application Directory</title>
     <style>
         :root {{
-            --primary: #00ff88;
-            --bg-dark: #0a0a0a;
-            --bg-card: #1a1a1a;
-            --text-primary: #ffffff;
-            --text-secondary: #888;
-            --border: #333;
+            --primary: #4f46e5;
+            --bg-dark: #0f172a;
+            --bg-card: rgba(255, 255, 255, 0.1);
+            --text-primary: #f8fafc;
+            --text-secondary: #cbd5e1;
+            --border: rgba(255, 255, 255, 0.1);
         }}
         
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -261,11 +261,11 @@ server {{
             transition: opacity 0.3s ease;
         }}
         
-        .app-card:hover {{
+        .app-card:hover {
             transform: translateY(-5px);
             border-color: var(--primary);
-            box-shadow: 0 10px 30px rgba(0, 255, 136, 0.1);
-        }}
+            box-shadow: 0 10px 30px rgba(79, 70, 229, 0.3);
+        }
         
         .app-card:hover::before {{
             opacity: 1;
@@ -290,14 +290,14 @@ server {{
             color: var(--text-secondary);
         }}
         
-        .app-status {{
-            background: rgba(0, 255, 136, 0.1);
+        .app-status {
+            background: rgba(79, 70, 229, 0.1);
             color: var(--primary);
             padding: 4px 10px;
             border-radius: 20px;
             font-size: 0.8rem;
             font-weight: 500;
-        }}
+        }
         
         .app-url {{
             font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
@@ -331,22 +331,23 @@ server {{
             margin-top: 20px;
         }}
         
-        .app-link {{
+        .app-link {
             flex: 1;
             background: var(--primary);
-            color: #000;
+            color: white;
             padding: 12px 20px;
             border-radius: 8px;
             text-decoration: none;
             font-weight: 600;
             text-align: center;
             transition: all 0.3s ease;
-        }}
+        }
         
-        .app-link:hover {{
-            background: #00cc6a;
+        .app-link:hover {
+            background: #4338ca;
+            color: white;
             transform: translateY(-2px);
-        }}
+        }
         
         .direct-link {{
             background: transparent;
@@ -380,12 +381,12 @@ server {{
             display: inline-block;
         }}
         
-        .refresh-btn {{
+        .refresh-btn {
             position: fixed;
             bottom: 30px;
             right: 30px;
             background: var(--primary);
-            color: #000;
+            color: white;
             border: none;
             padding: 15px;
             border-radius: 50%;
@@ -394,13 +395,13 @@ server {{
             cursor: pointer;
             font-size: 1.2rem;
             transition: all 0.3s ease;
-            box-shadow: 0 4px 20px rgba(0, 255, 136, 0.3);
-        }}
+            box-shadow: 0 4px 20px rgba(79, 70, 229, 0.3);
+        }
         
-        .refresh-btn:hover {{
+        .refresh-btn:hover {
             transform: scale(1.1);
-            box-shadow: 0 6px 30px rgba(0, 255, 136, 0.4);
-        }}
+            box-shadow: 0 6px 30px rgba(79, 70, 229, 0.4);
+        }
         
         @media (max-width: 768px) {{
             .container {{ padding: 15px; }}

@@ -116,12 +116,65 @@ def create_nginx_config(project_id: str, repo_name: str, container_name: str, in
 server {{
     listen 80;
     server_name {server_name};
+    
+    # Add security headers
+    add_header X-Frame-Options SAMEORIGIN;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-XSS-Protection "1; mode=block";
+    
+    # Enable gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+    
     location / {{
         proxy_pass http://{container_name}:{internal_port};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        
+        # Handle WebSocket connections
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # Buffer settings
+        proxy_buffering on;
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+        
+        # Error handling
+        proxy_next_upstream error timeout invalid_header http_500 http_502 http_503;
+        proxy_next_upstream_timeout 10s;
+        proxy_next_upstream_tries 3;
+    }}
+    
+    # Favicon handling - return 204 No Content for favicon requests
+    location = /favicon.ico {{
+        return 204;
+        access_log off;
+        log_not_found off;
+    }}
+    
+    # Health check endpoint
+    location /health {{
+        proxy_pass http://{container_name}:{internal_port}/health;
+        proxy_set_header Host $host;
+        access_log off;
+    }}
+    
+    # Handle 502 errors gracefully
+    error_page 502 503 504 /50x.html;
+    location = /50x.html {{
+        return 200 '<html><body><h1>Service Temporarily Unavailable</h1><p>The application is starting up or experiencing issues. Please try again in a moment.</p><script>setTimeout(function(){{location.reload();}}, 5000);</script></body></html>';
+        add_header Content-Type text/html;
     }}
 }}
 """
