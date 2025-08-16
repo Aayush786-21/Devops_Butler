@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Applications Dashboard - DevOps Butler</title>
+    <link rel="stylesheet" href="/static/styles.css"/>
+    <link rel="icon" type="image/png" href="/icons/logo.png"/>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet"/>
+    <style>
+        /* Additional styles for applications dashboard */
+        .applications-container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+        
+        .dashboard-header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem 0;
+        }
+        
+        .dashboard-title {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: var(--primary);
+            margin-bottom: 1rem;
+        }
+        
+        .dashboard-subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        
+        .stat-card {
+            background: var(--card-bg);
+            backdrop-filter: var(--glass-blur);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: var(--shadow-lg);
+            border: 1px solid var(--border-color);
+        }
+        
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .applications-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        
+        .app-card {
+            background: var(--card-bg);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .app-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--gradient-1);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .app-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--primary);
+            box-shadow: 0 10px 30px rgba(79, 70, 229, 0.3);
+        }
+        
+        .app-card:hover::before {
+            opacity: 1;
+        }
+        
+        .app-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+        
+        .app-name {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 0.25rem;
+        }
+        
+        .app-url {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+        
+        .app-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .status-running {
+            background: rgba(34, 197, 94, 0.1);
+            color: var(--success);
+        }
+        
+        .status-stopped {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--error);
+        }
+        
+        .app-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+        
+        .app-link {
+            flex: 1;
+            background: var(--gradient-1);
+            color: white;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            text-align: center;
+            transition: all 0.3s ease;
+            font-size: 0.9rem;
+        }
+        
+        .app-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+        }
+        
+        .app-link.secondary {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-light);
+        }
+        
+        .app-link.secondary:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            background: var(--card-bg);
+            backdrop-filter: var(--glass-blur);
+            border-radius: 12px;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .empty-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            opacity: 0.6;
+        }
+        
+        .empty-title {
+            font-size: 1.5rem;
+            color: var(--text);
+            margin-bottom: 1rem;
+        }
+        
+        .empty-description {
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+            line-height: 1.6;
+        }
+        
+        .refresh-button {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--gradient-1);
+            color: white;
+            border: none;
+            padding: 1rem;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            cursor: pointer;
+            font-size: 1.2rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(79, 70, 229, 0.3);
+            z-index: 1000;
+        }
+        
+        .refresh-button:hover {
+            transform: scale(1.1) rotate(90deg);
+            box-shadow: 0 6px 30px rgba(79, 70, 229, 0.4);
+        }
+        
+        .back-button {
+            background: var(--bg-secondary);
+            color: var(--text-light);
+            border: 1px solid var(--border-color);
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .back-button:hover {
+            background: var(--border-color);
+            color: var(--text);
+        }
+    </style>
+</head>
+<body>
+    <div class="applications-container">
+        <a href="/" class="back-button">
+            ← Back to Main Dashboard
+        </a>
+        
+        <div class="dashboard-header" data-aos="fade-up">
+            <h1 class="dashboard-title">🚀 Applications Dashboard</h1>
+            <p class="dashboard-subtitle">
+                Monitor and manage all your deployed applications in real-time
+            </p>
+        </div>
+        
+        <div class="stats-grid" data-aos="fade-up" data-aos-delay="100">
+            <div class="stat-card">
+                <div class="stat-number" id="total-apps">0</div>
+                <div class="stat-label">Active Applications</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="running-containers">0</div>
+                <div class="stat-label">Running Containers</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="total-deployments">0</div>
+                <div class="stat-label">Total Deployments</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="system-uptime">0d</div>
+                <div class="stat-label">System Uptime</div>
+            </div>
+        </div>
+        
+        <div id="applications-content" data-aos="fade-up" data-aos-delay="200">
+            <!-- Applications will be loaded here -->
+        </div>
+    </div>
+    
+    <button class="refresh-button" onclick="loadApplications()" title="Refresh Applications">
+        🔄
+    </button>
+    
+    <!-- Scripts -->
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script>
+        AOS.init({ duration: 800, once: true });
+        
+        async function loadApplications() {
+            try {
+                const token = localStorage.getItem('access_token');
+                
+                if (!token) {
+                    renderAuthRequired();
+                    return;
+                }
+                
+                // Get deployments from the API
+                const response = await fetch('/deployments', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.status === 401) {
+                    // Token expired or invalid
+                    localStorage.removeItem('access_token');
+                    renderAuthRequired();
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error('Failed to fetch deployments');
+                }
+                
+                const deployments = await response.json();
+                renderApplications(deployments);
+                updateStats(deployments);
+                
+            } catch (error) {
+                console.error('Error loading applications:', error);
+                renderError(error.message);
+            }
+        }
+        
+        function renderApplications(deployments) {
+            const container = document.getElementById('applications-content');
+            
+            if (!deployments || deployments.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📦</div>
+                        <h3 class="empty-title">No Applications Deployed</h3>
+                        <p class="empty-description">
+                            You haven't deployed any applications yet. Head back to the main dashboard 
+                            to deploy your first application and see it appear here.
+                        </p>
+                        <a href="/" class="btn btn-primary">Deploy Your First App</a>
+                    </div>
+                `;
+                return;
+            }
+            
+            const applicationsGrid = document.createElement('div');
+            applicationsGrid.className = 'applications-grid';
+            
+            deployments.forEach(deployment => {
+                const appCard = createAppCard(deployment);
+                applicationsGrid.appendChild(appCard);
+            });
+            
+            container.innerHTML = '';
+            container.appendChild(applicationsGrid);
+        }
+        
+        function createAppCard(deployment) {
+            const card = document.createElement('div');
+            card.className = 'app-card';
+            card.setAttribute('data-aos', 'fade-up');
+            
+            // Check for various success statuses
+            const isRunning = deployment.status === 'deployed' || deployment.status === 'success';
+            const statusClass = isRunning ? 'status-running' : 'status-stopped';
+            const statusText = isRunning ? '● Running' : '● Stopped';
+            
+            card.innerHTML = `
+                <div class="app-header">
+                    <div>
+                        <div class="app-name">${deployment.project_id || 'Unknown Project'}</div>
+                        <div class="app-url">${deployment.deployed_url || 'No URL available'}</div>
+                    </div>
+                    <div class="app-status ${statusClass}">${statusText}</div>
+                </div>
+                
+                <div class="app-actions">
+                    ${isRunning ? `
+                        <a href="${deployment.deployed_url}" class="app-link" target="_blank">
+                            🚀 Open App
+                        </a>
+                        <button class="app-link secondary" onclick="destroyDeployment('${deployment.container_name}')">
+                            🗑️ Destroy
+                        </button>
+                    ` : `
+                        <button class="app-link secondary" onclick="destroyDeployment('${deployment.container_name}')">
+                            🗑️ Remove
+                        </button>
+                    `}
+                </div>
+            `;
+            
+            return card;
+        }
+        
+        function updateStats(deployments) {
+            const totalApps = deployments.length;
+            const runningApps = deployments.filter(d => d.status === 'deployed' || d.status === 'success').length;
+            
+            document.getElementById('total-apps').textContent = totalApps;
+            document.getElementById('running-containers').textContent = runningApps;
+            document.getElementById('total-deployments').textContent = totalApps;
+            
+            // Simple uptime calculation (could be improved)
+            const uptimeHours = Math.floor(Date.now() / (1000 * 60 * 60)) % 24;
+            const uptimeDays = Math.floor(Date.now() / (1000 * 60 * 60 * 24)) % 7;
+            document.getElementById('system-uptime').textContent = `${uptimeDays}d ${uptimeHours}h`;
+        }
+        
+        function renderError(message) {
+            const container = document.getElementById('applications-content');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">⚠️</div>
+                    <h3 class="empty-title">Error Loading Applications</h3>
+                    <p class="empty-description">${message}</p>
+                    <button class="btn btn-primary" onclick="loadApplications()">Try Again</button>
+                </div>
+            `;
+        }
+        
+        function renderAuthRequired() {
+            const container = document.getElementById('applications-content');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">🔒</div>
+                    <h3 class="empty-title">Authentication Required</h3>
+                    <p class="empty-description">
+                        You need to be logged in to view your deployed applications. 
+                        Please log in to access your deployment dashboard.
+                    </p>
+                    <a href="/login?redirect=/applications" class="btn btn-primary">Login</a>
+                </div>
+            `;
+            
+            // Update stats to show zeros
+            document.getElementById('total-apps').textContent = '0';
+            document.getElementById('running-containers').textContent = '0';
+            document.getElementById('total-deployments').textContent = '0';
+            document.getElementById('system-uptime').textContent = 'N/A';
+        }
+        
+        async function destroyDeployment(containerName) {
+            const token = localStorage.getItem('access_token');
+            
+            if (!token) {
+                showToast('Please log in to manage deployments', 'error');
+                return;
+            }
+            
+            if (!confirm(`Are you sure you want to destroy the deployment "${containerName}"? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/deployments/${containerName}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.status === 401) {
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('authToken');
+                    showToast('Authentication expired. Please log in again.', 'error');
+                    setTimeout(() => window.location.href = '/login?redirect=/applications', 2000);
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error('Failed to destroy deployment');
+                }
+                
+                // Refresh the applications list
+                loadApplications();
+                
+                // Show success message
+                showToast('Deployment destroyed successfully');
+                
+            } catch (error) {
+                console.error('Error destroying deployment:', error);
+                showToast('Failed to destroy deployment: ' + error.message, 'error');
+            }
+        }
+        
+        function showToast(message, type = 'success') {
+            // Simple toast implementation
+            const toast = document.createElement('div');
+            toast.style.cssText = `
+                position: fixed;
+                bottom: 2rem;
+                left: 50%;
+                transform: translateX(-50%);
+                background: ${type === 'error' ? 'var(--error)' : 'var(--success)'};
+                color: white;
+                padding: 1rem 2rem;
+                border-radius: 8px;
+                z-index: 10000;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            `;
+            toast.textContent = message;
+            
+            document.body.appendChild(toast);
+            
+            setTimeout(() => toast.style.opacity = '1', 100);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => document.body.removeChild(toast), 300);
+            }, 3000);
+        }
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadApplications, 30000);
+        
+        // Load applications on page load
+        document.addEventListener('DOMContentLoaded', loadApplications);
+    </script>
+</body>
+</html>

@@ -75,15 +75,21 @@ document.getElementById('loginFormElement').addEventListener('submit', async (e)
         const data = await response.json();
         
         if (response.ok) {
-            // Store the token
-            localStorage.setItem('authToken', data.access_token);
+            // Store the token with consistent naming
+            localStorage.setItem('access_token', data.access_token);
+            localStorage.setItem('authToken', data.access_token); // Keep both for compatibility
             localStorage.setItem('username', data.username);
+            localStorage.setItem('authProvider', 'local');
             
             showToast('Login successful! Redirecting...', 'success');
             
-            // Redirect to main page
+            // Check if there's a redirect URL in the query params
+            const urlParams = new URLSearchParams(window.location.search);
+            const redirectTo = urlParams.get('redirect') || '/';
+            
+            // Redirect to the intended page
             setTimeout(() => {
-                window.location.href = '/';
+                window.location.href = redirectTo;
             }, 1000);
         } else {
             errorDiv.textContent = data.detail || 'Login failed. Please try again.';
@@ -194,16 +200,21 @@ function handleGitHubCallback() {
             .then(response => response.json())
             .then(data => {
                 if (data.access_token) {
-                    // Store the token
-                    localStorage.setItem('authToken', data.access_token);
+                    // Store the token with consistent naming
+                    localStorage.setItem('access_token', data.access_token);
+                    localStorage.setItem('authToken', data.access_token); // Keep both for compatibility
                     localStorage.setItem('username', data.username);
                     localStorage.setItem('authProvider', data.auth_provider);
                     
                     showToast('GitHub login successful! Redirecting...', 'success');
                     
-                    // Redirect to main page
+                    // Check if there's a redirect URL in the query params
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const redirectTo = urlParams.get('redirect') || '/';
+                    
+                    // Redirect to the intended page
                     setTimeout(() => {
-                        window.location.href = '/';
+                        window.location.href = redirectTo;
                     }, 1000);
                 } else {
                     showToast('GitHub authentication failed', 'error');
@@ -218,12 +229,14 @@ function handleGitHubCallback() {
 
 // Check if user is already logged in
 document.addEventListener('DOMContentLoaded', () => {
-    const token = localStorage.getItem('authToken');
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
     if (token) {
-        // User is already logged in, redirect to main page
-        window.location.href = '/';
+        // User is already logged in, redirect to intended page or main page
+        const urlParams = new URLSearchParams(window.location.search);
+        const redirectTo = urlParams.get('redirect') || '/';
+        window.location.href = redirectTo;
     } else {
         // Check for GitHub OAuth callback
         handleGitHubCallback();
     }
-}); 
+});

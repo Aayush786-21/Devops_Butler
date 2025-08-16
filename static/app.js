@@ -1,5 +1,5 @@
 // Authentication check and setup
-let authToken = localStorage.getItem('authToken');
+let authToken = localStorage.getItem('access_token') || localStorage.getItem('authToken');
 let username = localStorage.getItem('username');
 let authProvider = localStorage.getItem('authProvider');
 
@@ -66,6 +66,7 @@ function checkAuthStatus() {
 
 // Logout function
 document.getElementById('logoutBtn').addEventListener('click', function() {
+    localStorage.removeItem('access_token');
     localStorage.removeItem('authToken');
     localStorage.removeItem('username');
     localStorage.removeItem('authProvider');
@@ -80,8 +81,9 @@ document.getElementById('logoutBtn').addEventListener('click', function() {
 // Helper function to get authenticated headers
 function getAuthHeaders() {
     const headers = {};
-    if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
     }
     return headers;
 }
@@ -162,9 +164,10 @@ deployForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   hideDeploySuccess();
   // Check authentication
-  if (!authToken) {
+  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+  if (!token) {
     showToast('Please login to deploy applications', 'error');
-    window.location.href = '/login';
+    window.location.href = '/login?redirect=/#deploy';
     return;
   }
   const form = e.target;
@@ -197,6 +200,7 @@ deployForm.addEventListener('submit', async (e) => {
     });
     if (response.status === 401) {
       // Token expired or invalid
+      localStorage.removeItem('access_token');
       localStorage.removeItem('authToken');
       localStorage.removeItem('username');
       showToast('Session expired. Please login again.', 'error');

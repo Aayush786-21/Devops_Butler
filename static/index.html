@@ -30,7 +30,7 @@
         <li><a class="nav-link" href="#deploy">Deploy</a></li>
         <li><a class="nav-link" href="#status">Status</a></li>
         <li><a class="nav-link" href="#history">History</a></li>
-        <li><a class="nav-link" href="http://localhost:8888" target="_blank" style="color: #00ff88; font-weight: 600;">🚀 Applications</a></li>
+        <li><a class="nav-link" href="/applications" style="color: var(--accent); font-weight: 600;">🚀 Applications</a></li>
         <li><a class="nav-link" href="#about">About</a></li>
         <!-- Removed test button and 404 test link -->
       </ul>
@@ -58,7 +58,7 @@
         </p>
         <div class="hero-buttons">
           <a href="#deploy" class="btn btn-primary">Deploy Now</a>
-          <a href="http://localhost:8888" target="_blank" class="btn btn-accent" style="background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%); color: #000; font-weight: 600; box-shadow: 0 4px 20px rgba(0, 255, 136, 0.3); transition: all 0.3s ease;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 25px rgba(0, 255, 136, 0.4)';" onmouseout="this.style.transform='translateY(0px)'; this.style.boxShadow='0 4px 20px rgba(0, 255, 136, 0.3)';">🚀 Your Deployed Applications</a>
+          <a href="/applications" class="btn btn-accent">🚀 Your Deployed Applications</a>
           <a href="#about" class="btn btn-secondary">Learn More</a>
         </div>
       </div>
@@ -66,22 +66,22 @@
   </section>
 
   <!-- Applications Quick Access Section -->
-  <section class="section" id="applications" data-aos="fade-up" style="background: linear-gradient(135deg, rgba(0, 255, 136, 0.05) 0%, rgba(0, 204, 106, 0.05) 100%); border: 1px solid rgba(0, 255, 136, 0.2); border-radius: 15px; margin: 2rem 0;">
+  <section class="section" id="applications" data-aos="fade-up">
     <div style="text-align: center; padding: 2rem;">
-      <h2 class="section-title" style="color: #00ff88; margin-bottom: 1rem;">🚀 Your Deployed Applications</h2>
+      <h2 class="section-title" style="margin-bottom: 1rem;">🚀 Your Deployed Applications</h2>
       <p style="color: var(--text-light); font-size: 1.1rem; margin-bottom: 2rem; max-width: 600px; margin-left: auto; margin-right: auto;">Access all your deployed applications from a beautiful, auto-updating dashboard. Monitor health, view stats, and manage your deployments.</p>
       <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
-        <a href="http://localhost:8888" target="_blank" class="btn" style="font-size: 1.2rem; padding: 1rem 2rem; background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%); color: #000; font-weight: 700; border: none; box-shadow: 0 4px 20px rgba(0, 255, 136, 0.3); transition: all 0.3s ease; text-decoration: none; border-radius: 12px;" onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 30px rgba(0, 255, 136, 0.4)';" onmouseout="this.style.transform='translateY(0px)'; this.style.boxShadow='0 4px 20px rgba(0, 255, 136, 0.3)';">
+        <a href="/applications" class="btn btn-primary" style="font-size: 1.2rem; padding: 1rem 2rem; text-decoration: none; border-radius: 12px;">
           📱 Open Applications Dashboard
         </a>
-        <a href="http://localhost:8888/api/containers" target="_blank" class="btn btn-secondary" style="font-size: 1rem; padding: 1rem 1.5rem; border-radius: 12px;" title="View API Data">
-          🔗 API Endpoint
+        <a href="/deployments" class="btn btn-secondary" style="font-size: 1rem; padding: 1rem 1.5rem; border-radius: 12px;" title="View Deployments API">
+          🔗 Deployments API
         </a>
       </div>
       <div style="margin-top: 2rem; padding: 1.5rem; background: rgba(0, 0, 0, 0.3); border-radius: 12px; font-family: monospace; font-size: 0.9rem; color: var(--text-light);">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-          <span style="color: #00ff88; font-weight: bold;">✨ Features:</span>
-          <span style="background: rgba(0, 255, 136, 0.1); color: #00ff88; padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.8rem;">Real-time Updates</span>
+          <span style="color: var(--accent); font-weight: bold;">✨ Features:</span>
+          <span style="background: rgba(139, 69, 255, 0.1); color: var(--accent); padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.8rem;">Real-time Updates</span>
         </div>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; text-align: left;">
           <div>🔍 Auto-discovery of containers</div>
@@ -154,7 +154,7 @@
         <div id="deploy-status" class="fade-in"></div>
         <div id="deploy-success" style="display:none; text-align:center; margin-top:1.5rem;">
           <h3 style="color:var(--success); font-size:1.3em; margin-bottom:1rem;">🎉 Your application is now deployed!</h3>
-          <button id="openAppBtn" class="btn btn-primary" style="font-size:1.2em; padding:0.9em 2.5em; background: linear-gradient(90deg, #22c55e 60%, #2563eb 100%); box-shadow: 0 4px 20px rgba(34,197,94,0.15); font-weight: 700; letter-spacing: 0.02em;">Your Deployed Application</button>
+          <button id="openAppBtn" class="btn btn-primary" style="font-size:1.2em; padding:0.9em 2.5em; font-weight: 700; letter-spacing: 0.02em;">Your Deployed Application</button>
         </div>
         <div id="deploy-login-barrier" style="display:none; text-align:center; color:var(--error); margin-top:1rem; font-size:1.1em;">
           <b>🔒 Please <a href="/login" style="color:var(--primary);text-decoration:underline;">login</a> or <a href="/login" style="color:var(--primary);text-decoration:underline;">sign up</a> to deploy your projects.</b>
@@ -217,7 +217,7 @@
   <!-- Floating Action Buttons -->
   <div class="fab-container" style="position: fixed; bottom: 2rem; right: 2rem; z-index: 1000; display: flex; flex-direction: column; gap: 1rem;">
     <!-- Applications Button -->
-    <a href="http://localhost:8888" target="_blank" class="fab-apps btn" style="padding: 1rem; border-radius: 50%; width: 60px; height: 60px; font-size: 1.5rem; background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%); color: #000; border: none; box-shadow: 0 4px 15px rgba(0, 255, 136, 0.4); transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; text-decoration: none;" onmouseover="this.style.transform='scale(1.1) rotate(5deg)'; this.style.boxShadow='0 6px 20px rgba(0, 255, 136, 0.5)';" onmouseout="this.style.transform='scale(1) rotate(0deg)'; this.style.boxShadow='0 4px 15px rgba(0, 255, 136, 0.4)';" title="View Your Deployed Applications">
+    <a href="/applications" class="fab-apps btn btn-accent" style="padding: 1rem; border-radius: 50%; width: 60px; height: 60px; font-size: 1.5rem; border: none; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; text-decoration: none;" onmouseover="this.style.transform='scale(1.1) rotate(5deg)';" onmouseout="this.style.transform='scale(1) rotate(0deg)';" title="View Your Deployed Applications">
       🚀
     </a>
     

@@ -1,41 +1,76 @@
 # 🤵‍♂️ DevOps Butler
 
-Your personal, local deployment assistant. DevOps Butler is a Python-based platform that runs on your local machine, designed to completely automate the process of deploying a project from a Git repository to a live, accessible URL.
+A sophisticated, automated deployment assistant that transforms Git repositories into containerized applications with zero configuration. DevOps Butler streamlines the deployment process using Docker containerization and real-time monitoring.
 
-Give the Butler a Git URL, and it will handle the rest—from cloning and analysis to building, running, and networking—all while providing real-time logs of its every move.
+## 🎯 Overview
+
+DevOps Butler is a Python-based platform that automates the deployment pipeline:
+
+- Clones Git repositories
+- Analyzes project structure
+- Builds and manages Docker containers
+- Handles container networking and port mapping
+- Provides real-time deployment logs via WebSocket
+- Manages full container lifecycle
 
 ![DevOps Butler](icons/devops.png)
+
+## 🌟 Key Features
+
+### 1. **Smart Repository Analysis**
+
+- Automatic detection of project type
+- Support for multiple frameworks
+- Support for existing Dockerfiles
+- Docker Compose compatibility
+
+### 2. **Docker Management**
+
+- Docker container lifecycle handling
+- Automatic port discovery and mapping
+- Container health monitoring
+- Network isolation
+- Support for environment variables
+
+### 3. **Deployment Features**
+
+- One-click deployments
+- WebSocket-based live logs
+- Deployment status tracking
+- Container health checks
+- Resource usage monitoring
+
+### 4. **Developer Experience**
+
+- Modern web interface
+- Real-time deployment logs
+- Deployment history tracking
+- Container management UI
+- Built-in error handling
 
 
 
 ## ✨ Core Features
 
-*   **🚀 One-Click Deployments:** Start an entire deployment with a single click from the beautiful web interface or a `POST` request.
-*   **🧠 Intelligent Analysis:** Automatically detects project structure and chooses the optimal deployment strategy:
-    - Simple docker-compose files → Docker Compose deployment
-    - Complex multi-service setups → Dockerfile deployment
-    - No Dockerfile → AI-generated Dockerfile
-*   **📊 Deployment History:** Track all deployments with status, URLs, and timestamps in a persistent database.
-*   **🗑️ Lifecycle Management:** Complete destroy functionality to clean up deployments and prevent resource conflicts.
-*   **🧹 Automated Cleanup:** Automatically removes orphaned Nginx configs and prevents restart loops.
-*   **🔍 Enhanced Error Handling:** Detailed error messages and validation for better debugging.
-*   **🌐 Beautiful Web UI:** Modern, responsive interface with real-time deployment status and logs.
+- **🚀 One-Click Deployments:** Start an entire deployment with a single click from the beautiful web interface or a `POST` request
+- **🧠 Intelligent Analysis:** Automatically detects project structure and chooses the optimal deployment strategy
+- **📊 Deployment History:** Track all deployments with status and timestamps in a persistent database
+- **🗑️ Lifecycle Management:** Complete destroy functionality to clean up deployments and prevent resource conflicts
+- **🔍 Enhanced Error Handling:** Detailed error messages and validation for better debugging
+- **🌐 Beautiful Web UI:** Modern, responsive interface with real-time deployment status and logs
 *   **📡 Real-time Logging:** Uses WebSockets to stream live, color-coded logs directly to you as the pipeline runs.
-*   **🔄 Automatic Reverse Proxy:** Integrates with Nginx to automatically configure a reverse proxy for each deployed application.
-*   **🎯 Pretty Local URLs:** Makes your deployed applications accessible via clean, predictable URLs like `http://project-name.localhost:8888`.
+*   **🎯 Port Management:** Automatically manages container ports and provides easy access to deployed applications.
 *   **⚡ Idempotent Deployments:** Automatically cleans up previous deployments before creating new ones.
 
 ## 🛠️ Tech Stack
 
-*   **Backend Framework:** [FastAPI](https://fastapi.tiangolo.com/)
-*   **Frontend:** HTML5, CSS3, JavaScript (Vanilla)
-*   **Real-time Communication:** WebSockets
-*   **Database:** SQLite with SQLModel ORM
-*   **Orchestration Engine:** Python (`subprocess`, `asyncio`)
-*   **Containerization:** Docker & Docker Compose
-*   **Reverse Proxy:** Nginx
-*   **AI Integration:** OpenAI API for Dockerfile generation
-*   **Primary Dependencies:** `uvicorn`, `pydantic`, `sqlmodel`
+- **Backend Framework:** [FastAPI](https://fastapi.tiangolo.com/)
+- **Frontend:** HTML5, CSS3, JavaScript (Vanilla)
+- **Real-time Communication:** WebSockets
+- **Database:** SQLite with SQLModel ORM
+- **Orchestration Engine:** Python (`subprocess`, `asyncio`)
+- **Containerization:** Docker & Docker Compose
+- **Primary Dependencies:** `uvicorn`, `pydantic`, `sqlmodel`
 
 ## ⚙️ How It Works
 
@@ -43,27 +78,25 @@ The DevOps Butler operates as an event-driven system with a clear, modular archi
 
 ### **Deployment Pipeline:**
 
-1.  **🎯 URL Validation:** Validates the Git URL and rejects invalid URLs (Docker Hub, container registries, etc.)
-2.  **🧹 Automated Cleanup:** Removes orphaned Nginx configs and cleans up previous deployments
-3.  **📋 Database Record:** Creates a deployment record with "starting" status
-4.  **📥 Repository Clone:** Clones the Git repository into a temporary local directory
-5.  **🔍 Intelligent Analysis:** 
+1. **🎯 URL Validation:** Validates the Git URL and repository accessibility
+2. **🧹 Cleanup:** Removes any existing deployments of the same repository
+3. **📋 Database Record:** Creates a deployment record with "starting" status
+4. **📥 Repository Clone:** Clones the Git repository into a temporary directory
+5. **🔍 Analysis:** Detects project type and Docker configuration 
     - Checks for docker-compose.yml and Dockerfile
     - Analyzes complexity (dependencies, multiple services)
     - Chooses optimal deployment strategy
 6.  **🏗️ Build & Deploy:**
-    - **Docker Compose:** For simple single-service setups
-    - **Dockerfile:** For complex multi-service or single-container apps
-    - **AI Generation:** Creates Dockerfile if none exists
-7.  **🔧 Port Discovery:** Automatically discovers exposed ports from Dockerfiles or container inspection
-8.  **🌐 Nginx Configuration:** Creates reverse proxy config with container networking
-9.  **✅ Success:** Updates database and broadcasts final URL
+6. **🏗️ Build & Deploy:** Builds Docker image and starts container
+7. **🔧 Port Discovery:** Maps container ports to host
+8. **✅ Success:** Updates database with deployment status
+
 
 ### **Lifecycle Management:**
 
-- **🔄 Idempotent Deployments:** Same repo can be deployed multiple times safely
-- **🗑️ Destroy Functionality:** Complete cleanup of containers, configs, and database records
-- **🧹 Orphaned Config Cleanup:** Prevents Nginx restart loops from stale configs
+- **🔄 Idempotent Deployments:** Same repository can be deployed multiple times safely
+- **🗑️ Destroy Functionality:** Complete cleanup of containers and database records
+- **🧹 Container Cleanup:** Prevents resource conflicts from stale containers
 
 ## 🚀 Getting Started
 
@@ -79,7 +112,7 @@ You must have the following tools installed on your macOS machine:
 
 1.  **Clone the Repository**
     ```bash
-    git clone https://github.com/your-username/DevOps-Butler.git
+    git clone https://github.com/aayush786-21/DevOps-Butler.git
     cd DevOps-Butler
     ```
 
@@ -98,27 +131,6 @@ You must have the following tools installed on your macOS machine:
     ```bash
     # Create the custom network for container communication
     docker network create devops-butler-net
-    ```
-
-5.  **Start Nginx Proxy Container**
-    ```bash
-    # Run the Nginx proxy container with volume mounts
-    docker run -d \
-      --name butler-nginx-proxy \
-      --network devops-butler-net \
-      -p 8888:8888 \
-      -v /opt/homebrew/etc/nginx/servers:/etc/nginx/conf.d \
-      nginx:latest
-    ```
-
-6.  **Install and Configure Nginx (Local)**
-    ```bash
-    # Install Nginx
-    brew install nginx
-
-    # Create the directory for our site configs
-    sudo mkdir -p /opt/homebrew/etc/nginx/servers
-    sudo chown $(whoami) /opt/homebrew/etc/nginx/servers
     ```
 
 ### Usage
@@ -164,10 +176,7 @@ You must have the following tools installed on your macOS machine:
     curl -X DELETE "http://127.0.0.1:8000/deployments/container-name"
     ```
 
-5.  **Clean Up Orphaned Configs**
-    ```bash
-    curl -X POST "http://127.0.0.1:8000/cleanup/orphaned-configs"
-    ```
+
 
 ## 🎯 Supported Repository Types
 
@@ -184,30 +193,34 @@ You must have the following tools installed on your macOS machine:
 - **Note:** Complex multi-service setups with dependencies are handled via Dockerfile approach
 
 ### **No Dockerfile Projects**
-- AI-generated Dockerfiles
-- Automatic dependency detection
-- Smart port inference
-- Language-specific optimizations
+- 🚧 AI-generated Dockerfiles (planned - not yet implemented)
+- 🚧 Automatic dependency detection (planned)
+- 🚧 Smart port inference (planned)
+- 🚧 Language-specific optimizations (planned)
 
 ## 🔧 API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/` | Web interface |
+| `GET` | `/applications` | Applications dashboard page |
 | `POST` | `/deploy` | Deploy a Git repository |
 | `GET` | `/deployments` | List all deployments |
+| `GET` | `/api/applications` | Get running applications/containers |
 | `DELETE` | `/deployments/{container_name}` | Destroy a deployment |
 | `DELETE` | `/deployments/clear` | Clear all deployment history |
-| `POST` | `/cleanup/orphaned-configs` | Clean up orphaned Nginx configs |
+| `GET` | `/health` | System health check |
+| `POST` | `/api/auth/login` | User authentication |
+| `POST` | `/api/auth/register` | User registration |
 | `GET` | `/ws/{client_id}` | WebSocket for real-time logs |
 
 ## 🛡️ Error Handling & Validation
 
 - **URL Validation:** Rejects invalid URLs (Docker Hub, container registries)
 - **Build Error Reporting:** Detailed Docker build error messages
-- **Network Validation:** Ensures containers are accessible before Nginx configuration
+- **Network Validation:** Ensures containers are accessible and ports are properly mapped
 - **Graceful Failures:** Proper cleanup on deployment failures
-- **Orphaned Config Prevention:** Automatic cleanup of stale Nginx configurations
+- **Resource Management:** Automatic cleanup of stale containers and resources
 
 ## 🔮 Future Roadmap
 
@@ -234,6 +247,5 @@ You must have the following tools installed on your macOS machine:
 
 - FastAPI for the excellent web framework
 - Docker for containerization technology
-- Nginx for reverse proxy capabilities
 - The open-source community for inspiration and tools
 

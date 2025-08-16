@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-DevOps Butler CLI - Command line interface for managing deployments
+DevOps Butler CLI - Simplified version that works without complex dependencies
+Command line interface for managing deployments
 """
 
 import asyncio
@@ -8,9 +9,9 @@ import argparse
 import sys
 import subprocess
 import json
-from health_monitor import monitor_all_deployments, check_deployment_health, auto_heal_deployment
-from app_pipeline import cleanup_orphaned_configs
-from nginx_manager import reload_nginx
+import os
+import socket
+from typing import Dict, List, Optional, Any
 
 
 async def list_deployments():
@@ -19,52 +20,52 @@ async def list_deployments():
     print("-" * 50)
     
     try:
-        # Get all containers in the devops-butler-net network
+        # Get all running containers
         result = await asyncio.to_thread(
             subprocess.run,
-            ["docker", "network", "inspect", "devops-butler-net", "--format", "{{json .}}"],
+            ["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}"],
             capture_output=True,
             text=True
         )
         
-        if result.returncode == 0:
-            network_data = json.loads(result.stdout)
-            containers = network_data.get("Containers", {})
-            
-            app_containers = [
-                name for name in containers.keys() 
-                if containers[name]["Name"] != "butler-nginx-proxy"
-            ]
-            
-            if not app_containers:
-                print("No active deployments found.")
-                return
-            
-            for container_id in app_containers:
-                container_info = containers[container_id]
-                name = container_info["Name"]
-                ip = container_info["IPv4Address"].split("/")[0]
+        if result.returncode != 0:
+            print(f"❌ Error running docker ps: {result.stderr}")
+            return
+        
+        if not result.stdout.strip():
+            print("No running containers found.")
+            return
+        
+        lines = result.stdout.strip().split('\n')
+        deployments_found = False
+        
+        for line in lines:
+            parts = line.split('\t')
+            if len(parts) >= 4:
+                container_id = parts[0][:12]
+                name = parts[1]
+                status = parts[2]
+                ports = parts[3]
                 
-                # Get container status
-                status_result = await asyncio.to_thread(
-                    subprocess.run,
-                    ["docker", "inspect", "--format", "{{.State.Status}}", name],
-                    capture_output=True,
-                    text=True
-                )
+                # Skip system containers
+                if any(system_name in name.lower() for system_name in ['nginx', 'proxy', 'db', 'postgres', 'mysql']):
+                    continue
                 
-                status = status_result.stdout.strip() if status_result.returncode == 0 else "unknown"
-                status_emoji = "🟢" if status == "running" else "🔴"
+                deployments_found = True
+                status_emoji = "🟢" if "Up" in status else "🔴"
                 
-                # Check if nginx config exists
-                config_exists = "✅" if f"/opt/homebrew/etc/nginx/servers/{name}.conf" else "❌"
+                # Parse port mapping
+                port_mapping = "No ports exposed"
+                if "->" in ports:
+                    port_mapping = ports
                 
-                print(f"{status_emoji} {name}")
-                print(f"   IP: {ip}")
+                print(f"{status_emoji} {name} (ID: {container_id})")
                 print(f"   Status: {status}")
-                print(f"   Nginx: {config_exists}")
-                print(f"   URL: http://{name}.localhost:8888")
+                print(f"   Ports: {port_mapping}")
                 print()
+        
+        if not deployments_found:
+            print("No application deployments found (excluding system containers).")
                 
     except Exception as e:
         print(f"❌ Error listing deployments: {e}")
@@ -76,28 +77,63 @@ async def health_check(container_name=None):
         print(f"🏥 Health check for: {container_name}")
         print("-" * 50)
         
-        health_report = await check_deployment_health(container_name)
+        # Check if container is running
+        status_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
+            capture_output=True,
+            text=True
+        )
         
-        # Print status
-        print(f"Container Running: {'✅' if health_report['container_running'] else '❌'}")
-        print(f"Port Accessible: {'✅' if health_report['port_accessible'] else '❌'}")
-        print(f"Nginx Config Exists: {'✅' if health_report['nginx_config_exists'] else '❌'}")
-        print(f"Nginx Config Correct: {'✅' if health_report['nginx_config_correct'] else '❌'}")
+        container_running = status_result.returncode == 0 and "running" in status_result.stdout.strip()
+        print(f"Container Running: {'✅' if container_running else '❌'}")
         
-        if health_report['detected_port']:
-            print(f"Detected Port: {health_report['detected_port']}")
-        if health_report['configured_port']:
-            print(f"Configured Port: {health_report['configured_port']}")
-        
-        if health_report['recommendations']:
-            print("\n🔧 Recommendations:")
-            for rec in health_report['recommendations']:
-                print(f"  - {rec}")
-        else:
-            print("\n✅ No issues found!")
+        if container_running:
+            # Get port information
+            ports_result = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "port", container_name],
+                capture_output=True,
+                text=True
+            )
             
+            if ports_result.returncode == 0 and ports_result.stdout.strip():
+                print(f"Port mappings: {ports_result.stdout.strip()}")
+                print("\n✅ Container appears healthy!")
+            else:
+                print("No port mappings found")
+                print("\n🔧 Recommendations:")
+                print("  - Check container logs for port information")
+                print("  - Verify the application is starting correctly")
+        else:
+            print("\n🔧 Recommendations:")
+            print(f"  - Container {container_name} is not running")
+            print(f"  - Check container logs: docker logs {container_name}")
+            print(f"  - Try restarting: docker start {container_name}")
     else:
-        await monitor_all_deployments()
+        # Perform health check on all deployments
+        print("🏥 Health check for all deployments")
+        print("-" * 50)
+        
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            container_names = result.stdout.strip().split('\n')
+            
+            for container_name in container_names:
+                # Skip system containers
+                if any(system_name in container_name.lower() for system_name in ['nginx', 'proxy', 'db', 'postgres', 'mysql']):
+                    continue
+                
+                print(f"\n🔍 Checking {container_name}...")
+                await health_check(container_name)
+        else:
+            print("No running containers found.")
 
 
 async def heal_deployment(container_name):
@@ -105,51 +141,121 @@ async def heal_deployment(container_name):
     print(f"🔧 Auto-healing: {container_name}")
     print("-" * 50)
     
-    success = await auto_heal_deployment(container_name)
-    
-    if success:
-        print("\n🎉 Auto-healing completed successfully!")
-    else:
-        print("\n⚠️ Auto-healing had limited success. Manual intervention may be required.")
+    try:
+        # Check if container exists
+        check_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "inspect", container_name],
+            capture_output=True,
+            text=True
+        )
+        
+        if check_result.returncode != 0:
+            print(f"❌ Container {container_name} not found")
+            return False
+        
+        # Check if container is running
+        status_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
+            capture_output=True,
+            text=True
+        )
+        
+        if status_result.returncode == 0:
+            status = status_result.stdout.strip()
+            
+            if status != "running":
+                print(f"🔄 Container is {status}, attempting to restart...")
+                
+                # Try to restart the container
+                restart_result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["docker", "restart", container_name],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if restart_result.returncode == 0:
+                    print(f"✅ Successfully restarted {container_name}")
+                    
+                    # Wait a moment for the container to start
+                    await asyncio.sleep(3)
+                    
+                    # Check if it's now running
+                    final_check = await asyncio.to_thread(
+                        subprocess.run,
+                        ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if final_check.returncode == 0 and "running" in final_check.stdout:
+                        print("\n🎉 Auto-healing completed successfully!")
+                        return True
+                    else:
+                        print(f"⚠️ Container restarted but may not be fully healthy")
+                        return False
+                else:
+                    print(f"❌ Failed to restart container: {restart_result.stderr}")
+                    return False
+            else:
+                print("🔍 Container is already running and appears healthy!")
+                return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"❌ Error during auto-healing: {e}")
+        return False
 
 
 async def cleanup_system():
-    """Clean up orphaned configs and reload nginx"""
+    """Clean up Docker system and remove unused containers/images"""
     print("🧹 Cleaning up DevOps Butler...")
     print("-" * 50)
     
-    await cleanup_orphaned_configs()
-    await reload_nginx()
-    
-    print("✅ Cleanup completed!")
-
-
-async def fix_502_errors():
-    """Specifically designed to fix 502 Bad Gateway errors"""
-    print("🔧 Fixing 502 Bad Gateway errors...")
-    print("-" * 50)
-    
-    # First, clean up orphaned configs
-    await cleanup_orphaned_configs()
-    
-    # Then run health monitoring to fix port issues
-    await monitor_all_deployments()
-    
-    print("\n✅ 502 error fixing completed!")
-    print("💡 If issues persist, containers may need to be redeployed with proper network settings.")
-
-
-async def start_monitoring():
-    """Start continuous system monitoring"""
-    print("🔍 Starting DevOps Butler monitoring system...")
-    print("Press Ctrl+C to stop monitoring")
-    print("-" * 50)
-    
     try:
-        from error_recovery import start_error_recovery_system
-        await start_error_recovery_system()
+        # Clean up stopped containers
+        print("🗑️ Removing stopped containers...")
+        cleanup_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "container", "prune", "-f"],
+            capture_output=True,
+            text=True
+        )
+        
+        if cleanup_result.returncode == 0:
+            print(f"✅ Container cleanup: {cleanup_result.stdout.strip()}")
+        
+        # Clean up unused images
+        print("🖼️ Removing unused images...")
+        image_cleanup_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "image", "prune", "-f"],
+            capture_output=True,
+            text=True
+        )
+        
+        if image_cleanup_result.returncode == 0:
+            print(f"✅ Image cleanup: {image_cleanup_result.stdout.strip()}")
+        
+        # Clean up unused networks
+        print("🌐 Removing unused networks...")
+        network_cleanup_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "network", "prune", "-f"],
+            capture_output=True,
+            text=True
+        )
+        
+        if network_cleanup_result.returncode == 0:
+            print(f"✅ Network cleanup: {network_cleanup_result.stdout.strip()}")
+        
+        print("\n✅ Cleanup completed!")
+        
     except Exception as e:
-        print(f"❌ Error starting monitoring: {e}")
+        print(f"❌ Error during cleanup: {e}")
 
 
 async def system_status():
@@ -158,94 +264,97 @@ async def system_status():
     print("-" * 50)
     
     try:
-        from error_recovery import get_system_health
+        # Check Docker daemon status
+        docker_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "version", "--format", "json"],
+            capture_output=True,
+            text=True
+        )
         
-        # Use asyncio.to_thread to run the sync function
-        health = await asyncio.to_thread(get_system_health)
+        docker_healthy = docker_result.returncode == 0
+        docker_emoji = "✅" if docker_healthy else "❌"
+        print(f"Docker Daemon: {docker_emoji} {'Healthy' if docker_healthy else 'Unhealthy'}")
         
-        # Overall status
-        status_emoji = {
-            "healthy": "✅",
-            "degraded": "⚠️",
-            "critical": "❌",
-            "unknown": "❓"
-        }.get(health["overall_status"], "❓")
+        # Get running containers count
+        containers_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "ps", "-q"],
+            capture_output=True,
+            text=True
+        )
         
-        print(f"Overall Status: {status_emoji} {health['overall_status'].upper()}")
-        print(f"Last Updated: {health['timestamp']}")
-        print()
+        if containers_result.returncode == 0:
+            container_count = len([line for line in containers_result.stdout.strip().split('\n') if line.strip()])
+            print(f"Running Containers: 📊 {container_count}")
         
-        # Component status
-        print("Component Health:")
-        for component, status in health["components"].items():
-            comp_emoji = "✅" if status == "healthy" else "❌"
-            print(f"  {comp_emoji} {component.capitalize()}: {status}")
+        # Get images count
+        images_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "images", "-q"],
+            capture_output=True,
+            text=True
+        )
         
-        # Issues
-        if health["issues"]:
-            print("\n🚨 Issues Found:")
-            for issue in health["issues"]:
-                print(f"  - {issue}")
+        if images_result.returncode == 0:
+            image_count = len([line for line in images_result.stdout.strip().split('\n') if line.strip()])
+            print(f"Docker Images: 🖼️ {image_count}")
         
-        # Recommendations
-        if health["recommendations"]:
-            print("\n💡 Recommendations:")
-            for rec in health["recommendations"]:
-                print(f"  - {rec}")
-        
-        if not health["issues"] and not health["recommendations"]:
+        if docker_healthy:
             print("\n🎉 All systems operating normally!")
+        else:
+            print("\n🚨 Docker daemon issues detected")
+            print("🔧 Recommendations:")
+            print("  - Check if Docker Desktop is running")
+            print("  - Try restarting Docker service")
             
     except Exception as e:
         print(f"❌ Error getting system status: {e}")
 
 
-async def show_errors(hours=24):
-    """Show error summary for the last N hours"""
-    print(f"📈 Error Summary (Last {hours} hours)")
+async def show_logs(container_name=None, lines=50):
+    """Show container logs"""
+    if not container_name:
+        # Show logs for all running containers
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            container_names = result.stdout.strip().split('\n')
+            print("📄 Available containers:")
+            for name in container_names:
+                print(f"  - {name}")
+            print("\nUsage: butler_cli.py logs <container_name>")
+        else:
+            print("No running containers found.")
+        return
+    
+    print(f"📄 Logs for {container_name} (last {lines} lines):")
     print("-" * 50)
     
     try:
-        from error_recovery import get_error_summary
+        logs_result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "logs", "--tail", str(lines), container_name],
+            capture_output=True,
+            text=True
+        )
         
-        # Use asyncio.to_thread to run the sync function
-        summary = await asyncio.to_thread(get_error_summary, hours)
-        
-        print(f"Total Errors: {summary['total_errors']}")
-        print(f"Recovery Rate: {summary['recovery_rate']:.1f}%")
-        print()
-        
-        # Errors by severity
-        if summary['by_severity']:
-            print("By Severity:")
-            severity_emojis = {
-                "low": "📘",
-                "medium": "📙", 
-                "high": "📕",
-                "critical": "🚨"
-            }
-            for severity, count in summary['by_severity'].items():
-                if count > 0:
-                    emoji = severity_emojis.get(severity, "📋")
-                    print(f"  {emoji} {severity.capitalize()}: {count}")
-        
-        # Errors by component
-        if summary['by_component']:
-            print("\nBy Component:")
-            for component, count in summary['by_component'].items():
-                print(f"  🔧 {component}: {count}")
-        
-        # Errors by type
-        if summary['by_type']:
-            print("\nBy Type:")
-            for error_type, count in summary['by_type'].items():
-                print(f"  ⚠️ {error_type}: {count}")
-        
-        if summary['total_errors'] == 0:
-            print("🎉 No errors in the specified time period!")
+        if logs_result.returncode == 0:
+            if logs_result.stdout.strip():
+                print(logs_result.stdout)
+            if logs_result.stderr.strip():
+                print("\n--- STDERR ---")
+                print(logs_result.stderr)
+        else:
+            print(f"❌ Error getting logs: {logs_result.stderr}")
             
     except Exception as e:
-        print(f"❌ Error getting error summary: {e}")
+        print(f"❌ Error getting logs: {e}")
 
 
 def print_banner():
@@ -260,15 +369,6 @@ def print_banner():
 
 
 async def main():
-    # Handle services command specially since it has variable arguments
-    if len(sys.argv) > 1 and sys.argv[1] == 'services':
-        print_banner()
-        print("📋 Managing services...")
-        import os
-        service_args = sys.argv[2:] if len(sys.argv) > 2 else []
-        subprocess.run([sys.executable, "service_manager.py"] + service_args, cwd=os.path.dirname(__file__))
-        return
-        
     parser = argparse.ArgumentParser(
         description="DevOps Butler CLI - Manage your deployments like a pro!",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -278,28 +378,35 @@ Examples:
   %(prog)s health                        # Check health of all deployments
   %(prog)s health weather-app-340332b2   # Check specific deployment
   %(prog)s heal weather-app-340332b2     # Auto-heal specific deployment
-  %(prog)s fix-502                       # Fix 502 Bad Gateway errors
-  %(prog)s cleanup                       # Clean up orphaned configs
-  %(prog)s services start dynamic-proxy  # Start a service
+  %(prog)s cleanup                       # Clean up Docker system
+  %(prog)s status                        # Show system status
+  %(prog)s logs container-name           # Show container logs
         """
     )
     
     parser.add_argument(
         'command',
-        choices=['list', 'health', 'heal', 'cleanup', 'fix-502', 'monitor', 'status', 'errors', 'proxy-update', 'proxy-monitor', 'services'],
+        choices=['list', 'health', 'heal', 'cleanup', 'status', 'logs'],
         help='Command to execute'
     )
     
     parser.add_argument(
         'target',
         nargs='?',
-        help='Target container name (for health and heal commands)'
+        help='Target container name (for health, heal, and logs commands)'
     )
     
     parser.add_argument(
         '--quiet', '-q',
         action='store_true',
         help='Suppress banner and verbose output'
+    )
+    
+    parser.add_argument(
+        '--lines',
+        type=int,
+        default=50,
+        help='Number of log lines to show (default: 50)'
     )
     
     args = parser.parse_args()
@@ -324,47 +431,21 @@ Examples:
         elif args.command == 'cleanup':
             await cleanup_system()
             
-        elif args.command == 'fix-502':
-            await fix_502_errors()
-            
-        elif args.command == 'monitor':
-            await start_monitoring()
-            
         elif args.command == 'status':
             await system_status()
             
-        elif args.command == 'errors':
-            await show_errors()
-            
-        elif args.command == 'proxy-update':
-            print("🔄 Updating proxy configurations...")
-            from dynamic_proxy_manager import DynamicProxyManager
-            manager = DynamicProxyManager()
-            await manager.update_proxy_configuration()
-            
-        elif args.command == 'proxy-monitor':
-            print("👀 Starting proxy monitoring...")
-            from dynamic_proxy_manager import DynamicProxyManager
-            manager = DynamicProxyManager()
-            await manager.monitor_and_update()
-            
-        elif args.command == 'services':
-            print("📋 Managing services...")
-            import os
-            # Call service manager with remaining arguments
-            # Find the index of 'services' command
-            services_index = sys.argv.index('services') if 'services' in sys.argv else -1
-            if services_index >= 0 and services_index + 1 < len(sys.argv):
-                service_args = sys.argv[services_index + 1:]
-            else:
-                service_args = []
-            subprocess.run([sys.executable, "service_manager.py"] + service_args, cwd=os.path.dirname(__file__))
+        elif args.command == 'logs':
+            await show_logs(args.target, args.lines)
             
     except KeyboardInterrupt:
         print("\n⏹️  Interrupted by user")
         sys.exit(1)
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
+        import traceback
+        if not args.quiet:
+            print("\nFull error details:")
+            traceback.print_exc()
         sys.exit(1)
 
 

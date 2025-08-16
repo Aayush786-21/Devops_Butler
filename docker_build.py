@@ -69,39 +69,40 @@ async def check_existing_image(repo_name: str, content_hash: str) -> Optional[st
     """
     Check if an image with the same content hash already exists.
     Returns the image name if found, None otherwise.
+    
+    FIXED: Only look for images with exact content hash match, not :latest
+    This prevents wrong image reuse when different repos have different content.
     """
     try:
-        # Look for images with our naming convention
-        image_patterns = [
-            f"local-registry/{repo_name}:{content_hash}",
-            f"local-registry/{repo_name}:latest"
+        # CRITICAL FIX: Only check for exact content hash match
+        # Do NOT check :latest as it can be from different repository content
+        image_pattern = f"local-registry/{repo_name}:{content_hash}"
+        
+        check_command = [
+            "docker", "images",
+            "--filter", f"reference={image_pattern}",
+            "--format", "{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}"
         ]
         
-        for pattern in image_patterns:
-            check_command = [
-                "docker", "images",
-                "--filter", f"reference={pattern}",
-                "--format", "{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}"
-            ]
-            
-            result = await asyncio.to_thread(
-                subprocess.run,
-                check_command,
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode == 0 and result.stdout.strip():
-                lines = result.stdout.strip().split('\n')
-                for line in lines:
-                    if line.strip():
-                        parts = line.split('\t')
-                        if len(parts) >= 2:
-                            image_id, image_ref = parts[0], parts[1]
-                            created_time = parts[2] if len(parts) > 2 else "unknown"
-                            print(f"🔍 Found existing image: {image_ref} (ID: {image_id[:12]}, Created: {created_time})")
-                            return image_ref
+        result = await asyncio.to_thread(
+            subprocess.run,
+            check_command,
+            capture_output=True,
+            text=True
+        )
         
+        if result.returncode == 0 and result.stdout.strip():
+            lines = result.stdout.strip().split('\n')
+            for line in lines:
+                if line.strip():
+                    parts = line.split('\t')
+                    if len(parts) >= 2:
+                        image_id, image_ref = parts[0], parts[1]
+                        created_time = parts[2] if len(parts) > 2 else "unknown"
+                        print(f"🔍 Found existing image with exact hash match: {image_ref} (ID: {image_id[:12]}, Created: {created_time})")
+                        return image_ref
+        
+        print(f"🔍 No existing image found for {repo_name} with hash {content_hash}")
         return None
         
     except Exception as e:
