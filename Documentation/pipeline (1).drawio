@@ -1,0 +1,64 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" version="28.1.0">
+  <diagram name="Deployment Pipeline" id="pipeline">
+    <mxGraphModel dx="1216" dy="747" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="starting" value="Starting" style="rounded=1;whiteSpace=wrap;html=1;fill=#dae8fc;stroke=#6c8ebf;" parent="1" vertex="1">
+          <mxGeometry x="200" y="80" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="note_starting" value="Triggered by Deploy button or API call&#xa;DB record created with &#39;starting&#39;&#xa;Pipeline actively running" style="shape=note;whiteSpace=wrap;html=1;fill=#fff2cc;stroke=#d6b656;" parent="1" vertex="1">
+          <mxGeometry x="380" y="70" width="280" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="success" value="Success" style="rounded=1;whiteSpace=wrap;html=1;fill=#d5e8d4;stroke=#82b366;align=left;" parent="1" vertex="1">
+          <mxGeometry x="70" y="250" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="note_success" value="Build &amp; deploy successful&#xa;Container is healthy&#xa;Port is accessible" style="shape=note;whiteSpace=wrap;html=1;fill=#fff2cc;stroke=#d6b656;" parent="1" vertex="1">
+          <mxGeometry x="460" y="180" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="failed" value="Failed" style="rounded=1;whiteSpace=wrap;html=1;fill=#f8cecc;stroke=#b85450;align=left;" parent="1" vertex="1">
+          <mxGeometry x="280" y="250" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="note_failed" value="A step failed (e.g., build error)&#xa;Error captured in logs&#xa;Partial cleanup attempted" style="shape=note;whiteSpace=wrap;html=1;fill=#fff2cc;stroke=#d6b656;" parent="1" vertex="1">
+          <mxGeometry x="430" y="300" width="230" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="destroyed" value="Destroyed" style="rounded=1;whiteSpace=wrap;html=1;fill=#e1d5e7;stroke=#9673a6;" parent="1" vertex="1">
+          <mxGeometry x="200" y="450" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="note_destroyed" value="Triggered by Destroy action&#xa;Resources removed&#xa;DB record cleaned up" style="shape=note;whiteSpace=wrap;html=1;fill=#fff2cc;stroke=#d6b656;" parent="1" vertex="1">
+          <mxGeometry x="430" y="435" width="230" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="start" value="" style="ellipse;fill=#000000;stroke=#000000;" parent="1" vertex="1">
+          <mxGeometry x="60" y="90" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="end" value="" style="ellipse;fill=#000000;stroke=#000000;" parent="1" vertex="1">
+          <mxGeometry x="60" y="460" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" value="deploy()" parent="1" source="start" target="starting" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t2" value="pipelineSucceeds()" parent="1" source="starting" target="success" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t3" value="pipelineFails()" parent="1" source="starting" target="failed" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t4" value="redeploy()" parent="1" source="success" target="starting" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t5" value="destroy()" parent="1" source="success" target="destroyed" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t6" value="redeploy()" parent="1" source="failed" target="starting" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t7" value="destroy()" parent="1" source="failed" target="destroyed" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t8" value="" parent="1" source="destroyed" target="end" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

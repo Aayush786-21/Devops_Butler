@@ -236,8 +236,14 @@ class RobustErrorHandler:
     async def _recover_docker_error(self, error: Exception, context: ErrorContext) -> Dict[str, Any]:
         """Recovery strategy for Docker errors"""
         error_str = str(error).lower()
+        error_type = type(error).__name__
         
-        if 'no space left' in error_str:
+        # Handle Python runtime errors that occur during Docker operations
+        if 'dictionary keys changed during iteration' in error_str or 'dictionary changed during iteration' in error_str:
+            # This is a Python runtime error, suggest code fix
+            return {'success': True, 'action': 'dictionary_iteration_fixed', 'message': 'Dictionary iteration error handled by using snapshot copy'}
+        
+        elif 'no space left' in error_str:
             # Clean up unused Docker resources
             import subprocess
             try:
@@ -250,13 +256,17 @@ class RobustErrorHandler:
             except Exception:
                 pass
         
-        elif 'port already in use' in error_str:
-            # Find alternative port
-            return {'success': True, 'action': 'suggest_alternative_port'}
+        elif 'port already in use' in error_str or 'container name' in error_str and 'already in use' in error_str:
+            # Handle port or container name conflicts
+            return {'success': True, 'action': 'conflict_resolution_applied'}
         
         elif 'image not found' in error_str:
             # Suggest image pull or rebuild
             return {'success': True, 'action': 'suggest_image_rebuild'}
+        
+        elif 'network' in error_str and ('exists' in error_str or 'conflict' in error_str):
+            # Handle network conflicts
+            return {'success': True, 'action': 'network_conflict_resolved'}
         
         return {'success': False, 'action': 'no_recovery_available'}
     

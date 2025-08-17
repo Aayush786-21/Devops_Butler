@@ -308,7 +308,15 @@ class RobustLogger:
         
         # Log to appropriate logger based on level and category
         logger = self._get_logger_for_category(category)
-        log_level = getattr(logging, level.value)
+        # Map custom log levels to standard logging levels
+        if level.value == 'AUDIT':
+            log_level = logging.INFO
+        elif level.value == 'SECURITY':
+            log_level = logging.WARNING
+        elif level.value == 'PERFORMANCE':
+            log_level = logging.INFO
+        else:
+            log_level = getattr(logging, level.value)
         
         # Create structured log message
         log_data = {

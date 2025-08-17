@@ -22,7 +22,7 @@ from connection_manager import manager
 from sqlmodel import Session, select
 from login import Deployment, User
 from auth import authenticate_user, create_user, create_access_token, get_current_user
-from repository_tree_api import router as repository_tree_router
+from repository_tree_api import router as repository_tree_router, router_repos
 from datetime import timedelta
 
 # Import robust features (simplified versions)
@@ -95,6 +95,7 @@ app.mount("/icons", StaticFiles(directory="icons"), name="icons")
 
 # Include repository tree API routes
 app.include_router(repository_tree_router)
+app.include_router(router_repos)
 
 
 # Web interface endpoints
@@ -300,40 +301,59 @@ async def deploy(
             
             result = await run_deployment_pipeline(git_url, user_id=current_user.id, env_dir=repo_dir)
             
-            if result and len(result) == 2:
-                container_name, deployed_url = result
-                if container_name and deployed_url:
-                    global_logger.add_deployment_stage(
-                        trace_id, "deployment_pipeline", "completed",
-                        {"deployed_url": deployed_url, "container_name": container_name}
-                    )
-                    
-                    global_logger.finish_deployment_trace(trace_id, "success", deployed_url)
-                    
-                    global_logger.log_user_action(
-                        user_id=str(current_user.id),
-                        action="deployment_success",
-                        details={
-                            "repo_url": git_url,
+            # Check if deployment was successful
+            if result is not None:
+                if isinstance(result, tuple) and len(result) == 2:
+                    container_name, deployed_url = result
+                    if container_name and deployed_url:
+                        global_logger.add_deployment_stage(
+                            trace_id, "deployment_pipeline", "completed",
+                            {"deployed_url": deployed_url, "container_name": container_name}
+                        )
+                        
+                        global_logger.finish_deployment_trace(trace_id, "success", deployed_url)
+                        
+                        global_logger.log_user_action(
+                            user_id=str(current_user.id),
+                            action="deployment_success",
+                            details={
+                                "repo_url": git_url,
+                                "deployed_url": deployed_url,
+                                "container_name": container_name,
+                                "trace_id": trace_id
+                            }
+                        )
+                        
+                        return {
+                            "message": "Deployment successful!",
                             "deployed_url": deployed_url,
                             "container_name": container_name,
                             "trace_id": trace_id
                         }
+                    else:
+                        # Result has correct structure but empty/invalid values
+                        error_msg = f"Deployment pipeline returned invalid values: container_name='{container_name}', deployed_url='{deployed_url}'"
+                        global_logger.add_deployment_stage(
+                            trace_id, "deployment_pipeline", "failed",
+                            {"error": error_msg}
+                        )
+                        raise Exception(error_msg)
+                else:
+                    # Result is not None but has wrong structure
+                    error_msg = f"Deployment pipeline returned unexpected result format: {type(result)} - {result}"
+                    global_logger.add_deployment_stage(
+                        trace_id, "deployment_pipeline", "failed",
+                        {"error": error_msg}
                     )
-                    
-                    return {
-                        "message": "Deployment successful!",
-                        "deployed_url": deployed_url,
-                        "container_name": container_name,
-                        "trace_id": trace_id
-                    }
-            
-            # If we get here, deployment failed
-            global_logger.add_deployment_stage(
-                trace_id, "deployment_pipeline", "failed",
-                {"error": "Pipeline returned invalid or empty result"}
-            )
-            raise Exception("Pipeline returned invalid or empty result")
+                    raise Exception(error_msg)
+            else:
+                # Result is None, indicating deployment failure
+                error_msg = "Deployment pipeline failed and returned None"
+                global_logger.add_deployment_stage(
+                    trace_id, "deployment_pipeline", "failed",
+                    {"error": error_msg}
+                )
+                raise Exception(error_msg)
     
     except HTTPException:
         raise

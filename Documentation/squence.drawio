@@ -1,0 +1,130 @@
+<mxfile host="app.diagrams.net" modified="2023-10-27T12:00:00.000Z" agent="5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36" etag="some-etag" version="22.0.8" type="device">
+  <diagram name="DevOps Butler Sequence" id="unique-id">
+    <mxGraphModel dx="1434" dy="746" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="actor-dev" value="Developer" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="30" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="lifeline-dev" value="" style="line;strokeWidth=1;fillColor=none;strokeColor=default;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="100" width="1" height="650" as="geometry" />
+        </mxCell>
+        <mxCell id="lifeline-ui" value="Web UI (Frontend)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;size=20;" vertex="1" parent="1">
+          <mxGeometry x="180" y="40" width="120" height="650" as="geometry" />
+        </mxCell>
+        <mxCell id="lifeline-backend" value="FastAPI Backend" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;size=20;" vertex="1" parent="1">
+          <mxGeometry x="380" y="40" width="120" height="650" as="geometry" />
+        </mxCell>
+        <mxCell id="lifeline-db" value="Database (SQLite)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;size=20;" vertex="1" parent="1">
+          <mxGeometry x="580" y="40" width="120" height="650" as="geometry" />
+        </mxCell>
+        <mxCell id="lifeline-git" value="Git CLI" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;size=20;" vertex="1" parent="1">
+          <mxGeometry x="780" y="40" width="100" height="650" as="geometry" />
+        </mxCell>
+        <mxCell id="lifeline-docker" value="Docker Engine" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;size=20;" vertex="1" parent="1">
+          <mxGeometry x="930" y="40" width="110" height="650" as="geometry" />
+        </mxCell>
+        <mxCell id="msg-1" value="1. submitGitUrl()" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="lifeline-dev" target="lifeline-ui">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="60" y="120" as="sourcePoint" />
+            <mxPoint x="180" y="120" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-2" value="2. POST /deploy" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="lifeline-ui" target="lifeline-backend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="240" y="140" as="sourcePoint" />
+            <mxPoint x="440" y="140" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="activation-backend" value="" style="html=1;points=[];perimeter=orthogonalPerimeter;outlineConnect=0;targetShapes=umlLifeline;portConstraint=eastwest;newEdgeStyle={&quot;edgeStyle&quot;:&quot;elbowEdgeStyle&quot;,&quot;elbow&quot;:&quot;vertical&quot;,&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="lifeline-backend">
+          <mxGeometry y="105" width="10" height="500" as="geometry" />
+        </mxCell>
+        <mxCell id="msg-3" value="3. openWebSocket()" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="lifeline-ui" target="activation-backend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="240" y="170" as="sourcePoint" />
+            <mxPoint x="435" y="170" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-4" value="4. createDeploymentRecord(status='starting')" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="activation-backend" target="lifeline-db">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="450" y="200" as="sourcePoint" />
+            <mxPoint x="640" y="200" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-5" value="[Record Created]" style="endArrow=open;html=1;rounded=0;dashed=1;" edge="1" parent="1" source="lifeline-db" target="activation-backend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="640" y="230" as="sourcePoint" />
+            <mxPoint x="450" y="230" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-6" value="5. git clone (async)" style="endArrow=open;html=1;rounded=0;" edge="1" parent="1" source="activation-backend" target="lifeline-git">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="450" y="260" as="sourcePoint" />
+            <mxPoint x="830" y="260" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="activation-git" value="" style="html=1;points=[];perimeter=orthogonalPerimeter;outlineConnect=0;targetShapes=umlLifeline;portConstraint=eastwest;newEdgeStyle={&quot;edgeStyle&quot;:&quot;elbowEdgeStyle&quot;,&quot;elbow&quot;:&quot;vertical&quot;,&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="lifeline-git">
+          <mxGeometry y="225" width="10" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="msg-7" value="[Clone Output/Logs]" style="endArrow=open;html=1;rounded=0;dashed=1;" edge="1" parent="1" source="activation-git" target="activation-backend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="830" y="300" as="sourcePoint" />
+            <mxPoint x="450" y="300" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-8" value="6. streamLogData()" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="activation-backend" target="lifeline-ui">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="445" y="330" as="sourcePoint" />
+            <mxPoint x="240" y="330" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-9" value="7. docker build/run (async)" style="endArrow=open;html=1;rounded=0;" edge="1" parent="1" source="activation-backend" target="lifeline-docker">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="450" y="360" as="sourcePoint" />
+            <mxPoint x="985" y="360" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="activation-docker" value="" style="html=1;points=[];perimeter=orthogonalPerimeter;outlineConnect=0;targetShapes=umlLifeline;portConstraint=eastwest;newEdgeStyle={&quot;edgeStyle&quot;:&quot;elbowEdgeStyle&quot;,&quot;elbow&quot;:&quot;vertical&quot;,&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="lifeline-docker">
+          <mxGeometry y="325" width="10" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="msg-10" value="[Build Output/Logs]" style="endArrow=open;html=1;rounded=0;dashed=1;" edge="1" parent="1" source="activation-docker" target="activation-backend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="985" y="400" as="sourcePoint" />
+            <mxPoint x="450" y="400" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-11" value="8. streamLogData()" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="activation-backend" target="lifeline-ui">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="445" y="430" as="sourcePoint" />
+            <mxPoint x="240" y="430" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-12" value="9. updateDeploymentRecord(status='success', port=...)" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="activation-backend" target="lifeline-db">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="450" y="480" as="sourcePoint" />
+            <mxPoint x="640" y="480" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-13" value="[Record Updated]" style="endArrow=open;html=1;rounded=0;dashed=1;" edge="1" parent="1" source="lifeline-db" target="activation-backend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="640" y="510" as="sourcePoint" />
+            <mxPoint x="450" y="510" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-14" value="10. sendSuccessMessage()" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="activation-backend" target="lifeline-ui">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="445" y="540" as="sourcePoint" />
+            <mxPoint x="240" y="540" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg-15" value="11. displaySuccessUrl()" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="lifeline-ui" target="lifeline-dev">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="180" y="570" as="sourcePoint" />
+            <mxPoint x="60" y="570" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

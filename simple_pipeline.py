@@ -249,6 +249,55 @@ async def destroy_deployment(container_name: str):
         print(f"⚠️ Error cleaning up {container_name}: {e}")
 
 
+async def cleanup_conflicting_networks(repo_dir: str, compose_file_path: str):
+    """Clean up conflicting Docker networks that might cause label issues."""
+    try:
+        # Read the compose file to find network names
+        with open(compose_file_path, 'r') as f:
+            compose_data = yaml.safe_load(f)
+        
+        networks = compose_data.get('networks', {})
+        
+        for network_name in networks.keys():
+            try:
+                # Try to remove the network if it exists
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["docker", "network", "rm", network_name],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    print(f"🗑️ Removed conflicting network: {network_name}")
+            except Exception:
+                # Network might not exist or be in use, ignore
+                pass
+                
+        # Also try to remove networks with common conflicting patterns
+        conflicting_patterns = [
+            f"{os.path.basename(repo_dir)}_default",
+            "wanderlust",
+            "wanderlust_default",
+            "wanderlust_0"
+        ]
+        
+        for pattern in conflicting_patterns:
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["docker", "network", "rm", pattern],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    print(f"🗑️ Removed conflicting network pattern: {pattern}")
+            except Exception:
+                pass
+                
+    except Exception as e:
+        print(f"⚠️ Warning during network cleanup: {e}")
+
+
 async def handle_docker_compose_deployment(repo_dir: str, repo_name: str, container_name: str) -> Optional[str]:
     """Handle docker-compose deployment with simplified port mapping."""
     try:
@@ -267,15 +316,45 @@ async def handle_docker_compose_deployment(repo_dir: str, repo_name: str, contai
         
         await manager.broadcast("🐳 Found docker-compose file, setting up multi-service deployment...")
         
+        # First, stop and remove any existing containers from this compose file
+        await manager.broadcast("🧹 Cleaning up any existing containers and networks...")
+        try:
+            # Try to stop and remove containers from this compose project
+            cleanup_result = await asyncio.to_thread(
+                subprocess.run,
+                ["docker-compose", "-f", compose_file_path, "down", "--remove-orphans", "-v", "--rmi", "local"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True
+            )
+            if cleanup_result.returncode == 0:
+                await manager.broadcast("✅ Cleaned up existing containers and networks")
+            else:
+                print(f"⚠️ Cleanup warning (might be first deployment): {cleanup_result.stderr}")
+                
+            # Additional cleanup: remove conflicting networks manually
+            await cleanup_conflicting_networks(repo_dir, compose_file_path)
+            
+        except Exception as e:
+            print(f"⚠️ Cleanup warning: {e}")
+        
         # Read and modify docker-compose file for localhost deployment
         with open(compose_file_path, 'r') as f:
             compose_data = yaml.safe_load(f)
         
-        # Update environment variables and ports for localhost
+        # Remove version if present (it's obsolete in newer compose versions)
+        if 'version' in compose_data:
+            del compose_data['version']
+        
+        # Update environment variables, ports, and container names
         services = compose_data.get('services', {})
         main_service_port = None
+        unique_suffix = container_name.split('-')[-1]  # Get the UUID part
         
         for service_name, service_config in services.items():
+            # Add unique container names to avoid conflicts
+            service_config['container_name'] = f"{service_name}-{unique_suffix}"
+            
             # Update environment variables to use localhost
             if 'environment' in service_config:
                 env = service_config['environment']
@@ -302,12 +381,51 @@ async def handle_docker_compose_deployment(repo_dir: str, repo_name: str, contai
                                 new_port = find_free_port(host_port_int + 1)
                                 ports[i] = f"{new_port}:{container_port}"
                                 print(f"⚠️ Port {host_port_int} busy, using {new_port} for {service_name}")
+                                await manager.broadcast(f"⚠️ Port {host_port_int} busy, using {new_port} for {service_name}")
                             
                             # Track the main service port
                             if service_name in ['frontend', 'web', 'app'] or 'frontend' in service_name.lower():
                                 main_service_port = int(ports[i].split(':')[0])
                         except ValueError:
                             continue
+        
+        # Handle networks - create unique network names or use external if specified
+        if 'networks' in compose_data:
+            networks = compose_data['networks']
+            # Create a copy of the items to avoid "dictionary changed during iteration" error
+            network_items = list(networks.items())
+            networks_to_update = {}
+            
+            for network_name, network_config in network_items:
+                if isinstance(network_config, dict) and not network_config.get('external', False):
+                    # Make network name unique
+                    new_network_name = f"{network_name}-{unique_suffix}"
+                    
+                    # Update services to use the new network name
+                    for service_config in services.values():
+                        if 'networks' in service_config:
+                            if isinstance(service_config['networks'], list):
+                                service_config['networks'] = [new_network_name if n == network_name else n 
+                                                             for n in service_config['networks']]
+                            elif isinstance(service_config['networks'], dict):
+                                if network_name in service_config['networks']:
+                                    service_config['networks'][new_network_name] = service_config['networks'].pop(network_name)
+                    
+                    # Store the updates to apply later
+                    networks_to_update[new_network_name] = network_config
+                    # Mark old network for removal
+                    if network_name != new_network_name:
+                        networks_to_update[network_name] = None
+            
+            # Apply the network updates
+            for network_name, network_config in networks_to_update.items():
+                if network_config is None:
+                    # Remove old network
+                    if network_name in compose_data['networks']:
+                        del compose_data['networks'][network_name]
+                else:
+                    # Add/update new network
+                    compose_data['networks'][network_name] = network_config
         
         # Write updated compose file
         with open(compose_file_path, 'w') as f:
@@ -399,6 +517,72 @@ async def handle_dockerfile_deployment(repo_dir: str, repo_name: str, container_
         
     except Exception as e:
         print(f"❌ Error in Dockerfile deployment: {e}")
+        return None
+
+
+async def handle_static_website_deployment(repo_dir: str, repo_name: str, container_name: str) -> Optional[str]:
+    """Handle static website deployment by generating a Dockerfile with Python HTTP server."""
+    try:
+        await manager.broadcast("🌐 Generating Dockerfile for static website...")
+        
+        # Create the Python server script first
+        server_script = '''import http.server
+import socketserver
+import os
+from urllib.parse import unquote
+
+class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
+    def do_GET(self):
+        # Handle SPA routing - serve index.html for routes
+        if self.path != "/" and not os.path.exists(self.path.lstrip("/")) and not "." in os.path.basename(self.path):
+            self.path = "/index.html"
+        return super().do_GET()
+
+PORT = int(os.environ.get("PORT", 8080))
+with socketserver.TCPServer(("", PORT), MyHTTPRequestHandler) as httpd:
+    print(f"Serving static files on port {PORT}")
+    httpd.serve_forever()
+'''
+        
+        # Write the server script to the repo directory
+        server_script_path = os.path.join(repo_dir, 'server.py')
+        with open(server_script_path, 'w') as f:
+            f.write(server_script)
+        
+        # Create a simple Dockerfile
+        dockerfile_content = '''FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy static files and server script
+COPY . /app/
+
+# Expose port 8080
+EXPOSE 8080
+
+# Start the Python server
+CMD ["python", "server.py"]
+'''
+        
+        # Write Dockerfile
+        dockerfile_path = os.path.join(repo_dir, 'Dockerfile')
+        with open(dockerfile_path, 'w') as f:
+            f.write(dockerfile_content)
+        
+        await manager.broadcast("✅ Generated Python-based Dockerfile and server script for static website")
+        
+        # Now deploy using the standard Dockerfile deployment
+        return await handle_dockerfile_deployment(repo_dir, repo_name, container_name)
+        
+    except Exception as e:
+        print(f"❌ Error in static website deployment: {e}")
         return None
 
 
@@ -511,15 +695,36 @@ async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, e
         has_compose = any(os.path.exists(os.path.join(repo_dir, f)) for f in compose_files)
         has_dockerfile = any(os.path.exists(os.path.join(repo_dir, f)) for f in dockerfile_names)
         
+        # Debug: List repository contents
+        try:
+            repo_contents = os.listdir(repo_dir)
+            await manager.broadcast(f"📁 Repository contents: {', '.join(repo_contents)}")
+            print(f"📁 Repository contents: {repo_contents}")
+        except Exception as e:
+            print(f"⚠️ Could not list repository contents: {e}")
+        
+        # Debug: Log deployment strategy detection
+        await manager.broadcast(f"🔍 Deployment strategy detection:")
+        await manager.broadcast(f"   - Docker Compose files found: {has_compose}")
+        await manager.broadcast(f"   - Dockerfile found: {has_dockerfile}")
+        print(f"🔍 Strategy detection - Compose: {has_compose}, Dockerfile: {has_dockerfile}")
+        
         # Strategy 1: Docker Compose (highest priority for multi-service)
         if has_compose:
             await manager.broadcast("🐳 Docker-compose detected, deploying multi-service application...")
+            print("🐳 Using Docker Compose deployment strategy")
             server_url = await handle_docker_compose_deployment(repo_dir, repo_name, new_container_name)
             if server_url:
                 final_status = "success"
+                print(f"✅ Docker Compose deployment successful: {server_url}")
+            else:
+                print("❌ Docker Compose deployment failed")
         
         # Strategy 2: Dockerfile (single container)
         elif has_dockerfile:
+            await manager.broadcast("🐳 Dockerfile detected, deploying single container application...")
+            print("🐳 Using Dockerfile deployment strategy")
+            
             # Normalize dockerfile name
             dockerfile_path = None
             for dockerfile_name in dockerfile_names:
@@ -536,12 +741,31 @@ async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, e
             server_url = await handle_dockerfile_deployment(repo_dir, repo_name, new_container_name)
             if server_url:
                 final_status = "success"
+                print(f"✅ Dockerfile deployment successful: {server_url}")
+            else:
+                print("❌ Dockerfile deployment failed")
         
-        # Strategy 3: AI-generated Dockerfile (fallback)
+        # Strategy 3: Check for static website
+        elif any(f.endswith('.html') for f in os.listdir(repo_dir) if os.path.isfile(os.path.join(repo_dir, f))):
+            await manager.broadcast("🌐 Static website detected, deploying with auto-generated Dockerfile...")
+            print("🌐 Using static website deployment strategy")
+            server_url = await handle_static_website_deployment(repo_dir, repo_name, new_container_name)
+            if server_url:
+                final_status = "success"
+                print(f"✅ Static website deployment successful: {server_url}")
+            else:
+                print("❌ Static website deployment failed")
+        
+        # Strategy 4: AI-generated Dockerfile (fallback)
         else:
+            await manager.broadcast("🤖 No recognized deployment pattern, attempting AI-generated Dockerfile...")
+            print("🤖 Using AI Dockerfile generation strategy")
             server_url = await handle_ai_dockerfile_deployment(repo_dir, repo_name, new_container_name)
             if server_url:
                 final_status = "success"
+                print(f"✅ AI Dockerfile deployment successful: {server_url}")
+            else:
+                print("❌ AI Dockerfile deployment failed")
         
         # Return results
         if final_status == "success" and server_url:

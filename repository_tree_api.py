@@ -3,13 +3,47 @@ Repository Tree API Endpoints
 Provides endpoints for browsing repository contents as a tree structure
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.security import HTTPBearer
 from typing import List, Optional
 import httpx
-from auth import get_current_user
+from auth import get_current_user, verify_token
 from login import User
 
 router = APIRouter(prefix="/api/repository", tags=["repository"])
+
+# Add routes for both singular and plural endpoints to maintain compatibility
+router_repos = APIRouter(prefix="/api/repositories", tags=["repositories"])
+
+# Security scheme for optional authentication
+security = HTTPBearer(auto_error=False)
+
+async def get_optional_current_user(request: Request) -> Optional[User]:
+    """
+    Get current user if authenticated, return None if not authenticated
+    """
+    try:
+        # Check for Authorization header
+        auth_header = request.headers.get("authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return None
+            
+        token = auth_header.split(" ")[1]
+        username = verify_token(token)
+        if not username:
+            return None
+            
+        # Get user from database
+        from database import engine
+        from sqlmodel import Session, select
+        
+        with Session(engine) as session:
+            statement = select(User).where(User.username == username)
+            user = session.exec(statement).first()
+            return user
+    except Exception:
+        # If any error occurs, just return None (no authentication)
+        return None
 
 @router.get("/{owner}/{repo}/contents")
 async def get_repository_contents(
@@ -107,5 +141,49 @@ async def get_file_content(
     except httpx.RequestError as e:
         raise HTTPException(status_code=500, detail=f"GitHub API error: {str(e)}")
 
-# Export the router
-__all__ = ["router"]
+@router_repos.get("/{username}")
+async def get_user_repositories(
+    username: str,
+    request: Request,
+    current_user: Optional[User] = Depends(get_optional_current_user)
+):
+    """
+    Get public repositories for a GitHub user
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            url = f"https://api.github.com/users/{username}/repos"
+            headers = {
+                "Accept": "application/vnd.github.v3+json"
+            }
+            
+            # Add authorization if user is authenticated and has GitHub token
+            if current_user and hasattr(current_user, 'github_access_token') and current_user.github_access_token:
+                headers["Authorization"] = f"token {current_user.github_access_token}"
+            
+            params = {
+                "type": "public",
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": 50
+            }
+            
+            response = await client.get(url, headers=headers, params=params)
+            
+            if response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+            elif response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+            
+            repositories = response.json()
+            
+            return {
+                "username": username,
+                "repositories": repositories
+            }
+            
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=f"GitHub API error: {str(e)}")
+
+# Export both routers
+__all__ = ["router", "router_repos"]
