@@ -16,7 +16,7 @@ from typing import List, Optional
 from pathlib import Path
 
 # Import core modules
-from simple_pipeline import run_deployment_pipeline, extract_repo_name
+from simple_pipeline import run_deployment_pipeline, extract_repo_name, validate_git_url
 from database import create_db_and_tables, get_session
 from connection_manager import manager
 from sqlmodel import Session, select
@@ -87,6 +87,35 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+# Preflight checks for external dependencies
+async def preflight_checks() -> dict:
+    """Check Docker and Git availability and Docker daemon connectivity."""
+    import subprocess
+    checks = {
+        'git_cli': False,
+        'docker_cli': False,
+        'docker_daemon': False,
+    }
+    # git
+    try:
+        res = await asyncio.to_thread(subprocess.run, ["git", "--version"], capture_output=True, text=True)
+        checks['git_cli'] = res.returncode == 0
+    except Exception:
+        checks['git_cli'] = False
+    # docker cli
+    try:
+        res = await asyncio.to_thread(subprocess.run, ["docker", "--version"], capture_output=True, text=True)
+        checks['docker_cli'] = res.returncode == 0
+    except Exception:
+        checks['docker_cli'] = False
+    # docker daemon
+    try:
+        res = await asyncio.to_thread(subprocess.run, ["docker", "info"], capture_output=True, text=True)
+        checks['docker_daemon'] = res.returncode == 0
+    except Exception:
+        checks['docker_daemon'] = False
+    return checks
+
 
 # Setup static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -269,6 +298,17 @@ async def deploy(
     current_user: User = Depends(get_current_user)
 ):
     """Deploy a Git repository"""
+    # Fast-fail validation on input
+    if not validate_git_url(git_url):
+        raise HTTPException(status_code=422, detail="Invalid or unsupported repository URL.")
+    # Environment sanity checks
+    checks = await preflight_checks()
+    if not checks['git_cli']:
+        raise HTTPException(status_code=503, detail="Git CLI not available on server.")
+    if not checks['docker_cli']:
+        raise HTTPException(status_code=503, detail="Docker CLI not available on server.")
+    if not checks['docker_daemon']:
+        raise HTTPException(status_code=503, detail="Docker daemon not reachable. Please start Docker Desktop.")
     # Start deployment trace
     trace_id = global_logger.start_deployment_trace(
         repo_url=git_url,
@@ -371,7 +411,8 @@ async def deploy(
             }
         )
         
-        raise HTTPException(status_code=500, detail=f"Deployment failed: {str(e)}")
+        # Provide user-friendly error without leaking internals
+        raise HTTPException(status_code=500, detail="Deployment failed. Check logs for details.")
 
 
 @app.get("/deployments", response_model=List[Deployment])

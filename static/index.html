@@ -30,7 +30,7 @@
         <li><a class="nav-link" href="#deploy">Deploy</a></li>
         <li><a class="nav-link" href="#status">Status</a></li>
         <li><a class="nav-link" href="#history">History</a></li>
-        <li><a class="nav-link" href="/applications" style="color: var(--accent); font-weight: 600;">🚀 Applications</a></li>
+        <li><a class="nav-link" href="#applications" style="color: var(--accent); font-weight: 600;">🚀 Applications</a></li>
         <li><a class="nav-link" href="#about">About</a></li>
         <!-- Removed test button and 404 test link -->
       </ul>
@@ -58,38 +58,34 @@
         </p>
         <div class="hero-buttons">
           <a href="#deploy" class="btn btn-primary">Deploy Now</a>
-          <a href="/applications" class="btn btn-accent">🚀 Your Deployed Applications</a>
+          <a href="#applications" class="btn btn-accent">🚀 Your Deployed Applications</a>
           <a href="#about" class="btn btn-secondary">Learn More</a>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Applications Quick Access Section -->
+  <!-- Applications Dashboard Section -->
   <section class="section" id="applications" data-aos="fade-up">
-    <div style="text-align: center; padding: 2rem;">
-      <h2 class="section-title" style="margin-bottom: 1rem;">🚀 Your Deployed Applications</h2>
-      <p style="color: var(--text-light); font-size: 1.1rem; margin-bottom: 2rem; max-width: 600px; margin-left: auto; margin-right: auto;">Access all your deployed applications from a beautiful, auto-updating dashboard. Monitor health, view stats, and manage your deployments.</p>
-      <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
-        <a href="/applications" class="btn btn-primary" style="font-size: 1.2rem; padding: 1rem 2rem; text-decoration: none; border-radius: 12px;">
-          📱 Open Applications Dashboard
-        </a>
-        <a href="/deployments" class="btn btn-secondary" style="font-size: 1rem; padding: 1rem 1.5rem; border-radius: 12px;" title="View Deployments API">
-          🔗 Deployments API
-        </a>
-      </div>
-      <div style="margin-top: 2rem; padding: 1.5rem; background: rgba(0, 0, 0, 0.3); border-radius: 12px; font-family: monospace; font-size: 0.9rem; color: var(--text-light);">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-          <span style="color: var(--accent); font-weight: bold;">✨ Features:</span>
-          <span style="background: rgba(139, 69, 255, 0.1); color: var(--accent); padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.8rem;">Real-time Updates</span>
+    <h2 class="section-title">🚀 Your Deployed Applications</h2>
+    <div class="card">
+      <!-- Applications Header -->
+      <div class="applications-header">
+        <div class="applications-title">
+          <h3>Projects</h3>
+          <p>Manage your deployed applications</p>
         </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; text-align: left;">
-          <div>🔍 Auto-discovery of containers</div>
-          <div>⚡ Live health monitoring</div>
-          <div>📊 Performance statistics</div>
-          <div>🎨 Beautiful dark theme UI</div>
-          <div>📱 Mobile-responsive design</div>
-          <div>🔄 Auto-refresh every 30 seconds</div>
+        <div class="applications-actions">
+          <button id="refreshApplicationsBtn" class="btn btn-secondary">🔄 Refresh</button>
+          <button id="deployNewBtn" class="btn btn-primary">+ Deploy new site</button>
+        </div>
+      </div>
+      
+      <!-- Applications Content -->
+      <div id="applications-content" class="applications-content">
+        <div class="loading-spinner">
+          <div class="spinner"></div>
+          <p>Loading applications...</p>
         </div>
       </div>
     </div>

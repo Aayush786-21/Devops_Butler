@@ -698,3 +698,315 @@ function showGeneratedDockerfile(dockerfilePath) {
     console.warn('[DEBUG] Dockerfile button not found');
   }
 }
+
+// --- Applications Dashboard Logic ---
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize applications dashboard
+    initializeApplicationsDashboard();
+});
+
+function initializeApplicationsDashboard() {
+    const refreshBtn = document.getElementById('refreshApplicationsBtn');
+    const deployNewBtn = document.getElementById('deployNewBtn');
+    
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', loadApplications);
+    }
+    
+    if (deployNewBtn) {
+        deployNewBtn.addEventListener('click', () => {
+            // Scroll to deploy section
+            document.getElementById('deploy').scrollIntoView({ behavior: 'smooth' });
+        });
+    }
+    
+    // Load applications on page load
+    loadApplications();
+    
+    // Auto-refresh every 30 seconds
+    setInterval(loadApplications, 30000);
+}
+
+async function loadApplications() {
+    const container = document.getElementById('applications-content');
+    if (!container) return;
+    
+    // Show loading state
+    container.innerHTML = `
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Loading applications...</p>
+        </div>
+    `;
+    
+    try {
+        const response = await fetch('/deployments', {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            const deployments = await response.json();
+            renderApplications(deployments);
+        } else if (response.status === 401) {
+            // Not authenticated, show login message
+            container.innerHTML = `
+                <div class="deploy-new-area">
+                    <div class="deploy-new-title">Please log in to view your applications</div>
+                    <div class="deploy-new-description">You need to be logged in to see your deployed applications.</div>
+                    <div class="deploy-new-description"><a href="/login" class="browse-link">Login here</a> to get started.</div>
+                </div>
+            `;
+        } else {
+            throw new Error('Failed to load applications');
+        }
+    } catch (error) {
+        console.error('Error loading applications:', error);
+        container.innerHTML = `
+            <div class="deploy-new-area">
+                <div class="deploy-new-title">Error loading applications</div>
+                <div class="deploy-new-description">There was an error loading your applications. Please try refreshing the page.</div>
+            </div>
+        `;
+    }
+}
+
+function renderApplications(deployments) {
+    const container = document.getElementById('applications-content');
+    if (!container) return;
+    
+    if (!deployments || deployments.length === 0) {
+        container.innerHTML = `
+            <div class="deploy-new-area">
+                <div class="deploy-new-title">No projects deployed yet</div>
+                <div class="deploy-new-description">You haven't deployed any applications yet. Use the deploy form above to deploy your first application and see it appear here.</div>
+            </div>
+        `;
+        return;
+    }
+    
+    const projectsGrid = document.createElement('div');
+    projectsGrid.className = 'projects-grid';
+    
+    deployments.forEach(deployment => {
+        const projectCard = createProjectCard(deployment);
+        projectsGrid.appendChild(projectCard);
+    });
+    
+    container.innerHTML = '';
+    container.appendChild(projectsGrid);
+}
+
+function createProjectCard(deployment) {
+    const card = document.createElement('div');
+    card.className = 'project-card';
+    
+    // Check for various success statuses
+    const isRunning = deployment.status === 'deployed' || deployment.status === 'success';
+    const statusClass = isRunning ? 'status-running' : 'status-stopped';
+    const statusText = isRunning ? 'Running' : 'Stopped';
+    const statusIcon = getStatusIcon(deployment.status);
+    
+    // Generate project thumbnail based on project type
+    const thumbnailIcon = getProjectThumbnail(deployment.git_url);
+    
+    // Extract project name from git URL
+    const projectName = getProjectName(deployment.git_url);
+    
+    const cardContent = `
+        <div class="project-thumbnail">
+            ${thumbnailIcon}
+        </div>
+        <div class="project-info">
+            <div class="project-name">${projectName}</div>
+            <div class="project-description">Manual deploys</div>
+            <div class="project-meta">Owned by ${username || 'User'}'s team</div>
+            <div class="project-meta">Published on ${formatDate(deployment.created_at)}</div>
+        </div>
+        <div class="project-actions">
+            <span class="project-status ${statusClass}">${statusText}</span>
+            <button class="project-menu" onclick="showProjectMenu('${deployment.container_name}')">⋮</button>
+        </div>
+    `;
+    
+    card.innerHTML = cardContent;
+    
+    // Add click handler to open the project
+    card.addEventListener('click', (e) => {
+        if (!e.target.closest('.project-menu')) {
+            if (isRunning && deployment.deployed_url) {
+                window.open(deployment.deployed_url, '_blank');
+            } else {
+                showProjectDetails(deployment);
+            }
+        }
+    });
+    
+    return card;
+}
+
+function getProjectThumbnail(gitUrl) {
+    // Determine project type based on git URL or other indicators
+    if (gitUrl.includes('react') || gitUrl.includes('nextjs')) {
+        return '⚛️';
+    } else if (gitUrl.includes('vue')) {
+        return '💚';
+    } else if (gitUrl.includes('angular')) {
+        return '🅰️';
+    } else if (gitUrl.includes('django') || gitUrl.includes('flask')) {
+        return '🐍';
+    } else if (gitUrl.includes('node') || gitUrl.includes('express')) {
+        return '🟢';
+    } else {
+        return '📄';
+    }
+}
+
+function getProjectName(gitUrl) {
+    try {
+        const url = new URL(gitUrl);
+        const pathParts = url.pathname.split('/');
+        const repoName = pathParts[pathParts.length - 1].replace('.git', '');
+        return repoName || 'Unknown Project';
+    } catch {
+        return 'Unknown Project';
+    }
+}
+
+function getStatusIcon(status) {
+    const iconMap = {
+        'success': '✅',
+        'deployed': '✅',
+        'building': '🔄',
+        'failed': '❌',
+        'stopped': '⏹️'
+    };
+    return iconMap[status] || '❓';
+}
+
+function formatDate(dateString) {
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+        });
+    } catch {
+        return 'Unknown date';
+    }
+}
+
+function showProjectMenu(containerName) {
+    // Create a simple context menu
+    const menu = document.createElement('div');
+    menu.style.cssText = `
+        position: fixed;
+        background: var(--card-bg);
+        backdrop-filter: var(--glass-blur);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        box-shadow: var(--shadow-lg);
+        padding: 8px 0;
+        z-index: 1000;
+        min-width: 150px;
+    `;
+    
+    const menuItems = [
+        { text: 'View Site', action: () => console.log('View site:', containerName) },
+        { text: 'View Logs', action: () => console.log('View logs:', containerName) },
+        { text: 'Redeploy', action: () => console.log('Redeploy:', containerName) },
+        { text: 'Destroy', action: () => console.log('Destroy:', containerName) }
+    ];
+    
+    menuItems.forEach(item => {
+        const menuItem = document.createElement('div');
+        menuItem.style.cssText = `
+            padding: 8px 16px;
+            color: var(--text);
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background-color 0.2s;
+        `;
+        menuItem.textContent = item.text;
+        menuItem.addEventListener('mouseenter', () => {
+            menuItem.style.backgroundColor = 'var(--bg-secondary)';
+        });
+        menuItem.addEventListener('mouseleave', () => {
+            menuItem.style.backgroundColor = 'transparent';
+        });
+        menuItem.addEventListener('click', () => {
+            item.action();
+            document.body.removeChild(menu);
+        });
+        menu.appendChild(menuItem);
+    });
+    
+    // Position menu near cursor
+    menu.style.left = '50%';
+    menu.style.top = '50%';
+    menu.style.transform = 'translate(-50%, -50%)';
+    
+    document.body.appendChild(menu);
+    
+    // Remove menu when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', () => {
+            if (document.body.contains(menu)) {
+                document.body.removeChild(menu);
+            }
+        }, { once: true });
+    }, 100);
+}
+
+function showProjectDetails(deployment) {
+    // Simple project details modal
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    `;
+    
+    const modalContent = document.createElement('div');
+    modalContent.style.cssText = `
+        background: var(--card-bg);
+        backdrop-filter: var(--glass-blur);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 2rem;
+        max-width: 500px;
+        width: 90%;
+        color: var(--text);
+    `;
+    
+    modalContent.innerHTML = `
+        <h3 style="margin-bottom: 1rem;">Project Details</h3>
+        <p><strong>Name:</strong> ${getProjectName(deployment.git_url)}</p>
+        <p><strong>Status:</strong> ${deployment.status}</p>
+        <p><strong>Repository:</strong> ${deployment.git_url}</p>
+        <p><strong>Container:</strong> ${deployment.container_name}</p>
+        <p><strong>Created:</strong> ${formatDate(deployment.created_at)}</p>
+        ${deployment.deployed_url ? `<p><strong>URL:</strong> <a href="${deployment.deployed_url}" target="_blank" style="color: var(--accent);">${deployment.deployed_url}</a></p>` : ''}
+        <button onclick="this.closest('.modal').remove()" style="margin-top: 1rem; padding: 0.5rem 1rem; background: var(--primary); color: white; border: none; border-radius: 6px; cursor: pointer;">Close</button>
+    `;
+    
+    modal.className = 'modal';
+    modal.appendChild(modalContent);
+    document.body.appendChild(modal);
+    
+    // Close on backdrop click
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            document.body.removeChild(modal);
+        }
+    });
+}

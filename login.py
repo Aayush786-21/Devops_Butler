@@ -8,6 +8,10 @@ class User(SQLModel, table=True):
     username: str = Field(unique=True, index=True)
     email: str = Field(unique=True, index=True)
     hashed_password: str
+    # Ensure compatibility with existing DB schema having NOT NULL auth_provider
+    auth_provider: str = Field(default='local')
+    # Optional token field used by repository API (safe to be nullable)
+    github_access_token: Optional[str] = Field(default=None)
     is_active: bool = Field(default=True)
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
 

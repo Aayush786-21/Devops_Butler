@@ -3,11 +3,603 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Applications Dashboard - DevOps Butler</title>
+    <title>Projects - DevOps Butler</title>
     <link rel="stylesheet" href="/static/styles.css"/>
     <link rel="icon" type="image/png" href="/icons/logo.png"/>
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet"/>
     <style>
+        /* Modern design system */
+        :root {
+            --primary-green: #00C7B7;
+            --dark-bg: #0A0E27;
+            --light-gray: #F7F7F7;
+            --text-primary: #2C2C2C;
+            --text-secondary: #6B7280;
+            --border-color: #E5E7EB;
+            --hover-bg: #F3F4F6;
+            --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #FFFFFF;
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        /* Main Layout */
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: #FFFFFF;
+            border-right: 1px solid var(--border-color);
+            padding: 24px 0;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            z-index: 1000;
+        }
+
+        .sidebar-header {
+            padding: 0 24px 24px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-decoration: none;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--primary-green);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .search-box {
+            margin-top: 16px;
+            position: relative;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 8px 12px 8px 36px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 14px;
+            background: #FFFFFF;
+        }
+
+        .search-box::before {
+            content: "🔍";
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .team-selector {
+            padding: 0 24px;
+            margin-bottom: 24px;
+        }
+
+        .team-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .team-info:hover {
+            background: var(--hover-bg);
+        }
+
+        .team-avatar {
+            width: 24px;
+            height: 24px;
+            background: var(--primary-green);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .team-name {
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .nav-menu {
+            padding: 0 24px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            margin-bottom: 4px;
+            border-radius: 6px;
+            text-decoration: none;
+            color: var(--text-secondary);
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .nav-item:hover {
+            background: var(--hover-bg);
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            background: rgba(0, 199, 183, 0.1);
+            color: var(--primary-green);
+            border-left: 3px solid var(--primary-green);
+            margin-left: -12px;
+            padding-left: 9px;
+        }
+
+        .nav-item.active::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: var(--primary-green);
+        }
+
+        .upgrade-section {
+            padding: 24px;
+            margin-top: auto;
+        }
+
+        .upgrade-btn {
+            width: 100%;
+            background: var(--primary-green);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .upgrade-btn:hover {
+            background: #00B3A6;
+        }
+
+        .user-info {
+            padding: 24px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            background: var(--primary-green);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+
+        .user-details {
+            flex: 1;
+        }
+
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .user-email {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 280px;
+            background: #FFFFFF;
+        }
+
+        .content-header {
+            padding: 24px 32px;
+            border-bottom: 1px solid var(--border-color);
+            background: #FFFFFF;
+        }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .watch-deploy-btn {
+            background: var(--primary-green);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background-color 0.2s;
+        }
+
+        .watch-deploy-btn:hover {
+            background: #00B3A6;
+        }
+
+        .header-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .header-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+
+        .header-link:hover {
+            color: var(--text-primary);
+        }
+
+        .search-filters {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+
+        .search-projects {
+            flex: 1;
+            max-width: 400px;
+        }
+
+        .search-projects input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .filter-dropdowns {
+            display: flex;
+            gap: 12px;
+        }
+
+        .filter-select {
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: white;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .edit-filters-btn {
+            background: none;
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .content-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+        }
+
+        .add-project-btn {
+            background: var(--primary-green);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .view-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .view-btn {
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            background: white;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .view-btn.active {
+            background: var(--primary-green);
+            color: white;
+            border-color: var(--primary-green);
+        }
+
+        /* Projects Grid */
+        .projects-container {
+            padding: 32px;
+        }
+
+        .projects-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        .project-card {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .project-card:hover {
+            box-shadow: var(--card-shadow);
+            transform: translateY(-2px);
+        }
+
+        .project-thumbnail {
+            width: 100%;
+            height: 120px;
+            background: var(--light-gray);
+            border-radius: 6px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            color: var(--text-secondary);
+        }
+
+        .project-info {
+            margin-bottom: 16px;
+        }
+
+        .project-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .project-description {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .project-meta {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .project-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .project-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-running {
+            background: rgba(34, 197, 94, 0.1);
+            color: #059669;
+        }
+
+        .status-stopped {
+            background: rgba(239, 68, 68, 0.1);
+            color: #DC2626;
+        }
+
+        .project-menu {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            color: var(--text-secondary);
+        }
+
+        .project-menu:hover {
+            background: var(--hover-bg);
+        }
+
+        /* Deploy New Project Area */
+        .deploy-new-area {
+            border: 2px dashed var(--border-color);
+            border-radius: 8px;
+            padding: 48px 24px;
+            text-align: center;
+            background: var(--light-gray);
+            margin-top: 32px;
+        }
+
+        .deploy-new-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .deploy-new-description {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+        }
+
+        .browse-link {
+            color: var(--primary-green);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .browse-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 24px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--primary-green);
+            margin-bottom: 8px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1024px) {
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .main-content {
+                margin-left: 0;
+            }
+
+            .mobile-menu-btn {
+                display: block;
+                position: fixed;
+                top: 24px;
+                left: 24px;
+                z-index: 1001;
+                background: var(--primary-green);
+                color: white;
+                border: none;
+                padding: 12px;
+                border-radius: 6px;
+                cursor: pointer;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .content-header {
+                padding: 16px;
+            }
+
+            .projects-container {
+                padding: 16px;
+            }
+
+            .projects-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header-actions {
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .search-filters {
+                flex-direction: column;
+                gap: 12px;
+            }
+        }
+
+        /* Additional styles for applications dashboard */
         /* Additional styles for applications dashboard */
         .applications-container {
             max-width: 1400px;
@@ -253,48 +845,575 @@
             background: var(--border-color);
             color: var(--text);
         }
+        
+        /* Enhanced Controls Styles */
+        .controls-section {
+            background: var(--card-bg);
+            backdrop-filter: var(--glass-blur);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-lg);
+            border: 1px solid var(--border-color);
+        }
+        
+        .search-filter-container {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+        }
+        
+        .search-box input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+        
+        .search-box input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+        
+        .filter-controls {
+            display: flex;
+            gap: 0.75rem;
+        }
+        
+        .filter-controls select {
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            color: var(--text);
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        
+        .filter-controls select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        
+        .view-controls {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .view-toggle {
+            padding: 0.5rem 1rem;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-light);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9rem;
+        }
+        
+        .view-toggle.active,
+        .view-toggle:hover {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+        
+        /* Enhanced App Card Styles */
+        .app-card.list-view {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .app-card.compact-view {
+            padding: 1rem;
+        }
+        
+        .app-card.compact-view .app-header {
+            margin-bottom: 0.5rem;
+        }
+        
+        .app-card.compact-view .app-actions {
+            margin-top: 0.5rem;
+        }
+        
+        /* Health Status Indicators */
+        .health-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+        
+        .health-healthy { background: var(--success); }
+        .health-warning { background: #f59e0b; }
+        .health-critical { background: var(--error); }
+        
+        /* Container Details */
+        .container-details {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            font-size: 0.85rem;
+        }
+        
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+        
+        .detail-label {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .detail-value {
+            color: var(--text-light);
+            font-family: var(--font-mono);
+        }
+        
+        .app-meta {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 0.5rem;
+            font-size: 0.85rem;
+        }
+        
+        .app-date {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+        
+        /* List View Styles */
+        .applications-grid.list-view {
+            grid-template-columns: 1fr;
+        }
+        
+        .applications-grid.list-view .app-card {
+            flex-direction: row;
+            align-items: center;
+            gap: 2rem;
+        }
+        
+        .applications-grid.list-view .app-header {
+            flex: 1;
+            margin-bottom: 0;
+        }
+        
+        .applications-grid.list-view .app-actions {
+            margin-top: 0;
+            flex-shrink: 0;
+        }
+        
+        /* Compact View Styles */
+        .applications-grid.compact-view {
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        }
+        
+        .applications-grid.compact-view .app-card {
+            padding: 1rem;
+        }
+        
+        .applications-grid.compact-view .container-details {
+            display: none;
+        }
+        
+        /* Loading States */
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border-color);
+            border-radius: 50%;
+            border-top-color: var(--primary);
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            top: 2rem;
+            right: 2rem;
+            z-index: 10000;
+        }
+        
+        .toast {
+            background: var(--card-bg);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem 1.5rem;
+            margin-bottom: 1rem;
+            color: var(--text);
+            box-shadow: var(--shadow-lg);
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+        }
+        
+        .toast.show {
+            transform: translateX(0);
+        }
+        
+        .toast.success { border-left: 4px solid var(--success); }
+        .toast.error { border-left: 4px solid var(--error); }
+        .toast.info { border-left: 4px solid var(--primary); }
+        
+        /* Logs Modal Styles */
+        .logs-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .logs-modal.show {
+            opacity: 1;
+        }
+        
+        .logs-modal-content {
+            background: var(--card-bg);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow: hidden;
+            transform: scale(0.9);
+            transition: transform 0.3s ease;
+        }
+        
+        .logs-modal.show .logs-modal-content {
+            transform: scale(1);
+        }
+        
+        .logs-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .logs-modal-header h3 {
+            margin: 0;
+            color: var(--text);
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+        }
+        
+        .close-btn:hover {
+            color: var(--text);
+            background: var(--bg-secondary);
+        }
+        
+        .logs-modal-body {
+            padding: 1.5rem;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        
+        .logs-content {
+            background: var(--bg-secondary);
+            padding: 1rem;
+            border-radius: 8px;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: var(--text-light);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .logs-loading {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+        }
+        
+        .logs-loading p {
+            margin-top: 1rem;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .applications-container {
+                padding: 0 1rem;
+                margin: 1rem auto;
+            }
+            
+            .dashboard-title {
+                font-size: 2rem;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 1rem;
+            }
+            
+            .search-filter-container {
+                flex-direction: column;
+            }
+            
+            .filter-controls {
+                flex-wrap: wrap;
+            }
+            
+            .applications-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .app-card.list-view {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .app-actions {
+                flex-direction: column;
+            }
+            
+            .refresh-button {
+                bottom: 1rem;
+                right: 1rem;
+                width: 50px;
+                height: 50px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .dashboard-header {
+                padding: 1rem 0;
+            }
+            
+            .controls-section {
+                padding: 1rem;
+            }
+        }
+        
+        /* Enhanced Animations */
+        .app-card {
+            animation: fadeInUp 0.6s ease-out;
+        }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .stat-card {
+            animation: fadeInScale 0.8s ease-out;
+        }
+        
+        @keyframes fadeInScale {
+            from {
+                opacity: 0;
+                transform: scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="applications-container">
-        <a href="/" class="back-button">
-            ← Back to Main Dashboard
-        </a>
-        
-        <div class="dashboard-header" data-aos="fade-up">
-            <h1 class="dashboard-title">🚀 Applications Dashboard</h1>
-            <p class="dashboard-subtitle">
-                Monitor and manage all your deployed applications in real-time
-            </p>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <a href="/" class="logo">
+                    <div class="logo-icon">D</div>
+                    DevOps Butler
+                </a>
+                <div class="search-box">
+                    <input type="text" placeholder="Search DevOps Butler..." />
+                </div>
+            </div>
+            
+            <div class="team-selector">
+                <div class="team-info">
+                    <div class="team-avatar">A</div>
+                    <div class="team-name">Aayush786-21's team</div>
+                </div>
+            </div>
+            
+            <nav class="nav-menu">
+                <a href="/applications" class="nav-item active">
+                    <span>📁</span> Projects
+                </a>
+                <a href="/builds" class="nav-item">
+                    <span>🔨</span> Builds
+                </a>
+                <a href="/extensions" class="nav-item">
+                    <span>🔌</span> Extensions
+                </a>
+                <a href="/domains" class="nav-item">
+                    <span>🌐</span> Domains
+                </a>
+                <a href="/members" class="nav-item">
+                    <span>👥</span> Members
+                </a>
+                <a href="/audit" class="nav-item">
+                    <span>📊</span> Audit log
+                </a>
+                <a href="/security" class="nav-item">
+                    <span>🔒</span> Security Scorecard
+                </a>
+                <a href="/billing" class="nav-item">
+                    <span>💳</span> Usage & billing
+                </a>
+                <a href="/settings" class="nav-item">
+                    <span>⚙️</span> Team settings
+                </a>
+                <a href="/visual-editor" class="nav-item">
+                    <span>🎨</span> Visual editor dashboard
+                </a>
+            </nav>
+            
+            <div class="upgrade-section">
+                <button class="upgrade-btn">Upgrade</button>
+            </div>
+            
+            <div class="user-info">
+                <div class="user-avatar">A</div>
+                <div class="user-details">
+                    <div class="user-name">aayushadhikari786@gmail.com</div>
+                </div>
+            </div>
         </div>
         
-        <div class="stats-grid" data-aos="fade-up" data-aos-delay="100">
-            <div class="stat-card">
-                <div class="stat-number" id="total-apps">0</div>
-                <div class="stat-label">Active Applications</div>
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Header -->
+            <div class="content-header">
+                <div class="header-top">
+                    <h1 class="page-title">Projects</h1>
+                    <div class="header-actions">
+                        <button class="watch-deploy-btn">
+                            ▶️ Watch Deploy
+                        </button>
+                        <div class="header-links">
+                            <a href="#" class="header-link">News</a>
+                            <a href="#" class="header-link">Support</a>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="search-filters">
+                    <div class="search-projects">
+                        <input type="text" placeholder="Search projects" id="search-input" />
+                    </div>
+                    <div class="filter-dropdowns">
+                        <select class="filter-select" id="status-filter">
+                            <option value="">Owned by This team</option>
+                            <option value="all">Created by Anyone</option>
+                            <option value="access">Access Any</option>
+                        </select>
+                        <button class="edit-filters-btn">Edit filters</button>
+                    </div>
+                </div>
+                
+                <div class="content-actions">
+                    <button class="add-project-btn">
+                        ➕ Add new project
+                    </button>
+                    <div class="view-controls">
+                        <button class="view-btn active" data-view="list" onclick="switchView('list')">📋</button>
+                        <button class="view-btn" data-view="grid" onclick="switchView('grid')">⊞</button>
+                    </div>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-number" id="running-containers">0</div>
-                <div class="stat-label">Running Containers</div>
+            
+            <!-- Projects Container -->
+            <div class="projects-container">
+                <!-- Stats Grid -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-number" id="total-apps">0</div>
+                        <div class="stat-label">Active Applications</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="running-containers">0</div>
+                        <div class="stat-label">Running Containers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="total-deployments">0</div>
+                        <div class="stat-label">Total Deployments</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="system-uptime">0d</div>
+                        <div class="stat-label">System Uptime</div>
+                    </div>
+                </div>
+                
+                <!-- Projects Grid -->
+                <div id="applications-content">
+                    <!-- Applications will be loaded here -->
+                </div>
+                
+                <!-- Deploy New Project Area -->
+                <div class="deploy-new-area">
+                    <div class="deploy-new-title">Want to deploy a new project without connecting to Git?</div>
+                    <div class="deploy-new-description">Drag and drop your project folder here.</div>
+                    <div class="deploy-new-description">Or, <a href="#" class="browse-link">browse to upload</a>.</div>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-number" id="total-deployments">0</div>
-                <div class="stat-label">Total Deployments</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number" id="system-uptime">0d</div>
-                <div class="stat-label">System Uptime</div>
-            </div>
-        </div>
-        
-        <div id="applications-content" data-aos="fade-up" data-aos-delay="200">
-            <!-- Applications will be loaded here -->
         </div>
     </div>
     
     <button class="refresh-button" onclick="loadApplications()" title="Refresh Applications">
         🔄
     </button>
+    
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
     
     <!-- Scripts -->
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
@@ -329,6 +1448,8 @@
                 }
                 
                 const deployments = await response.json();
+                allDeployments = deployments; // Store globally for filtering
+                filteredDeployments = deployments;
                 renderApplications(deployments);
                 updateStats(deployments);
                 
@@ -343,67 +1464,128 @@
             
             if (!deployments || deployments.length === 0) {
                 container.innerHTML = `
-                    <div class="empty-state">
-                        <div class="empty-icon">📦</div>
-                        <h3 class="empty-title">No Applications Deployed</h3>
-                        <p class="empty-description">
-                            You haven't deployed any applications yet. Head back to the main dashboard 
-                            to deploy your first application and see it appear here.
-                        </p>
-                        <a href="/" class="btn btn-primary">Deploy Your First App</a>
+                    <div class="deploy-new-area">
+                        <div class="deploy-new-title">No projects deployed yet</div>
+                        <div class="deploy-new-description">You haven't deployed any applications yet. Head back to the main dashboard to deploy your first application and see it appear here.</div>
+                        <div class="deploy-new-description">Or, <a href="/" class="browse-link">go to main dashboard</a>.</div>
                     </div>
                 `;
                 return;
             }
             
-            const applicationsGrid = document.createElement('div');
-            applicationsGrid.className = 'applications-grid';
+            const projectsGrid = document.createElement('div');
+            projectsGrid.className = 'projects-grid';
             
             deployments.forEach(deployment => {
-                const appCard = createAppCard(deployment);
-                applicationsGrid.appendChild(appCard);
+                const projectCard = createProjectCard(deployment);
+                projectsGrid.appendChild(projectCard);
             });
             
             container.innerHTML = '';
-            container.appendChild(applicationsGrid);
+            container.appendChild(projectsGrid);
         }
         
-        function createAppCard(deployment) {
+        function createProjectCard(deployment) {
             const card = document.createElement('div');
-            card.className = 'app-card';
-            card.setAttribute('data-aos', 'fade-up');
+            card.className = 'project-card';
             
             // Check for various success statuses
             const isRunning = deployment.status === 'deployed' || deployment.status === 'success';
             const statusClass = isRunning ? 'status-running' : 'status-stopped';
-            const statusText = isRunning ? '● Running' : '● Stopped';
+            const statusText = isRunning ? 'Running' : 'Stopped';
+            const statusIcon = getStatusIcon(deployment.status);
             
-            card.innerHTML = `
-                <div class="app-header">
-                    <div>
-                        <div class="app-name">${deployment.project_id || 'Unknown Project'}</div>
-                        <div class="app-url">${deployment.deployed_url || 'No URL available'}</div>
-                    </div>
-                    <div class="app-status ${statusClass}">${statusText}</div>
+            // Generate project thumbnail based on project type
+            const thumbnailIcon = getProjectThumbnail(deployment.git_url);
+            
+            const cardContent = `
+                <div class="project-thumbnail">
+                    ${thumbnailIcon}
                 </div>
-                
-                <div class="app-actions">
-                    ${isRunning ? `
-                        <a href="${deployment.deployed_url}" class="app-link" target="_blank">
-                            🚀 Open App
-                        </a>
-                        <button class="app-link secondary" onclick="destroyDeployment('${deployment.container_name}')">
-                            🗑️ Destroy
-                        </button>
-                    ` : `
-                        <button class="app-link secondary" onclick="destroyDeployment('${deployment.container_name}')">
-                            🗑️ Remove
-                        </button>
-                    `}
+                <div class="project-info">
+                    <div class="project-name">${deployment.project_id || 'Unknown Project'}</div>
+                    <div class="project-description">Manual deploys</div>
+                    <div class="project-meta">Owned by Aayush786-21's team</div>
+                    <div class="project-meta">Published on ${formatDate(deployment.created_at)}</div>
+                </div>
+                <div class="project-actions">
+                    <span class="project-status ${statusClass}">${statusText}</span>
+                    <button class="project-menu" onclick="showProjectMenu('${deployment.container_name}')">⋮</button>
                 </div>
             `;
             
+            card.innerHTML = cardContent;
+            
+            // Add click handler to open the project
+            card.addEventListener('click', (e) => {
+                if (!e.target.closest('.project-menu')) {
+                    if (isRunning && deployment.deployed_url) {
+                        window.open(deployment.deployed_url, '_blank');
+                    } else {
+                        showProjectDetails(deployment);
+                    }
+                }
+            });
+            
             return card;
+        }
+        
+        function getProjectThumbnail(gitUrl) {
+            // Determine project type based on git URL or other indicators
+            if (gitUrl.includes('react') || gitUrl.includes('nextjs')) {
+                return '⚛️';
+            } else if (gitUrl.includes('vue')) {
+                return '💚';
+            } else if (gitUrl.includes('angular')) {
+                return '🅰️';
+            } else if (gitUrl.includes('django') || gitUrl.includes('flask')) {
+                return '🐍';
+            } else if (gitUrl.includes('node') || gitUrl.includes('express')) {
+                return '🟢';
+            } else {
+                return '📄';
+            }
+        }
+        
+        function showProjectMenu(containerName) {
+            // Create a simple context menu
+            const menu = document.createElement('div');
+            menu.style.cssText = `
+                position: fixed;
+                background: white;
+                border: 1px solid var(--border-color);
+                border-radius: 6px;
+                box-shadow: var(--card-shadow);
+                padding: 8px 0;
+                z-index: 1000;
+                min-width: 150px;
+            `;
+            
+            menu.innerHTML = `
+                <div style="padding: 8px 16px; cursor: pointer; font-size: 14px;" onclick="viewLogs('${containerName}')">📋 View Logs</div>
+                <div style="padding: 8px 16px; cursor: pointer; font-size: 14px;" onclick="destroyDeployment('${containerName}')">🗑️ Destroy</div>
+            `;
+            
+            // Position the menu
+            const rect = event.target.getBoundingClientRect();
+            menu.style.left = rect.right + 'px';
+            menu.style.top = rect.top + 'px';
+            
+            document.body.appendChild(menu);
+            
+            // Remove menu when clicking outside
+            setTimeout(() => {
+                document.addEventListener('click', () => {
+                    if (menu.parentNode) {
+                        menu.parentNode.removeChild(menu);
+                    }
+                }, { once: true });
+            }, 100);
+        }
+        
+        function showProjectDetails(deployment) {
+            // Show project details in a modal or navigate to details page
+            alert(`Project: ${deployment.project_id}\nStatus: ${deployment.status}\nContainer: ${deployment.container_name}`);
         }
         
         function updateStats(deployments) {
@@ -524,11 +1706,269 @@
             }, 3000);
         }
         
-        // Auto-refresh every 30 seconds
+        // Enhanced Functions
+        let currentView = 'grid';
+        let allDeployments = [];
+        let filteredDeployments = [];
+        
+        function switchView(view) {
+            currentView = view;
+            
+            // Update view toggle buttons
+            document.querySelectorAll('.view-toggle').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector(`[data-view="${view}"]`).classList.add('active');
+            
+            // Update applications grid class
+            const container = document.getElementById('applications-content');
+            if (container.querySelector('.applications-grid')) {
+                container.querySelector('.applications-grid').className = `applications-grid ${view}-view`;
+            }
+            
+            // Re-render with current view
+            renderApplications(filteredDeployments.length > 0 ? filteredDeployments : allDeployments);
+        }
+        
+        function filterApplications() {
+            const searchTerm = document.getElementById('search-input').value.toLowerCase();
+            const statusFilter = document.getElementById('status-filter').value;
+            const sortBy = document.getElementById('sort-by').value;
+            
+            filteredDeployments = allDeployments.filter(deployment => {
+                const matchesSearch = !searchTerm || 
+                    deployment.project_id?.toLowerCase().includes(searchTerm) ||
+                    deployment.container_name?.toLowerCase().includes(searchTerm) ||
+                    deployment.git_url?.toLowerCase().includes(searchTerm);
+                
+                const matchesStatus = !statusFilter || 
+                    deployment.status?.toLowerCase().includes(statusFilter);
+                
+                return matchesSearch && matchesStatus;
+            });
+            
+            // Sort deployments
+            filteredDeployments.sort((a, b) => {
+                switch (sortBy) {
+                    case 'name':
+                        return (a.project_id || '').localeCompare(b.project_id || '');
+                    case 'created':
+                        return new Date(b.created_at) - new Date(a.created_at);
+                    case 'status':
+                        return (a.status || '').localeCompare(b.status || '');
+                    default:
+                        return 0;
+                }
+            });
+            
+            renderApplications(filteredDeployments);
+        }
+        
+        function setupEventListeners() {
+            // Search and filter event listeners
+            document.getElementById('search-input').addEventListener('input', filterApplications);
+            document.getElementById('status-filter').addEventListener('change', filterApplications);
+            document.getElementById('sort-by').addEventListener('change', filterApplications);
+        }
+        
+        function getContainerHealth(containerName) {
+            // This would integrate with Docker health checks
+            // For now, return a random health status
+            const healthStatuses = ['healthy', 'warning', 'critical'];
+            return healthStatuses[Math.floor(Math.random() * healthStatuses.length)];
+        }
+        
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+            const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            
+            if (diffDays > 0) {
+                return `${diffDays}d ${diffHours}h ago`;
+            } else if (diffHours > 0) {
+                return `${diffHours}h ago`;
+            } else {
+                return 'Just now';
+            }
+        }
+        
+        function getStatusIcon(status) {
+            const statusIcons = {
+                'deployed': '🚀',
+                'success': '✅',
+                'running': '🟢',
+                'stopped': '⏹️',
+                'failed': '❌',
+                'starting': '⏳',
+                'stopping': '⏸️'
+            };
+            return statusIcons[status] || '❓';
+        }
+        
+        // Enhanced toast function
+        function showToast(message, type = 'success', duration = 3000) {
+            const toastContainer = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            
+            toastContainer.appendChild(toast);
+            
+            // Trigger animation
+            setTimeout(() => toast.classList.add('show'), 100);
+            
+            // Auto-remove
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => {
+                    if (toast.parentNode) {
+                        toast.parentNode.removeChild(toast);
+                    }
+                }, 300);
+            }, duration);
+        }
+        
+        async function viewLogs(containerName) {
+            const token = localStorage.getItem('access_token');
+            
+            if (!token) {
+                showToast('Please log in to view logs', 'error');
+                return;
+            }
+            
+            try {
+                // Show loading state
+                showToast('Loading logs...', 'info');
+                
+                // Try to get logs from the API
+                const response = await fetch(`/deployment/${containerName}/logs`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const logs = await response.json();
+                    showLogsModal(containerName, logs);
+                } else {
+                    // Fallback: try to get Docker logs directly
+                    showDockerLogsModal(containerName);
+                }
+                
+            } catch (error) {
+                console.error('Error fetching logs:', error);
+                showToast('Failed to load logs', 'error');
+            }
+        }
+        
+        function showLogsModal(containerName, logs) {
+            const modal = document.createElement('div');
+            modal.className = 'logs-modal';
+            modal.innerHTML = `
+                <div class="logs-modal-content">
+                    <div class="logs-modal-header">
+                        <h3>📋 Logs for ${containerName}</h3>
+                        <button onclick="this.closest('.logs-modal').remove()" class="close-btn">×</button>
+                    </div>
+                    <div class="logs-modal-body">
+                        <pre class="logs-content">${logs.logs || 'No logs available'}</pre>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            setTimeout(() => modal.classList.add('show'), 100);
+        }
+        
+        function showDockerLogsModal(containerName) {
+            const modal = document.createElement('div');
+            modal.className = 'logs-modal';
+            modal.innerHTML = `
+                <div class="logs-modal-content">
+                    <div class="logs-modal-header">
+                        <h3>📋 Docker Logs for ${containerName}</h3>
+                        <button onclick="this.closest('.logs-modal').remove()" class="close-btn">×</button>
+                    </div>
+                    <div class="logs-modal-body">
+                        <div class="logs-loading">
+                            <div class="loading-spinner"></div>
+                            <p>Fetching Docker logs...</p>
+                        </div>
+                        <pre class="logs-content" style="display: none;"></pre>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            setTimeout(() => modal.classList.add('show'), 100);
+            
+            // Simulate fetching Docker logs (in real implementation, this would call the backend)
+            setTimeout(() => {
+                const loadingEl = modal.querySelector('.logs-loading');
+                const logsEl = modal.querySelector('.logs-content');
+                
+                if (loadingEl && logsEl) {
+                    loadingEl.style.display = 'none';
+                    logsEl.style.display = 'block';
+                    logsEl.textContent = `[INFO] Container ${containerName} logs\n[INFO] This is a simulated log output\n[INFO] In production, this would show real Docker logs`;
+                }
+            }, 2000);
+        }
+        
+        // WebSocket connection for real-time updates
+        let ws = null;
+        
+        function connectWebSocket() {
+            const clientId = Date.now().toString();
+            const wsUrl = `ws://${window.location.host}/ws/${clientId}`;
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = function() {
+                    console.log('WebSocket connected');
+                    showToast('Connected to real-time updates', 'info', 2000);
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'deployment_update') {
+                            // Refresh applications when deployment status changes
+                            loadApplications();
+                            showToast(`Deployment ${data.status}: ${data.container_name}`, 'info');
+                        }
+                    } catch (error) {
+                        console.error('Error parsing WebSocket message:', error);
+                    }
+                };
+                
+                ws.onclose = function() {
+                    console.log('WebSocket disconnected');
+                    // Try to reconnect after 5 seconds
+                    setTimeout(connectWebSocket, 5000);
+                };
+                
+                ws.onerror = function(error) {
+                    console.error('WebSocket error:', error);
+                };
+                
+            } catch (error) {
+                console.error('Failed to connect WebSocket:', error);
+            }
+        }
+        
+        // Auto-refresh every 30 seconds (fallback)
         setInterval(loadApplications, 30000);
         
         // Load applications on page load
-        document.addEventListener('DOMContentLoaded', loadApplications);
+        document.addEventListener('DOMContentLoaded', () => {
+            loadApplications();
+            setupEventListeners();
+            connectWebSocket();
+        });
     </script>
 </body>
 </html>

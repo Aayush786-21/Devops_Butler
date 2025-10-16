@@ -598,3 +598,196 @@ input.invalid {
     font-size: 1.5rem;
   }
 }
+
+/* Applications Dashboard Styles */
+.applications-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.applications-title h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.applications-title p {
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+
+.applications-actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.applications-content {
+  min-height: 200px;
+}
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.project-card {
+  background: var(--card-bg);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1.5rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.project-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent);
+  box-shadow: 0 10px 25px rgba(139, 92, 246, 0.2);
+}
+
+.project-thumbnail {
+  width: 60px;
+  height: 60px;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.project-info {
+  margin-bottom: 1rem;
+}
+
+.project-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+.project-description {
+  color: var(--text-light);
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.project-meta {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
+}
+
+.project-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.project-status {
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-running {
+  background: rgba(34, 197, 94, 0.2);
+  color: var(--success);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.status-stopped {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--error);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.status-building {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  animation: pulse 2s infinite;
+}
+
+.project-menu {
+  background: none;
+  border: none;
+  color: var(--text-light);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.project-menu:hover {
+  background: var(--bg-secondary);
+  color: var(--text);
+}
+
+.deploy-new-area {
+  text-align: center;
+  padding: 3rem 2rem;
+  color: var(--text-light);
+}
+
+.deploy-new-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 1rem;
+}
+
+.deploy-new-description {
+  margin-bottom: 1rem;
+  line-height: 1.6;
+}
+
+.browse-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.browse-link:hover {
+  text-decoration: underline;
+}
+
+/* Responsive Design for Applications */
+@media (max-width: 768px) {
+  .applications-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+  
+  .applications-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  
+  .projects-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  
+  .project-card {
+    padding: 1rem;
+  }
+}

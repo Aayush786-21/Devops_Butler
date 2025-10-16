@@ -357,7 +357,7 @@ async def cleanup_old_images(repo_name: str, keep_count: int = 3) -> None:
         elif result.returncode != 0:
             print(f"⚠️ Warning: Failed to list images for {repo_name}: {result.stderr}")
         else:
-            print(f"ℹ️ No images found for {repo_name}")
+            print(f"ℹ️ No previous images found for {repo_name} (this is normal for first deployments)")
         
     except subprocess.SubprocessError as e:
         print(f"⚠️ Subprocess error during image cleanup: {e}")

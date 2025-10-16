@@ -57,7 +57,7 @@ async def get_repository_contents(
     Get repository contents (files and directories) for a given path
     """
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
             headers = {
                 "Accept": "application/vnd.github.v3+json"
@@ -69,6 +69,9 @@ async def get_repository_contents(
             params = {"ref": branch}
             
             response = await client.get(url, headers=headers, params=params)
+            # Handle rate limit
+            if response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0":
+                raise HTTPException(status_code=429, detail="GitHub API rate limit exceeded. Please try later.")
             
             if response.status_code == 404:
                 raise HTTPException(status_code=404, detail="Repository or path not found")
@@ -98,7 +101,7 @@ async def get_file_content(
     Get content of a specific file in the repository
     """
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
             headers = {
                 "Accept": "application/vnd.github.v3+json"
@@ -110,6 +113,8 @@ async def get_file_content(
             params = {"ref": branch}
             
             response = await client.get(url, headers=headers, params=params)
+            if response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0":
+                raise HTTPException(status_code=429, detail="GitHub API rate limit exceeded. Please try later.")
             
             if response.status_code == 404:
                 raise HTTPException(status_code=404, detail="Repository or path not found")
@@ -151,7 +156,7 @@ async def get_user_repositories(
     Get public repositories for a GitHub user
     """
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             url = f"https://api.github.com/users/{username}/repos"
             headers = {
                 "Accept": "application/vnd.github.v3+json"
@@ -169,6 +174,8 @@ async def get_user_repositories(
             }
             
             response = await client.get(url, headers=headers, params=params)
+            if response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0":
+                raise HTTPException(status_code=429, detail="GitHub API rate limit exceeded. Please try later.")
             
             if response.status_code == 404:
                 raise HTTPException(status_code=404, detail=f"User '{username}' not found")

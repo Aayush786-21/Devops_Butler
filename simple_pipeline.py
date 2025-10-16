@@ -13,6 +13,7 @@ import tempfile
 import re
 import socket
 import yaml
+import json
 from urllib.parse import urlparse
 from typing import Optional, Tuple, Dict, Any
 from pathlib import Path
@@ -95,8 +96,13 @@ def extract_repo_name(git_url: str) -> str:
         user_name = re.sub(r'[^a-zA-Z0-9-]', '-', user_name)
         repo_name = re.sub(r'[^a-zA-Z0-9-]', '-', repo_name)
         
-        # Use user-repo combination for uniqueness
-        unique_name = f"{user_name}-{repo_name}"
+        # Avoid redundancy if repo_name already contains user_name or vice versa
+        if user_name.lower() in repo_name.lower() or repo_name.lower() in user_name.lower():
+            # If there's significant overlap, just use the longer one
+            unique_name = repo_name if len(repo_name) >= len(user_name) else user_name
+        else:
+            # Use user-repo combination for uniqueness
+            unique_name = f"{user_name}-{repo_name}"
         
         # Ensure it starts with a letter or number
         if unique_name and not unique_name[0].isalnum():
@@ -320,6 +326,7 @@ async def handle_docker_compose_deployment(repo_dir: str, repo_name: str, contai
         await manager.broadcast("🧹 Cleaning up any existing containers and networks...")
         try:
             # Try to stop and remove containers from this compose project
+            # Try both docker-compose and docker compose
             cleanup_result = await asyncio.to_thread(
                 subprocess.run,
                 ["docker-compose", "-f", compose_file_path, "down", "--remove-orphans", "-v", "--rmi", "local"],
@@ -331,6 +338,15 @@ async def handle_docker_compose_deployment(repo_dir: str, repo_name: str, contai
                 await manager.broadcast("✅ Cleaned up existing containers and networks")
             else:
                 print(f"⚠️ Cleanup warning (might be first deployment): {cleanup_result.stderr}")
+                alt_cleanup = await asyncio.to_thread(
+                    subprocess.run,
+                    ["docker", "compose", "-f", compose_file_path, "down", "--remove-orphans", "-v"],
+                    cwd=repo_dir,
+                    capture_output=True,
+                    text=True
+                )
+                if alt_cleanup.returncode == 0:
+                    await manager.broadcast("✅ Cleaned up existing containers and networks")
                 
             # Additional cleanup: remove conflicting networks manually
             await cleanup_conflicting_networks(repo_dir, compose_file_path)
@@ -441,6 +457,15 @@ async def handle_docker_compose_deployment(repo_dir: str, repo_name: str, contai
             capture_output=True,
             text=True
         )
+        if compose_result.returncode != 0:
+            # Fallback to docker compose
+            compose_result = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "compose", "-f", compose_file_path, "up", "-d"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True
+            )
         
         if compose_result.returncode != 0:
             print(f"❌ Docker compose failed: {compose_result.stderr}")
@@ -586,6 +611,161 @@ CMD ["python", "server.py"]
         return None
 
 
+async def handle_node_project_deployment(repo_dir: str, repo_name: str, container_name: str) -> Optional[str]:
+    """Handle Node.js/Next.js project by generating a suitable Dockerfile and deploying."""
+    try:
+        package_json_path = os.path.join(repo_dir, 'package.json')
+        if not os.path.exists(package_json_path):
+            return None
+
+        await manager.broadcast("🟩 Node.js project detected. Preparing Dockerfile...")
+
+        # Read package.json to detect framework and scripts
+        with open(package_json_path, 'r', encoding='utf-8') as f:
+            pkg = json.load(f)
+
+        deps = pkg.get('dependencies', {}) or {}
+        dev_deps = pkg.get('devDependencies', {}) or {}
+        scripts = pkg.get('scripts', {}) or {}
+        has_next = 'next' in {**deps, **dev_deps}
+        start_script = scripts.get('start', '')
+        build_script = scripts.get('build', '')
+
+        # Choose internal port
+        internal_port = 3000 if has_next else 3000
+
+        # Pre-build validation: ensure env vars used in Next.js config are defined
+        def _collect_env_from_next_config() -> set[str]:
+            envs: set[str] = set()
+            for cfg_name in [
+                'next.config.ts', 'next.config.js', 'next.config.mjs', 'next.config.cjs'
+            ]:
+                cfg_path = os.path.join(repo_dir, cfg_name)
+                if os.path.exists(cfg_path):
+                    try:
+                        with open(cfg_path, 'r', encoding='utf-8') as cf:
+                            content = cf.read()
+                            for match in re.findall(r'process\.env\.([A-Z0-9_]+)', content):
+                                envs.add(match)
+                    except Exception:
+                        continue
+            return envs
+
+        def _load_local_env_files() -> dict:
+            env_map: dict[str, str] = {}
+            # Typical env files to consider
+            for name in ['frontend.env', '.env', '.env.local', '.env.production']:
+                path = os.path.join(repo_dir, name)
+                if os.path.exists(path):
+                    try:
+                        with open(path, 'r', encoding='utf-8') as ef:
+                            for line in ef:
+                                line = line.strip()
+                                if not line or line.startswith('#') or '=' not in line:
+                                    continue
+                                k, v = line.split('=', 1)
+                                env_map[k.strip()] = v.strip().strip('"').strip("'")
+                    except Exception:
+                        continue
+            return env_map
+
+        # Only run validation for Next.js projects
+        if has_next:
+            referenced = _collect_env_from_next_config()
+            local_envs = _load_local_env_files()
+            missing: list[str] = []
+            # Check env presence in local env files or current process env
+            for var in referenced:
+                if var not in local_envs and not os.environ.get(var):
+                    missing.append(var)
+            if missing:
+                await manager.broadcast(
+                    "❌ Next.js configuration references undefined environment variables: " + ", ".join(missing)
+                )
+                await manager.broadcast(
+                    "💡 Provide them via 'frontend.env' upload or include a .env(.local/.production) in your repo."
+                )
+                return None
+
+        # Decide commands
+        # Build command
+        if build_script:
+            build_cmd = 'npm run build'
+        elif has_next:
+            build_cmd = 'npx next build'
+        else:
+            build_cmd = ''
+
+        # Start command
+        if start_script:
+            start_cmd = 'npm run start'
+        elif has_next:
+            start_cmd = f'npx next start -p {internal_port}'
+        elif 'dev' in scripts:
+            start_cmd = 'npm run dev'
+        else:
+            # last resort
+            start_cmd = 'node server.js'
+
+        # Create a robust multi-stage Dockerfile for Next.js or generic Node app
+        if has_next or 'next' in build_script or 'next' in start_script:
+            dockerfile_content = f'''# Auto-generated Dockerfile for Next.js (Debian-based for compatibility)
+FROM node:20-bookworm-slim AS deps
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+{f'RUN {build_cmd}' if build_cmd else ''}
+
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOSTNAME=0.0.0.0
+ENV HOST=0.0.0.0
+ENV PORT={internal_port}
+# Ensure undefined rewrite destinations don't crash Next.js
+# If the app uses NEXT_PUBLIC_API_BASE in next.config, forward it here when present
+ARG NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_API_BASE=${{NEXT_PUBLIC_API_BASE}}
+COPY --from=builder /app ./
+EXPOSE {internal_port}
+CMD ["/bin/sh", "-lc", "{start_cmd}"]
+'''
+        else:
+            # Generic Node app: run start script
+            dockerfile_content = f'''# Auto-generated Dockerfile for Node.js
+FROM node:20-bookworm-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+COPY . .
+ENV HOST=0.0.0.0
+ENV HOSTNAME=0.0.0.0
+ENV PORT={internal_port}
+EXPOSE {internal_port}
+CMD ["/bin/sh", "-lc", "{start_cmd}"]
+'''
+
+        # Write Dockerfile
+        dockerfile_path = os.path.join(repo_dir, 'Dockerfile')
+        with open(dockerfile_path, 'w', encoding='utf-8') as f:
+            f.write(dockerfile_content)
+
+        await manager.broadcast("✅ Generated Dockerfile for Node.js project")
+
+        # Proceed with standard Dockerfile deployment
+        return await handle_dockerfile_deployment(repo_dir, repo_name, container_name)
+    except Exception as e:
+        print(f"❌ Error in node project deployment: {e}")
+        return None
+
+
 async def handle_ai_dockerfile_deployment(repo_dir: str, repo_name: str, container_name: str) -> Optional[str]:
     """Handle AI-generated Dockerfile deployment (placeholder - can be implemented with Gemini)."""
     try:
@@ -661,12 +841,33 @@ async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, e
         # Clone repository
         await manager.broadcast("📥 Cloning repository...")
         command = ["git", "clone", "--depth", "1", str(git_url), repo_dir]
+        # Non-interactive Git and timeout to avoid hangs
+        git_env = os.environ.copy()
+        git_env.setdefault("GIT_TERMINAL_PROMPT", "0")
         
         try:
-            await asyncio.to_thread(subprocess.run, command, check=True, capture_output=True, text=True)
+            await asyncio.to_thread(
+                subprocess.run,
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                timeout=120
+            )
             await manager.broadcast("✅ Repository cloned successfully")
         except subprocess.CalledProcessError as e:
             error_msg = f"❌ Failed to clone repository: {e.stderr}"
+            await manager.broadcast(error_msg)
+            with Session(engine) as session:
+                deployment_to_update = session.get(Deployment, db_deployment.id)
+                if deployment_to_update:
+                    deployment_to_update.status = "failed"
+                    session.add(deployment_to_update)
+                    session.commit()
+            return None
+        except subprocess.TimeoutExpired:
+            error_msg = "❌ Failed to clone repository: operation timed out"
             await manager.broadcast(error_msg)
             with Session(engine) as session:
                 deployment_to_update = session.get(Deployment, db_deployment.id)
@@ -745,7 +946,18 @@ async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, e
             else:
                 print("❌ Dockerfile deployment failed")
         
-        # Strategy 3: Check for static website
+        # Strategy 3: Node.js/Next.js project (package.json present)
+        elif os.path.exists(os.path.join(repo_dir, 'package.json')):
+            await manager.broadcast("🟩 package.json detected, deploying Node.js application...")
+            print("🟩 Using Node.js deployment strategy")
+            server_url = await handle_node_project_deployment(repo_dir, repo_name, new_container_name)
+            if server_url:
+                final_status = "success"
+                print(f"✅ Node.js deployment successful: {server_url}")
+            else:
+                print("❌ Node.js deployment failed")
+
+        # Strategy 4: Check for static website
         elif any(f.endswith('.html') for f in os.listdir(repo_dir) if os.path.isfile(os.path.join(repo_dir, f))):
             await manager.broadcast("🌐 Static website detected, deploying with auto-generated Dockerfile...")
             print("🌐 Using static website deployment strategy")
@@ -756,16 +968,37 @@ async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, e
             else:
                 print("❌ Static website deployment failed")
         
-        # Strategy 4: AI-generated Dockerfile (fallback)
+        # Strategy 5: AI-generated Dockerfile (fallback)
         else:
-            await manager.broadcast("🤖 No recognized deployment pattern, attempting AI-generated Dockerfile...")
-            print("🤖 Using AI Dockerfile generation strategy")
-            server_url = await handle_ai_dockerfile_deployment(repo_dir, repo_name, new_container_name)
-            if server_url:
-                final_status = "success"
-                print(f"✅ AI Dockerfile deployment successful: {server_url}")
+            await manager.broadcast("🤖 No recognized deployment pattern found.")
+            print("🤖 Repository analysis:")
+            print(f"   - Has docker-compose files: {has_compose}")
+            print(f"   - Has Dockerfile: {has_dockerfile}")
+            html_files = [f for f in os.listdir(repo_dir) if f.endswith('.html') and os.path.isfile(os.path.join(repo_dir, f))]
+            print(f"   - HTML files found: {html_files}")
+            
+            # Check if it's just documentation/files without code
+            all_files = [f for f in os.listdir(repo_dir) if os.path.isfile(os.path.join(repo_dir, f))]
+            code_files = [f for f in all_files if any(f.endswith(ext) for ext in ['.js', '.py', '.java', '.go', '.rs', '.php', '.rb', '.cs', '.cpp', '.c', '.ts', '.jsx', '.tsx', '.vue', '.html', '.css'])]
+            
+            await manager.broadcast(f"📁 Repository contains {len(all_files)} files, {len(code_files)} appear to be code files")
+            print(f"📁 All files: {all_files}")
+            print(f"📁 Code files: {code_files}")
+            
+            if not code_files:
+                error_msg = f"❌ Repository appears to contain only documentation/assets, no deployable code found. Files: {all_files}"
+                await manager.broadcast(error_msg)
+                print(error_msg)
+                final_status = "failed"
             else:
-                print("❌ AI Dockerfile deployment failed")
+                await manager.broadcast("🤖 Attempting AI-generated Dockerfile...")
+                print("🤖 Using AI Dockerfile generation strategy")
+                server_url = await handle_ai_dockerfile_deployment(repo_dir, repo_name, new_container_name)
+                if server_url:
+                    final_status = "success"
+                    print(f"✅ AI Dockerfile deployment successful: {server_url}")
+                else:
+                    print("❌ AI Dockerfile deployment failed")
         
         # Return results
         if final_status == "success" and server_url:
