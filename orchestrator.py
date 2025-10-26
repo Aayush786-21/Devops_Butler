@@ -46,6 +46,7 @@ class UserRegister(BaseModel):
 
 class EnvVarsRequest(BaseModel):
     variables: dict
+    project_id: Optional[int] = None
 
 
 @asynccontextmanager
@@ -299,18 +300,25 @@ async def get_applications():
 
 # Environment Variables API endpoints
 @app.get("/api/env-vars")
-async def get_env_vars(current_user: User = Depends(get_current_user)):
-    """Get all environment variables for the current user"""
+async def get_env_vars(
+    project_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get environment variables for the current user, optionally filtered by project"""
     with Session(engine) as session:
-        env_vars = session.exec(
-            select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
-        ).all()
+        query = select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
+        
+        if project_id is not None:
+            query = query.where(EnvironmentVariable.project_id == project_id)
+        
+        env_vars = session.exec(query).all()
         
         variables = {var.key: var.value for var in env_vars}
         vars_list = [
             {
                 "key": var.key,
                 "value": var.value,
+                "project_id": var.project_id,
                 "updated_at": var.updated_at.isoformat() if var.updated_at else None
             }
             for var in env_vars
@@ -322,12 +330,23 @@ async def save_env_vars(
     data: EnvVarsRequest,
     current_user: User = Depends(get_current_user)
 ):
-    """Save environment variables for the current user"""
+    """Save environment variables for the current user, optionally for a specific project"""
     with Session(engine) as session:
-        # Get all existing variables for this user
-        existing_vars = session.exec(
-            select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
-        ).all()
+        # Determine which variables to manage
+        if data.project_id is not None:
+            # Project-specific variables
+            query = select(EnvironmentVariable).where(
+                EnvironmentVariable.user_id == current_user.id,
+                EnvironmentVariable.project_id == data.project_id
+            )
+        else:
+            # Global variables (no project_id)
+            query = select(EnvironmentVariable).where(
+                EnvironmentVariable.user_id == current_user.id,
+                EnvironmentVariable.project_id.is_(None)
+            )
+        
+        existing_vars = session.exec(query).all()
         existing_dict = {var.key: var for var in existing_vars}
         
         # Process variables from request
@@ -344,6 +363,7 @@ async def save_env_vars(
                     # Create new
                     env_var = EnvironmentVariable(
                         user_id=current_user.id,
+                        project_id=data.project_id,
                         key=key,
                         value=value
                     )
@@ -697,6 +717,47 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             level=LogLevel.INFO,
             category=LogCategory.SYSTEM,
             message=f"Client #{client_id} disconnected",
+            component="websocket"
+        )
+
+@app.websocket("/ws/logs")
+async def logs_websocket(websocket: WebSocket):
+    """WebSocket endpoint for real-time logs streaming"""
+    await websocket.accept()
+    global_logger.log_structured(
+        level=LogLevel.INFO,
+        category=LogCategory.SYSTEM,
+        message="Logs WebSocket client connected",
+        component="websocket"
+    )
+    
+    try:
+        # Send initial connection message
+        await websocket.send_json({
+            "message": "Connected to logs stream",
+            "type": "success"
+        })
+        
+        # Keep connection alive and send periodic heartbeat
+        while True:
+            await asyncio.sleep(1)
+            # Send heartbeat to keep connection alive
+            await websocket.send_json({
+                "message": f"Heartbeat - {datetime.datetime.utcnow().isoformat()}",
+                "type": "debug"
+            })
+    except WebSocketDisconnect:
+        global_logger.log_structured(
+            level=LogLevel.INFO,
+            category=LogCategory.SYSTEM,
+            message="Logs WebSocket client disconnected",
+            component="websocket"
+        )
+    except Exception as e:
+        global_logger.log_structured(
+            level=LogLevel.ERROR,
+            category=LogCategory.SYSTEM,
+            message=f"Logs WebSocket error: {str(e)}",
             component="websocket"
         )
 

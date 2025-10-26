@@ -2,13 +2,14 @@
 class Router {
   constructor() {
     this.routes = {
-      '/': 'dashboard',
+      '/': 'projects',
       '/deploy': 'deploy',
       '/applications': 'applications',
       '/history': 'history',
       '/repositories': 'repositories',
       '/env-vars': 'env-vars',
-      '/settings': 'settings'
+      '/settings': 'settings',
+      '/logs': 'logs'
     };
     this.currentPage = null;
     this.init();
@@ -81,21 +82,22 @@ class Router {
 
   updatePageTitle(pageId) {
     const titles = {
-      dashboard: 'Dashboard',
+      projects: 'Projects',
       deploy: 'Deploy',
       applications: 'Applications',
       history: 'History',
       repositories: 'Repositories',
       'env-vars': 'Environmental Variables',
-      settings: 'Settings'
+      settings: 'Settings',
+      logs: 'Logs'
     };
     document.getElementById('pageTitle').textContent = titles[pageId] || 'Dashboard';
   }
 
   loadPageData(pageId) {
     switch(pageId) {
-      case 'dashboard':
-        loadDashboard();
+      case 'projects':
+        loadProjects();
         break;
       case 'applications':
         loadApplications();
@@ -112,6 +114,9 @@ class Router {
       case 'settings':
         loadSettings();
         break;
+      case 'logs':
+        loadLogs();
+        break;
     }
   }
 }
@@ -126,13 +131,25 @@ let username = localStorage.getItem('username');
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
-    checkAuthStatus();
-  setupEventListeners();
+  // Check auth first - will redirect if not logged in
+  checkAuthStatus();
   
-  // Show dashboard by default
-  const dashboardPage = document.getElementById('page-dashboard');
-  if (dashboardPage && window.location.pathname === '/') {
-    dashboardPage.style.display = 'block';
+  // Only setup these if we're logged in and not on login page
+  const isLoginPage = window.location.pathname === '/login' || window.location.pathname.includes('login.html');
+  if (!isLoginPage) {
+    // Wait a bit for checkAuthStatus to potentially redirect
+    setTimeout(() => {
+      if (authToken && username) {
+        setupEventListeners();
+        setupCommandPalette();
+        
+        // Show projects page by default
+        const projectsPage = document.getElementById('page-projects');
+        if (projectsPage && window.location.pathname === '/') {
+          projectsPage.style.display = 'block';
+        }
+      }
+    }, 100);
   }
 });
 
@@ -145,6 +162,9 @@ function checkAuthStatus() {
   const userEmail = document.getElementById('userEmail');
   const userAvatar = document.getElementById('userAvatar');
 
+  // Check if we're on the login page - don't redirect if we are
+  const isLoginPage = window.location.pathname === '/login' || window.location.pathname.includes('login.html');
+  
     if (authToken && username) {
     // User is logged in
     userSection.style.display = 'flex';
@@ -156,13 +176,23 @@ function checkAuthStatus() {
     loadUserProfile();
     
     // Load user data
-    loadDashboard();
+    loadProjects();
+    
+    // If on login page and logged in, redirect to home
+    if (isLoginPage) {
+      window.location.href = '/';
+        }
     } else {
     // User is not logged in
     userSection.style.display = 'none';
     authButtons.style.display = 'block';
     logoutBtn.style.display = 'none';
     newDeployBtn.style.display = 'none';
+    
+    // Redirect to login page if not already there
+    if (!isLoginPage) {
+      window.location.href = '/login';
+    }
   }
 }
 
@@ -178,6 +208,36 @@ function setupEventListeners() {
     showToast('Logged out successfully', 'success');
     router.navigate('/');
   });
+
+  // Projects search
+  const projectsSearch = document.getElementById('projectsSearch');
+  if (projectsSearch) {
+    projectsSearch.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase();
+      filteredProjects = allProjects.filter(project => 
+        project.name.toLowerCase().includes(query) ||
+        (project.repository && project.repository.toLowerCase().includes(query))
+      );
+      renderProjects(filteredProjects);
+    });
+  }
+  
+  // Add project button
+  const addProjectBtn = document.getElementById('addProjectBtn');
+  if (addProjectBtn) {
+    addProjectBtn.addEventListener('click', () => {
+      if (window.router) window.router.navigate('/deploy');
+    });
+  }
+  
+  // Browse upload link
+  const browseUploadLink = document.getElementById('browseUploadLink');
+  if (browseUploadLink) {
+    browseUploadLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.router) window.router.navigate('/deploy');
+    });
+  }
 
   // New Deploy button
   document.getElementById('newDeployBtn').addEventListener('click', () => {
@@ -226,18 +286,124 @@ function getAuthHeaders() {
 }
 
 // Dashboard functions
-async function loadDashboard() {
+// Projects Page Functions
+let allProjects = [];
+let filteredProjects = [];
+
+async function loadProjects() {
   const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
   if (!token) {
-    // User not logged in, don't try to load data
-    document.getElementById('totalDeployments').textContent = '0';
-    document.getElementById('runningApps').textContent = '0';
-    const recentActivity = document.getElementById('recentActivity');
-    if (recentActivity) {
-      recentActivity.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 1rem 0;">No recent activity</p>';
-    }
+    renderProjects([]);
     return;
   }
+  
+  try {
+    const response = await fetch('/api/deployments', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (response.ok) {
+      const deployments = await response.json();
+      // Convert deployments to projects format
+      allProjects = deployments.map(deployment => ({
+        id: deployment.id,
+        name: deployment.app_name || deployment.repository_url?.split('/').pop() || 'Untitled Project',
+        status: deployment.status || 'unknown',
+        url: deployment.app_url,
+        createdAt: deployment.created_at,
+        updatedAt: deployment.updated_at,
+        repository: deployment.repository_url
+      }));
+      filteredProjects = [...allProjects];
+      renderProjects(filteredProjects);
+  } else {
+      renderProjects([]);
+    }
+  } catch (error) {
+    console.error('Error loading projects:', error);
+    renderProjects([]);
+  }
+}
+
+function renderProjects(projects) {
+  const projectsList = document.getElementById('projectsList');
+  if (!projectsList) return;
+  
+  if (projects.length === 0) {
+    projectsList.innerHTML = `
+      <div class="empty-state">
+        <p>No projects found</p>
+        <p style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem;">
+          Deploy your first project to get started
+        </p>
+      </div>
+    `;
+    return;
+  }
+  
+  projectsList.innerHTML = projects.map(project => {
+    const statusClass = project.status === 'running' ? 'status-success' : 
+                       project.status === 'failed' ? 'status-error' : 'status-warning';
+    const statusText = project.status === 'running' ? 'Running' :
+                      project.status === 'failed' ? 'Failed' : 'Unknown';
+    const icon = project.status === 'running' ? '🚀' : '📦';
+    const timeAgo = project.updatedAt ? getRelativeTime(new Date(project.updatedAt)) : 'Recently';
+    
+    return `
+      <div class="project-item" data-project-id="${project.id}">
+        <div class="project-icon">${icon}</div>
+        <div class="project-info">
+          <div class="project-name">${escapeHtml(project.name)}</div>
+          <div class="project-meta">
+            <span class="status-badge ${statusClass}">${statusText}</span>
+            ${project.repository ? `<span>• ${escapeHtml(project.repository)}</span>` : ''}
+            ${timeAgo ? `<span>• Updated ${timeAgo}</span>` : ''}
+          </div>
+        </div>
+        <div class="project-actions">
+          <button class="project-star" title="Star project">⭐</button>
+          <a href="${project.url || '#'}" target="_blank" class="btn-secondary" style="text-decoration: none;">
+            View →
+          </a>
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  // Add click handlers
+  projectsList.querySelectorAll('.project-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (!e.target.closest('.project-actions')) {
+        const projectId = item.getAttribute('data-project-id');
+        // Navigate to project details or open URL
+        const project = projects.find(p => p.id == projectId);
+        if (project && project.url) {
+          window.open(project.url, '_blank');
+        }
+      }
+    });
+  });
+}
+
+function getRelativeTime(date) {
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+  if (diffDays < 30) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+  return date.toLocaleDateString();
+}
+
+// Legacy loadDashboard for compatibility
+async function loadDashboard() {
+  await loadProjects();
 
   try {
     const response = await fetch('/deployments', {
@@ -521,9 +687,9 @@ async function searchRepositories() {
   
   if (!username) {
         showToast('Please enter a GitHub username', 'error');
-            return;
-        }
-        
+      return;
+    }
+    
   const grid = document.getElementById('repositoriesGrid');
   grid.innerHTML = '<div class="empty-state"><p>Loading repositories...</p></div>';
     
@@ -534,7 +700,7 @@ async function searchRepositories() {
         if (response.ok && data.repositories) {
       if (data.repositories.length === 0) {
         grid.innerHTML = '<div class="empty-state"><p>No repositories found</p></div>';
-        } else {
+    } else {
         grid.innerHTML = data.repositories.map(repo => `
           <div class="repository-card" onclick="selectRepository('${repo.clone_url}')">
             <h3>${repo.name}</h3>
@@ -551,8 +717,8 @@ async function searchRepositories() {
       }
     } else {
       grid.innerHTML = `<div class="empty-state"><p>${data.detail || 'Error loading repositories'}</p></div>`;
-        }
-    } catch (error) {
+    }
+  } catch (error) {
     grid.innerHTML = '<div class="empty-state"><p>Error loading repositories</p></div>';
   }
 }
@@ -586,8 +752,42 @@ function showToast(message, type = 'info') {
 // Environment Variables Management
 let envVars = {};
 let envVarsList = [];
+let selectedProjectId = null;
+
+async function loadProjectsForSelector() {
+  const projectSelector = document.getElementById('projectSelector');
+  if (!projectSelector) return;
+  
+  try {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    const response = await fetch('/api/deployments', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (response.ok) {
+      const deployments = await response.json();
+      
+      // Clear existing options except "All Projects"
+      projectSelector.innerHTML = '<option value="">All Projects (Global)</option>';
+      
+      // Add project options
+      deployments.forEach(deployment => {
+        const option = document.createElement('option');
+        option.value = deployment.id;
+        option.textContent = deployment.app_name || deployment.repository_url?.split('/').pop() || `Project ${deployment.id}`;
+        projectSelector.appendChild(option);
+      });
+        }
+    } catch (error) {
+    console.error('Error loading projects:', error);
+  }
+}
 
 async function loadEnvVars() {
+  // Load projects first to populate selector
+  await loadProjectsForSelector();
   try {
     const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
     if (!token) {
@@ -602,17 +802,21 @@ async function loadEnvVars() {
         `;
       }
       setupEnvVarsListeners();
-      return;
+        return;
     }
     
-    const response = await fetch('/api/env-vars', {
+    const url = selectedProjectId 
+      ? `/api/env-vars?project_id=${selectedProjectId}`
+      : '/api/env-vars';
+    
+    const response = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
     });
     
     if (response.ok) {
-      const data = await response.json();
+        const data = await response.json();
       envVars = data.variables || {};
       envVarsList = data.vars_list || [];
       renderEnvVars();
@@ -647,6 +851,15 @@ function setupEnvVarsListeners() {
   const importCard = document.getElementById('importEnvCard');
   const cancelImportBtn = document.getElementById('cancelImportBtn');
   const importForm = document.getElementById('importEnvForm');
+  const projectSelector = document.getElementById('projectSelector');
+  
+  // Project selector handler
+  if (projectSelector) {
+    projectSelector.addEventListener('change', async (e) => {
+      selectedProjectId = e.target.value ? parseInt(e.target.value) : null;
+      await loadEnvVars();
+    });
+  }
   
   if (importBtn) {
     importBtn.onclick = () => {
@@ -737,13 +950,17 @@ function renderEnvVars() {
       <tbody>
         ${envVarsList.map((item, index) => {
           const lastUpdated = item.updated_at 
-            ? formatRelativeTime(new Date(item.updated_at))
+            ? getRelativeTime(new Date(item.updated_at))
             : 'never';
+          const projectBadge = item.project_id 
+            ? `<span style="font-size: 0.75rem; background: var(--primary); color: white; padding: 0.125rem 0.5rem; border-radius: 4px; margin-left: 0.5rem;">Project</span>`
+            : `<span style="font-size: 0.75rem; background: var(--bg-tertiary); color: var(--text-secondary); padding: 0.125rem 0.5rem; border-radius: 4px; margin-left: 0.5rem;">Global</span>`;
           return `
             <tr>
               <td class="name-col">
                 <span class="lock-icon">🔒</span>
                 <span class="var-name">${escapeHtml(item.key)}</span>
+                ${projectBadge}
               </td>
               <td class="updated-col">
                 <span class="updated-time">${lastUpdated}</span>
@@ -762,20 +979,6 @@ function renderEnvVars() {
       </tbody>
     </table>
   `;
-}
-
-function formatRelativeTime(date) {
-  const now = new Date();
-  const diffMs = now - date;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-  
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
-  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-  if (diffDays < 30) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-  return date.toLocaleDateString();
 }
 
 function addEnvVarRow() {
@@ -864,7 +1067,10 @@ async function saveEnvVars() {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ variables: envVars })
+      body: JSON.stringify({ 
+        variables: envVars,
+        project_id: selectedProjectId  // Use selected project or null for global
+      })
     });
     
     if (response.ok) {
@@ -932,7 +1138,7 @@ async function loadUserProfile() {
           userAvatar.style.backgroundSize = 'cover';
           userAvatar.style.backgroundPosition = 'center';
           userAvatar.textContent = '';
-  } else {
+    } else {
           userAvatar.style.backgroundImage = '';
           userAvatar.textContent = (data.display_name || data.username || 'U').charAt(0).toUpperCase();
         }
@@ -1066,15 +1272,15 @@ async function handleProfileUpdate(e) {
     const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
     const response = await fetch('/api/user/profile', {
       method: 'PUT',
-      headers: {
+            headers: {
         'Authorization': `Bearer ${token}`
       },
       body: formData
-    });
+        });
     
     const data = await response.json();
-    
-    if (response.ok) {
+        
+        if (response.ok) {
       messageDiv.textContent = 'Profile updated successfully!';
       messageDiv.className = 'profile-message success';
       messageDiv.style.display = 'block';
@@ -1093,14 +1299,14 @@ async function handleProfileUpdate(e) {
       await loadUserProfile();
       
       showToast('Profile updated successfully!', 'success');
-    } else {
+        } else {
       const errorText = data.detail || data.message || 'Failed to update profile';
       messageDiv.textContent = errorText;
       messageDiv.className = 'profile-message error';
       messageDiv.style.display = 'block';
       console.error('Profile update failed:', data);
-    }
-  } catch (error) {
+        }
+    } catch (error) {
     console.error('Error updating profile:', error);
     try {
       const errorData = await response.json();
@@ -1124,3 +1330,295 @@ window.closeEnvVarModal = closeEnvVarModal;
 window.toggleModalValueVisibility = toggleModalValueVisibility;
 window.editEnvVarModal = editEnvVarModal;
 window.showEnvVarModal = showEnvVarModal;
+
+// Logs Page with WebSocket
+let logsWebSocket = null;
+let logsPaused = false;
+let logsBuffer = [];
+
+function loadLogs() {
+  const logsContent = document.getElementById('logsContent');
+  if (!logsContent) return;
+  
+  // Initialize logs display
+  logsContent.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 2rem;">Connecting to WebSocket...</p>';
+  
+  // Connect to WebSocket
+  connectLogsWebSocket();
+  
+  // Setup button handlers
+  setupLogsButtons();
+}
+
+function connectLogsWebSocket() {
+  // Close existing connection if any
+  if (logsWebSocket) {
+    logsWebSocket.close();
+  }
+  
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}/ws/logs`;
+  
+  logsWebSocket = new WebSocket(wsUrl);
+  
+  logsWebSocket.onopen = () => {
+    console.log('Logs WebSocket connected');
+    appendLog('Connected to logs stream', 'success');
+    
+    // Send any buffered logs
+    if (logsBuffer.length > 0) {
+      logsBuffer.forEach(log => appendLog(log.message, log.type));
+      logsBuffer = [];
+    }
+  };
+  
+  logsWebSocket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      
+      if (logsPaused) {
+        // Buffer logs when paused
+        logsBuffer.push({ message: data.message, type: data.type || 'info' });
+            } else {
+        appendLog(data.message, data.type || 'info');
+      }
+    } catch (error) {
+      console.error('Error parsing log message:', error);
+      appendLog(event.data, 'info');
+    }
+  };
+  
+  logsWebSocket.onerror = (error) => {
+    console.error('Logs WebSocket error:', error);
+    appendLog('WebSocket connection error', 'error');
+  };
+  
+  logsWebSocket.onclose = () => {
+    console.log('Logs WebSocket disconnected');
+    appendLog('Disconnected from logs stream', 'warning');
+    
+    // Try to reconnect after 3 seconds
+    setTimeout(() => {
+      if (document.getElementById('page-logs')?.style.display !== 'none') {
+        connectLogsWebSocket();
+      }
+    }, 3000);
+  };
+}
+
+function appendLog(message, type = 'info') {
+  const logsContent = document.getElementById('logsContent');
+  if (!logsContent) return;
+  
+  const timestamp = new Date().toLocaleTimeString();
+  const logEntry = document.createElement('div');
+  logEntry.className = `log-entry ${type}`;
+  
+  logEntry.innerHTML = `
+    <span class="log-timestamp">[${timestamp}]</span>
+    <span class="log-message">${escapeHtml(message)}</span>
+  `;
+  
+  logsContent.appendChild(logEntry);
+  
+  // Auto-scroll to bottom
+  logsContent.scrollTop = logsContent.scrollHeight;
+  
+  // Limit log entries to prevent memory issues
+  const maxLogs = 1000;
+  const logs = logsContent.querySelectorAll('.log-entry');
+  if (logs.length > maxLogs) {
+    logs[0].remove();
+  }
+}
+
+function setupLogsButtons() {
+  const clearLogsBtn = document.getElementById('clearLogsBtn');
+  const toggleLogsBtn = document.getElementById('toggleLogsBtn');
+  
+  if (clearLogsBtn) {
+    clearLogsBtn.addEventListener('click', () => {
+      const logsContent = document.getElementById('logsContent');
+      if (logsContent) {
+        logsContent.innerHTML = '';
+        logsBuffer = [];
+        appendLog('Logs cleared', 'info');
+      }
+    });
+  }
+  
+  if (toggleLogsBtn) {
+    toggleLogsBtn.addEventListener('click', () => {
+      logsPaused = !logsPaused;
+      toggleLogsBtn.textContent = logsPaused ? 'Resume' : 'Pause';
+      
+      if (!logsPaused && logsBuffer.length > 0) {
+        logsBuffer.forEach(log => appendLog(log.message, log.type));
+        logsBuffer = [];
+      }
+      
+      appendLog(logsPaused ? 'Logs paused' : 'Logs resumed', 'info');
+    });
+  }
+}
+
+// Cleanup WebSocket when navigating away
+window.addEventListener('beforeunload', () => {
+  if (logsWebSocket) {
+    logsWebSocket.close();
+  }
+});
+
+// Command Palette (Netlify-style)
+function setupCommandPalette() {
+  const sidebarSearch = document.getElementById('sidebarSearch');
+  const commandPalette = document.getElementById('commandPalette');
+  const commandSearchInput = document.getElementById('commandSearchInput');
+  const commandItems = document.querySelectorAll('.command-item');
+  let selectedIndex = -1;
+  
+  // Open command palette
+  function openCommandPalette() {
+    if (commandPalette) {
+      commandPalette.style.display = 'flex';
+      if (commandSearchInput) {
+        commandSearchInput.focus();
+        commandSearchInput.value = '';
+      }
+      selectedIndex = -1;
+      updateSelection();
+    }
+  }
+  
+  // Close command palette
+  function closeCommandPalette() {
+    if (commandPalette) {
+      commandPalette.style.display = 'none';
+      selectedIndex = -1;
+    }
+  }
+  
+  // Update selection highlight
+  function updateSelection() {
+    const visibleItems = Array.from(commandItems).filter(item => item.style.display !== 'none');
+    commandItems.forEach((item, index) => {
+      const visibleIndex = visibleItems.indexOf(item);
+      if (visibleIndex === selectedIndex) {
+        item.classList.add('selected');
+        item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } else {
+        item.classList.remove('selected');
+      }
+    });
+  }
+  
+  // Handle command actions
+  function executeCommand(action) {
+    closeCommandPalette();
+    
+    switch(action) {
+      case 'deploy':
+      case 'nav-deploy':
+        if (window.router) window.router.navigate('/deploy');
+        break;
+      case 'add-env-var':
+        if (window.showEnvVarModal) window.showEnvVarModal();
+        break;
+      case 'search-repos':
+      case 'nav-repositories':
+        if (window.router) window.router.navigate('/repositories');
+        break;
+      case 'nav-projects':
+        if (window.router) window.router.navigate('/');
+        break;
+      case 'nav-applications':
+        if (window.router) window.router.navigate('/applications');
+        break;
+      case 'nav-history':
+        if (window.router) window.router.navigate('/history');
+        break;
+      case 'nav-env-vars':
+        if (window.router) window.router.navigate('/env-vars');
+        break;
+      case 'nav-settings':
+        if (window.router) window.router.navigate('/settings');
+        break;
+    }
+  }
+  
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    // Cmd+K or Ctrl+K to open
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      if (commandPalette && commandPalette.style.display === 'none') {
+        openCommandPalette();
+      } else {
+        closeCommandPalette();
+      }
+    }
+    
+    // Escape to close
+    if (e.key === 'Escape' && commandPalette && commandPalette.style.display !== 'none') {
+      closeCommandPalette();
+    }
+    
+    // Arrow keys to navigate
+    if (commandPalette && commandPalette.style.display !== 'none') {
+      const visibleItems = Array.from(commandItems).filter(item => item.style.display !== 'none');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = Math.min(selectedIndex + 1, visibleItems.length - 1);
+        updateSelection();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = Math.max(selectedIndex - 1, -1);
+        updateSelection();
+      } else if (e.key === 'Enter' && selectedIndex >= 0) {
+        e.preventDefault();
+        const visibleItems = Array.from(commandItems).filter(item => item.style.display !== 'none');
+        const action = visibleItems[selectedIndex]?.getAttribute('data-action');
+        if (action) executeCommand(action);
+      }
+    }
+  });
+  
+  // Click sidebar search to open
+  if (sidebarSearch) {
+    sidebarSearch.addEventListener('click', openCommandPalette);
+  }
+  
+  // Click outside to close
+  if (commandPalette) {
+    commandPalette.addEventListener('click', (e) => {
+      if (e.target === commandPalette) {
+        closeCommandPalette();
+      }
+    });
+  }
+  
+  // Click command items
+  commandItems.forEach(item => {
+    item.addEventListener('click', () => {
+      const action = item.getAttribute('data-action');
+      if (action) executeCommand(action);
+    });
+  });
+  
+  // Search filtering
+  if (commandSearchInput) {
+    commandSearchInput.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase();
+      commandItems.forEach(item => {
+        const text = item.querySelector('.command-text').textContent.toLowerCase();
+        if (text.includes(query)) {
+          item.style.display = 'flex';
+        } else {
+          item.style.display = 'none';
+        }
+      });
+      selectedIndex = -1;
+      updateSelection();
+    });
+  }
+}

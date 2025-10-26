@@ -22,9 +22,9 @@
       </div>
       
       <nav class="sidebar-nav">
-        <a href="/" class="nav-item" data-page="dashboard">
+        <a href="/" class="nav-item" data-page="projects">
           <span class="nav-icon">📊</span>
-          <span class="nav-label">Dashboard</span>
+          <span class="nav-label">Projects</span>
         </a>
         <a href="/deploy" class="nav-item" data-page="deploy">
           <span class="nav-icon">🚀</span>
@@ -49,6 +49,10 @@
         <a href="/settings" class="nav-item" data-page="settings">
           <span class="nav-icon">⚙️</span>
           <span class="nav-label">Settings</span>
+        </a>
+        <a href="/logs" class="nav-item" data-page="logs">
+          <span class="nav-icon">📋</span>
+          <span class="nav-label">Logs</span>
         </a>
       </nav>
       
@@ -199,8 +203,22 @@
 
         <!-- Environment Variables Page -->
         <div class="page" id="page-env-vars" style="display: none;">
-          <div class="page-header">
+          <div class="card">
             <h2>Environmental Variables</h2>
+            
+            <!-- Project Selector -->
+            <div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--bg-secondary); border-radius: 8px;">
+              <label for="projectSelector" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">
+                Project Filter:
+              </label>
+              <select id="projectSelector" style="width: 100%; max-width: 400px; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9375rem;">
+                <option value="">All Projects (Global)</option>
+              </select>
+              <small style="display: block; margin-top: 0.5rem; color: var(--text-secondary);">
+                Select a project to manage project-specific environment variables
+              </small>
+            </div>
+            
             <div style="display: flex; gap: 0.75rem;">
               <button class="btn-secondary" id="importEnvBtn">📥 Import .env</button>
               <button class="btn-primary" id="addEnvVarBtn">+ Add Variable</button>
@@ -320,6 +338,26 @@
               </div>
               <div id="profileMessage" class="profile-message" style="display: none;"></div>
             </form>
+          </div>
+        </div>
+
+        <!-- Logs Page -->
+        <div class="page" id="page-logs" style="display: none;">
+          <div class="card">
+            <div class="page-header">
+              <h2>Real-time Logs</h2>
+              <div style="display: flex; gap: 0.5rem;">
+                <button class="btn-secondary" id="clearLogsBtn">Clear</button>
+                <button class="btn-secondary" id="toggleLogsBtn">Pause</button>
+              </div>
+            </div>
+            <div class="logs-container">
+              <div id="logsContent" class="logs-content">
+                <p style="text-align: center; color: var(--text-secondary); padding: 2rem;">
+                  Connecting to WebSocket... Logs will appear here.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>

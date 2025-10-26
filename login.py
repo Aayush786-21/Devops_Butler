@@ -47,6 +47,7 @@ class Deployment(SQLModel, table=True):
 class EnvironmentVariable(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)
+    project_id: Optional[int] = Field(default=None, index=True)  # No foreign key for project_id
     key: str = Field(index=True)
     value: str
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
