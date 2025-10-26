@@ -1,9 +1,3 @@
-"""
-DevOps Butler - Unified Deployment Pipeline
-Clean, reliable deployment pipeline without Nginx proxy dependencies.
-Supports Docker Compose, Dockerfile, and AI-generated Dockerfile deployments.
-"""
-
 import subprocess
 import os
 import shutil
@@ -1082,3 +1076,58 @@ Thumbs.db
                         await manager.broadcast("✅ Created .dockerignore file for optimal build")
         except Exception as e:
             print(f"⚠️ Error creating .dockerignore: {e}")
+
+
+async def run_split_deployment(frontend_url: str, backend_url: str, user_id: Optional[int] = None, env_dir: Optional[str] = None) -> Optional[Tuple[str, str]]:
+    """
+    Deploy split frontend and backend repositories.
+    
+    Args:
+        frontend_url: Frontend repository URL
+        backend_url: Backend repository URL
+        user_id: User ID for tracking
+        env_dir: Optional directory containing environment files
+    
+    Returns:
+        Tuple of (container_name, deployed_url) if successful, None if failed
+    """
+    await manager.broadcast(f"🔄 Starting split deployment...")
+    await manager.broadcast(f"📦 Frontend: {frontend_url}")
+    await manager.broadcast(f"📦 Backend: {backend_url}")
+    
+    # Deploy backend first
+    await manager.broadcast("🔧 Deploying backend repository...")
+    backend_result = await run_deployment_pipeline(backend_url, user_id=user_id, env_dir=env_dir)
+    
+    if not backend_result:
+        await manager.broadcast("❌ Backend deployment failed")
+        return None
+    
+    backend_container, backend_url_deployed = backend_result
+    await manager.broadcast(f"✅ Backend deployed: {backend_url_deployed}")
+    
+    # Deploy frontend (can use backend URL as environment variable)
+    await manager.broadcast("🎨 Deploying frontend repository...")
+    
+    # If we have env_dir, add backend URL to frontend env vars
+    if env_dir and backend_url_deployed:
+        frontend_env_path = os.path.join(env_dir, "frontend.env")
+        backend_api_url = backend_url_deployed.rstrip('/')
+        with open(frontend_env_path, "a") as f:
+            f.write(f"\n# Backend API URL\nREACT_APP_API_URL={backend_api_url}\nNEXT_PUBLIC_API_URL={backend_api_url}\nVITE_API_URL={backend_api_url}\nAPI_URL={backend_api_url}\n")
+        await manager.broadcast(f"🔗 Added backend URL to frontend env vars: {backend_api_url}")
+    
+    frontend_result = await run_deployment_pipeline(frontend_url, user_id=user_id, env_dir=env_dir)
+    
+    if not frontend_result:
+        await manager.broadcast("❌ Frontend deployment failed")
+        return None
+    
+    frontend_container, frontend_url_deployed = frontend_result
+    await manager.broadcast(f"✅ Frontend deployed: {frontend_url_deployed}")
+    await manager.broadcast(f"🎉 Split deployment complete!")
+    await manager.broadcast(f"   Frontend: {frontend_url_deployed}")
+    await manager.broadcast(f"   Backend: {backend_url_deployed}")
+    
+    # Return frontend URL as primary (user-facing)
+    return (frontend_container, frontend_url_deployed)

@@ -4,7 +4,7 @@ A simplified, reliable deployment automation platform with essential robustness 
 No Nginx proxy, no GitHub OAuth, no OpenAI dependencies - just clean, working deployment.
 """
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, HttpUrl
@@ -12,15 +12,17 @@ from contextlib import asynccontextmanager
 import asyncio
 import os
 import tempfile
+import uuid
+import datetime
 from typing import List, Optional
 from pathlib import Path
 
 # Import core modules
-from simple_pipeline import run_deployment_pipeline, extract_repo_name, validate_git_url
-from database import create_db_and_tables, get_session
+from simple_pipeline import run_deployment_pipeline, extract_repo_name, validate_git_url, run_split_deployment
+from database import create_db_and_tables, get_session, engine
 from connection_manager import manager
 from sqlmodel import Session, select
-from login import Deployment, User
+from login import Deployment, User, EnvironmentVariable
 from auth import authenticate_user, create_user, create_access_token, get_current_user
 from repository_tree_api import router as repository_tree_router, router_repos
 from datetime import timedelta
@@ -41,6 +43,9 @@ class UserRegister(BaseModel):
     username: str
     email: str
     password: str
+
+class EnvVarsRequest(BaseModel):
+    variables: dict
 
 
 @asynccontextmanager
@@ -120,6 +125,11 @@ async def preflight_checks() -> dict:
 # Setup static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+# Create avatars directory if it doesn't exist
+avatars_dir = os.path.join(static_dir, "avatars")
+os.makedirs(avatars_dir, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=avatars_dir), name="avatars")
 app.mount("/icons", StaticFiles(directory="icons"), name="icons")
 
 # Include repository tree API routes
@@ -157,6 +167,7 @@ async def repository_tree_page():
         return HTMLResponse(content=f.read(), status_code=200)
 
 
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():
@@ -183,7 +194,6 @@ async def health_check():
 
 # Authentication endpoints
 @app.post("/api/auth/login")
-@with_error_handling("user_login", "auth", RetryConfig(max_attempts=2))
 async def login(user_credentials: UserLogin):
     """User login endpoint"""
     global_logger.log_user_action(
@@ -287,20 +297,203 @@ async def get_applications():
         global_logger.log_error(e, {'endpoint': 'get_applications'})
         raise HTTPException(status_code=500, detail=f"Failed to get applications: {str(e)}")
 
+# Environment Variables API endpoints
+@app.get("/api/env-vars")
+async def get_env_vars(current_user: User = Depends(get_current_user)):
+    """Get all environment variables for the current user"""
+    with Session(engine) as session:
+        env_vars = session.exec(
+            select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
+        ).all()
+        
+        variables = {var.key: var.value for var in env_vars}
+        vars_list = [
+            {
+                "key": var.key,
+                "value": var.value,
+                "updated_at": var.updated_at.isoformat() if var.updated_at else None
+            }
+            for var in env_vars
+        ]
+        return {"variables": variables, "vars_list": vars_list}
+
+@app.post("/api/env-vars")
+async def save_env_vars(
+    data: EnvVarsRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Save environment variables for the current user"""
+    with Session(engine) as session:
+        # Get all existing variables for this user
+        existing_vars = session.exec(
+            select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
+        ).all()
+        existing_dict = {var.key: var for var in existing_vars}
+        
+        # Process variables from request
+        if data.variables:
+            new_keys = set(data.variables.keys())
+            
+            # Update or create variables
+            for key, value in data.variables.items():
+                if key in existing_dict:
+                    # Update existing
+                    existing_dict[key].value = value
+                    existing_dict[key].updated_at = datetime.datetime.utcnow()
+                else:
+                    # Create new
+                    env_var = EnvironmentVariable(
+                        user_id=current_user.id,
+                        key=key,
+                        value=value
+                    )
+                    session.add(env_var)
+            
+            # Delete variables that are no longer in the request
+            for var in existing_vars:
+                if var.key not in new_keys:
+                    session.delete(var)
+        
+        session.commit()
+        return {"message": "Environment variables saved successfully"}
+
+# User Profile API endpoints
+@app.get("/api/user/profile")
+async def get_user_profile(current_user: User = Depends(get_current_user)):
+    """Get current user's profile"""
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "display_name": current_user.display_name,
+        "avatar_url": current_user.avatar_url
+    }
+
+@app.put("/api/user/profile")
+async def update_user_profile(
+    email: Optional[str] = Form(None),
+    display_name: Optional[str] = Form(None),
+    current_password: Optional[str] = Form(None),
+    new_password: Optional[str] = Form(None),
+    remove_avatar: Optional[str] = Form(None),
+    avatar: Optional[UploadFile] = File(None),
+    current_user: User = Depends(get_current_user)
+):
+    """Update user profile"""
+    try:
+        with Session(engine) as session:
+            # Get fresh user data
+            user = session.exec(select(User).where(User.id == current_user.id)).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Update email if provided
+            if email and email != user.email:
+                # Check if email already exists
+                existing = session.exec(select(User).where(User.email == email, User.id != user.id)).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail="Email already in use")
+                user.email = email
+            
+            # Update display name
+            if display_name is not None:
+                user.display_name = display_name
+            
+            # Handle password change
+            if new_password:
+                if not current_password:
+                    raise HTTPException(status_code=400, detail="Current password required")
+                from auth import verify_password
+                if not verify_password(current_password, user.hashed_password):
+                    raise HTTPException(status_code=400, detail="Current password incorrect")
+                from auth import get_password_hash
+                user.hashed_password = get_password_hash(new_password)
+            
+            # Handle avatar upload
+            if avatar:
+                # Create avatars directory if it doesn't exist
+                avatars_dir = os.path.join(os.path.dirname(__file__), "static", "avatars")
+                os.makedirs(avatars_dir, exist_ok=True)
+                
+                # Save avatar file
+                file_ext = os.path.splitext(avatar.filename)[1] or ".jpg"
+                avatar_filename = f"{user.id}_{uuid.uuid4().hex[:8]}{file_ext}"
+                avatar_path = os.path.join(avatars_dir, avatar_filename)
+                
+                with open(avatar_path, "wb") as f:
+                    content = await avatar.read()
+                    f.write(content)
+                
+                user.avatar_url = f"/avatars/{avatar_filename}"
+            
+            # Handle avatar removal
+            if remove_avatar == "true":
+                if user.avatar_url:
+                    # Delete old avatar file
+                    old_avatar_path = os.path.join(os.path.dirname(__file__), "static", user.avatar_url.lstrip("/"))
+                    if os.path.exists(old_avatar_path):
+                        try:
+                            os.remove(old_avatar_path)
+                        except:
+                            pass
+                user.avatar_url = None
+            
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            
+            return {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "display_name": user.display_name,
+                "avatar_url": user.avatar_url,
+                "message": "Profile updated successfully"
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+        print(f"ERROR updating profile: {error_msg}")
+        print(error_trace)
+        global_logger.log_error_message(f"Error updating profile: {error_msg}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error updating profile: {error_msg}"
+        )
 
 # Deployment endpoints
+@app.get("/deploy", response_class=HTMLResponse)
+async def deploy_page():
+    """Serve deploy page"""
+    html_file_path = os.path.join(static_dir, "index.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
 @app.post("/deploy")
 @with_error_handling("deployment", "deploy", RetryConfig(max_attempts=1))
 async def deploy(
-    git_url: str = Form(...),
-    frontend_env: UploadFile = File(None),
-    backend_env: UploadFile = File(None),
+    deploy_type: str = Form("single"),
+    git_url: Optional[str] = Form(None),
+    frontend_url: Optional[str] = Form(None),
+    backend_url: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user)
 ):
-    """Deploy a Git repository"""
-    # Fast-fail validation on input
-    if not validate_git_url(git_url):
-        raise HTTPException(status_code=422, detail="Invalid or unsupported repository URL.")
+    """Deploy a Git repository (single or split frontend/backend)"""
+    # Determine which URL(s) to use
+    if deploy_type == "split":
+        if not frontend_url or not backend_url:
+            raise HTTPException(status_code=422, detail="Both frontend_url and backend_url are required for split deployment.")
+        if not validate_git_url(frontend_url) or not validate_git_url(backend_url):
+            raise HTTPException(status_code=422, detail="Invalid repository URL(s).")
+        git_url = frontend_url  # Use frontend URL as primary for logging
+    else:
+        if not git_url:
+            raise HTTPException(status_code=422, detail="git_url is required for single repository deployment.")
+        if not validate_git_url(git_url):
+            raise HTTPException(status_code=422, detail="Invalid or unsupported repository URL.")
     # Environment sanity checks
     checks = await preflight_checks()
     if not checks['git_cli']:
@@ -322,24 +515,35 @@ async def deploy(
     )
     
     try:
-        # Create temporary directory for env files if provided
+        # Get user's environment variables and create temp directory for them
         repo_dir = None
-        if frontend_env or backend_env:
-            repo_dir = tempfile.mkdtemp(prefix="butler-env-")
+        with Session(engine) as session:
+            env_vars = session.exec(
+                select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
+            ).all()
             
-            # Save env files
-            if frontend_env:
-                with open(os.path.join(repo_dir, "frontend.env"), "wb") as f:
-                    f.write(await frontend_env.read())
-            if backend_env:
-                with open(os.path.join(repo_dir, "backend.env"), "wb") as f:
-                    f.write(await backend_env.read())
+            if env_vars:
+                repo_dir = tempfile.mkdtemp(prefix="butler-env-")
+                # Create frontend.env with all env vars
+                with open(os.path.join(repo_dir, "frontend.env"), "w") as f:
+                    for env_var in env_vars:
+                        f.write(f"{env_var.key}={env_var.value}\n")
+                # Also create backend.env with same vars (or separate if needed)
+                with open(os.path.join(repo_dir, "backend.env"), "w") as f:
+                    for env_var in env_vars:
+                        f.write(f"{env_var.key}={env_var.value}\n")
+                await manager.broadcast(f"📝 Loaded {len(env_vars)} environment variables")
         
         # Run deployment pipeline with error handling and logging
         with global_logger.timer("deployment_pipeline"):
             global_logger.add_deployment_stage(trace_id, "deployment_pipeline", "started")
             
-            result = await run_deployment_pipeline(git_url, user_id=current_user.id, env_dir=repo_dir)
+            if deploy_type == "split":
+                # Handle split frontend/backend deployment
+                await manager.broadcast("🚀 Deploying split repositories (Frontend + Backend)")
+                result = await run_split_deployment(frontend_url, backend_url, user_id=current_user.id, env_dir=repo_dir)
+            else:
+                result = await run_deployment_pipeline(git_url, user_id=current_user.id, env_dir=repo_dir)
             
             # Check if deployment was successful
             if result is not None:
@@ -495,6 +699,28 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             message=f"Client #{client_id} disconnected",
             component="websocket"
         )
+
+
+# Catch-all route for SPA - serve index.html for all frontend routes
+# This must be LAST after all other routes
+@app.get("/{path:path}", response_class=HTMLResponse)
+async def serve_spa(path: str):
+    """Serve index.html for all non-API frontend routes"""
+    # Don't intercept API routes or static assets
+    if path.startswith("api/") or path.startswith("static/") or path.startswith("assets/") or \
+       path.startswith("avatars/") or path.startswith("icons/") or path.startswith("ws") or \
+       path == "health" or path.startswith("docs") or path.startswith("openapi.json") or \
+       path == "deployments" or path.startswith("deployment/") or \
+       path.endswith(".html") or ("." in path.split("/")[-1] and not path.split("/")[-1].endswith(".html")):
+        raise HTTPException(status_code=404, detail="Not Found")
+    
+    # Serve index.html for all frontend routes (dashboard, deploy, env-vars, settings, etc.)
+    html_file_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(html_file_path):
+        with open(html_file_path, "r") as f:
+            return HTMLResponse(content=f.read(), status_code=200)
+    else:
+        raise HTTPException(status_code=404, detail="index.html not found")
 
 
 if __name__ == "__main__":

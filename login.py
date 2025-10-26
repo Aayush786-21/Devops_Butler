@@ -12,6 +12,9 @@ class User(SQLModel, table=True):
     auth_provider: str = Field(default='local')
     # Optional token field used by repository API (safe to be nullable)
     github_access_token: Optional[str] = Field(default=None)
+    # Profile fields
+    display_name: Optional[str] = Field(default=None)
+    avatar_url: Optional[str] = Field(default=None)
     is_active: bool = Field(default=True)
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
 
@@ -39,4 +42,16 @@ class Deployment(SQLModel, table=True):
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
     
     # User who created this deployment
-    user_id: Optional[int] = Field(default=None, foreign_key="user.id") 
+    user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+
+class EnvironmentVariable(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    key: str = Field(index=True)
+    value: str
+    created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
+    updated_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
+    
+    class Config:
+        # Ensure unique key per user
+        indexes = [("user_id", "key")] 

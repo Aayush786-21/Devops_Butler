@@ -106,7 +106,8 @@ You must have the following tools installed on your macOS machine:
 
 1.  **Homebrew:** The missing package manager for macOS.
 2.  **Python 3.11+**
-3.  **Docker Desktop:** Make sure the Docker engine is running.
+3.  **Node.js** (for frontend development and building)
+4.  **Docker Desktop:** Make sure the Docker engine is running.
 
 ### Installation & Setup
 
@@ -133,18 +134,57 @@ You must have the following tools installed on your macOS machine:
     docker network create devops-butler-net
     ```
 
+5.  **Set Up Frontend (Optional - for development)**
+    ```bash
+    cd frontend
+    npm install
+    ```
+    
+    For production builds:
+    ```bash
+    cd frontend
+    npm run build
+    ```
+    
+    See [FRONTEND_BUILD.md](FRONTEND_BUILD.md) for detailed frontend development guide.
+
 ### Usage
 
 #### **Web Interface (Recommended)**
 
-1.  **Start the DevOps Butler Server**
+**Production Mode (Built Frontend):**
+1.  **Build the frontend** (if not already built):
+    ```bash
+    cd frontend
+    npm run build
+    ```
+
+2.  **Start the DevOps Butler Server**
     ```bash
     # Make sure your venv is active
     python orchestrator.py
     ```
 
-2.  **Open the Web Interface**
+3.  **Open the Web Interface**
     Navigate to `http://localhost:8000` in your browser
+
+**Development Mode (Hot Reload):**
+1.  **Start the backend** (in one terminal):
+    ```bash
+    python orchestrator.py
+    ```
+
+2.  **Start the frontend dev server** (in another terminal):
+    ```bash
+    cd frontend
+    npm run dev
+    ```
+
+3.  **Open the Web Interface**
+    Navigate to `http://localhost:3000` in your browser
+    - Frontend dev server runs on port 3000
+    - Backend API runs on port 8000
+    - Changes automatically reload in the browser
 
 3.  **Deploy Your First App**
     - Paste a Git repository URL
