@@ -4,9 +4,9 @@ class Router {
     this.routes = {
       '/': 'projects',
       '/deploy': 'deploy',
-      '/applications': 'applications',
       '/history': 'history',
       '/repositories': 'repositories',
+      '/domain': 'domain',
       '/env-vars': 'env-vars',
       '/settings': 'settings',
       '/logs': 'logs'
@@ -21,7 +21,7 @@ class Router {
       item.addEventListener('click', (e) => {
         e.preventDefault();
         const href = item.getAttribute('href');
-        this.navigate(href);
+          this.navigate(href);
       });
     });
 
@@ -84,9 +84,9 @@ class Router {
     const titles = {
       projects: 'Projects',
       deploy: 'Deploy',
-      applications: 'Applications',
       history: 'History',
       repositories: 'Repositories',
+      domain: 'Domain',
       'env-vars': 'Environmental Variables',
       settings: 'Settings',
       logs: 'Logs'
@@ -99,14 +99,14 @@ class Router {
       case 'projects':
         loadProjects();
         break;
-      case 'applications':
-        loadApplications();
-        break;
       case 'history':
         loadHistory();
         break;
       case 'repositories':
         loadRepositories();
+        break;
+      case 'domain':
+        loadDomainPage();
         break;
       case 'env-vars':
         loadEnvVars();
@@ -270,10 +270,60 @@ function setupEventListeners() {
     });
   }
 
-  // Refresh buttons
-  document.getElementById('refreshAppsBtn')?.addEventListener('click', loadApplications);
+  // Buttons
   document.getElementById('clearHistoryBtn')?.addEventListener('click', clearHistory);
   document.getElementById('searchReposBtn')?.addEventListener('click', searchRepositories);
+  
+  // Keyboard shortcuts
+  setupKeyboardShortcuts();
+}
+
+// Enhanced keyboard shortcuts
+function setupKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    // Cmd/Ctrl + K for search focus
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      const searchInput = document.querySelector('.search-input');
+      if (searchInput) {
+        searchInput.focus();
+        searchInput.select();
+      }
+    }
+    
+    // Cmd/Ctrl + N for new deploy
+    if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+      e.preventDefault();
+      const newDeployBtn = document.querySelector('.new-deploy-btn');
+      if (newDeployBtn) {
+        newDeployBtn.click();
+      }
+    }
+    
+    // Escape to close modals
+    if (e.key === 'Escape') {
+      const modal = document.querySelector('.modal-overlay');
+      if (modal) {
+        modal.remove();
+      }
+    }
+    
+    // R for refresh projects (when on projects page)
+    if (e.key === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const projectsPage = document.getElementById('page-projects');
+      if (projectsPage && projectsPage.style.display !== 'none') {
+        e.preventDefault();
+        loadProjects();
+      }
+    }
+  });
+}
+
+// Load Domain main page (external links only)
+function loadDomainPage() {
+  const page = document.getElementById('page-domain');
+  if (!page) return;
+  // Nothing dynamic for now; placeholder kept for future enhancements
 }
 
 function getAuthHeaders() {
@@ -297,8 +347,11 @@ async function loadProjects() {
     return;
   }
   
+  // Show loading skeleton
+  showLoadingState();
+  
   try {
-    const response = await fetch('/api/deployments', {
+    const response = await fetch('/deployments', {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -307,15 +360,34 @@ async function loadProjects() {
     if (response.ok) {
       const deployments = await response.json();
       // Convert deployments to projects format
-      allProjects = deployments.map(deployment => ({
+      allProjects = deployments.map(deployment => {
+        // Derive a friendly name from git_url/repository_url or fallback to container_name
+        const repoUrl = deployment.repository_url || deployment.git_url;
+        const derivedName = repoUrl ? String(repoUrl).split('/').pop()?.replace(/\.git$/,'') : null;
+        const projectName = deployment.app_name || derivedName || deployment.container_name || 'Untitled Project';
+        
+        // Map backend status to UI status: running | imported | failed
+        const rawStatus = (deployment.status || '').toLowerCase();
+        let normalizedStatus;
+        if (rawStatus === 'running') {
+          normalizedStatus = 'running';
+        } else if (rawStatus === 'failed' || rawStatus === 'error') {
+          normalizedStatus = 'failed';
+        } else {
+          // Treat any non-running successful/unknown as imported
+          normalizedStatus = 'imported';
+        }
+        
+        return {
         id: deployment.id,
-        name: deployment.app_name || deployment.repository_url?.split('/').pop() || 'Untitled Project',
-        status: deployment.status || 'unknown',
-        url: deployment.app_url,
+          name: projectName,
+          status: normalizedStatus,
+        url: deployment.deployed_url || deployment.app_url,
         createdAt: deployment.created_at,
         updatedAt: deployment.updated_at,
-        repository: deployment.repository_url
-      }));
+          repository: repoUrl
+        };
+      });
       filteredProjects = [...allProjects];
       renderProjects(filteredProjects);
   } else {
@@ -328,77 +400,587 @@ async function loadProjects() {
 }
 
 function renderProjects(projects) {
-  const projectsList = document.getElementById('projectsList');
-  if (!projectsList) return;
+  const projectsGrid = document.getElementById('projectsGrid');
+  if (!projectsGrid) return;
   
   if (projects.length === 0) {
-    projectsList.innerHTML = `
+    projectsGrid.innerHTML = `
       <div class="empty-state">
         <p>No projects found</p>
-        <p style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem;">
-          Deploy your first project to get started
-        </p>
+        <button class="btn-primary" onclick="if(window.router){window.router.navigate('/deploy');}else{window.location.href='/deploy';}">Create First Project</button>
       </div>
     `;
     return;
   }
   
-  projectsList.innerHTML = projects.map(project => {
+  projectsGrid.innerHTML = projects.map(project => {
     const statusClass = project.status === 'running' ? 'status-success' : 
-                       project.status === 'failed' ? 'status-error' : 'status-warning';
+                       project.status === 'failed' ? 'status-error' : 'status-info';
     const statusText = project.status === 'running' ? 'Running' :
-                      project.status === 'failed' ? 'Failed' : 'Unknown';
+                      project.status === 'failed' ? 'Failed' : 'Imported';
     const icon = project.status === 'running' ? '🚀' : '📦';
-    const timeAgo = project.updatedAt ? getRelativeTime(new Date(project.updatedAt)) : 'Recently';
+    const timeAgo = project.updatedAt ? getRelativeTime(project.updatedAt) : 'Recently';
     
     return `
-      <div class="project-item" data-project-id="${project.id}">
-        <div class="project-icon">${icon}</div>
-        <div class="project-info">
-          <div class="project-name">${escapeHtml(project.name)}</div>
-          <div class="project-meta">
-            <span class="status-badge ${statusClass}">${statusText}</span>
-            ${project.repository ? `<span>• ${escapeHtml(project.repository)}</span>` : ''}
-            ${timeAgo ? `<span>• Updated ${timeAgo}</span>` : ''}
-          </div>
+      <div class="project-card" data-project-id="${project.id}" onclick="selectProject(${project.id})">
+        <div class="project-header">
+          <div class="project-icon">${icon}</div>
+          <div class="project-status ${statusClass}">${statusText}</div>
         </div>
+        
+        <div class="project-info">
+          <h3 class="project-name">${escapeHtml(project.name)}</h3>
+          <div class="project-meta">
+            <svg class="icon-clock" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12,6 12,12 16,14"></polyline>
+            </svg>
+            <span>Updated ${timeAgo}</span>
+          </div>
+          
+          ${project.status === 'running' ? `
+          <div class="project-metrics">
+            <div class="metric">
+              <span class="metric-label">Uptime</span>
+              <span class="metric-value">99.9%</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Status</span>
+              <span class="metric-value">Active</span>
+            </div>
+          </div>
+          ` : ''}
+        </div>
+        
         <div class="project-actions">
-          <button class="project-star" title="Star project">⭐</button>
-          <a href="${project.url || '#'}" target="_blank" class="btn-secondary" style="text-decoration: none;">
-            View →
-          </a>
+          <button class="btn-icon" title="View logs" onclick="event.stopPropagation(); viewProjectLogs(${project.id})">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14,2 14,8 20,8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10,9 9,9 8,9"></polyline>
+            </svg>
+          </button>
+          ${project.status === 'running' ? `
+          <button class="btn-icon" title="Restart" onclick="event.stopPropagation(); restartProject(${project.id})">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path>
+            </svg>
+          </button>
+          ` : ''}
         </div>
       </div>
     `;
   }).join('');
-  
-  // Add click handlers
-  projectsList.querySelectorAll('.project-item').forEach(item => {
-    item.addEventListener('click', (e) => {
-      if (!e.target.closest('.project-actions')) {
-        const projectId = item.getAttribute('data-project-id');
-        // Navigate to project details or open URL
-        const project = projects.find(p => p.id == projectId);
-        if (project && project.url) {
-          window.open(project.url, '_blank');
-        }
-      }
-    });
-  });
 }
 
-function getRelativeTime(date) {
-  const now = new Date();
-  const diffMs = now - date;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
+// Enhanced project actions
+async function viewProjectLogs(projectId) {
+  try {
+    showToast('Loading project logs...', 'info');
+    
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    const response = await fetch(`/projects/${projectId}/logs`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showProjectLogsModal(data);
+    } else {
+      showToast(data.detail || 'Failed to load project logs', 'error');
+    }
+  } catch (error) {
+    console.error('Error loading project logs:', error);
+    showToast('Failed to load project logs: ' + error.message, 'error');
+  }
+}
+
+function showProjectLogsModal(logData) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-content logs-modal">
+      <div class="modal-header">
+        <h3>Project Logs: ${escapeHtml(logData.container_name)}</h3>
+        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="log-status">
+          <span class="status-badge status-${logData.is_running ? 'success' : 'warning'}">
+            ${logData.is_running ? 'RUNNING' : 'STOPPED'}
+          </span>
+        </div>
+        <div class="logs-container">
+          <pre class="logs-content">${escapeHtml(logData.logs)}</pre>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+        <button class="btn-primary" onclick="viewProjectLogs(${logData.project_id}); this.closest('.modal-overlay').remove();">Refresh</button>
+      </div>
+    </div>
+  `;
   
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
-  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-  if (diffDays < 30) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-  return date.toLocaleDateString();
+  document.body.appendChild(modal);
+}
+
+async function restartProject(projectId) {
+  const project = allProjects.find(p => p.id == projectId);
+  if (!project) return;
+  
+  if (!confirm(`Are you sure you want to restart "${project.name}"?`)) {
+    return;
+  }
+  
+  try {
+    showToast('Restarting project...', 'info');
+    
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    const response = await fetch(`/projects/${projectId}/restart`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (response.ok) {
+      showToast('Project restarted successfully!', 'success');
+      loadProjects(); // Refresh the projects list
+    } else {
+      const data = await response.json();
+      showToast(data.detail || 'Failed to restart project', 'error');
+    }
+  } catch (error) {
+    console.error('Error restarting project:', error);
+    showToast('Failed to restart project: ' + error.message, 'error');
+  }
+}
+
+// Loading skeleton functionality
+function showLoadingState() {
+  const projectsGrid = document.getElementById('projectsGrid');
+  if (!projectsGrid) return;
+  
+  projectsGrid.innerHTML = `
+    <div class="loading-skeleton">
+      ${Array(3).fill(`
+        <div class="skeleton-card">
+          <div class="skeleton-line short"></div>
+          <div class="skeleton-line medium"></div>
+          <div class="skeleton-line short"></div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+// Project-specific sidebar functionality
+let currentProject = null;
+
+function selectProject(projectId) {
+  const project = allProjects.find(p => p.id == projectId);
+  if (!project) return;
+  
+  currentProject = project;
+      showProjectSidebar(project);
+}
+
+function showProjectSidebar(project) {
+  // Hide main sidebar
+  const mainSidebar = document.getElementById('sidebar');
+  if (mainSidebar) {
+    mainSidebar.style.display = 'none';
+  }
+  
+  // Create or show project-specific sidebar
+  let projectSidebar = document.getElementById('projectSidebar');
+  if (!projectSidebar) {
+    projectSidebar = createProjectSidebar();
+    document.body.appendChild(projectSidebar);
+  }
+  
+  // Update project info in sidebar
+  const projectName = projectSidebar.querySelector('#projectSidebarName');
+  if (projectName) {
+    projectName.textContent = project.name;
+  }
+  
+  const projectId = projectSidebar.querySelector('#projectSidebarId');
+  if (projectId) {
+    projectId.textContent = project.id;
+  }
+  
+  projectSidebar.style.display = 'block';
+  
+  // Update page title
+  document.getElementById('pageTitle').textContent = project.name;
+  
+  // Load user profile into project sidebar
+  loadUserProfileIntoProjectSidebar();
+  
+  // Show project-specific content
+  showProjectContent('deploy');
+}
+
+function createProjectSidebar() {
+  const sidebar = document.createElement('aside');
+  sidebar.id = 'projectSidebar';
+  sidebar.className = 'sidebar project-sidebar';
+  sidebar.innerHTML = `
+    <div class="sidebar-header">
+      <div class="logo">
+        <span class="logo-icon">DB</span>
+        <span class="logo-text">DevOps Butler</span>
+      </div>
+      <button class="btn-back" onclick="hideProjectSidebar()">← Back to Projects</button>
+    </div>
+    
+    <div class="project-info">
+      <h3 id="projectSidebarName">Project Name</h3>
+      <p class="project-id">ID: <span id="projectSidebarId">-</span></p>
+    </div>
+    
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item project-nav-item" data-project-page="deploy">
+        <span class="nav-icon">🚀</span>
+        <span class="nav-label">Deploy</span>
+      </a>
+      <a href="#" class="nav-item project-nav-item" data-project-page="configuration">
+        <span class="nav-icon">⚙️</span>
+        <span class="nav-label">Configuration</span>
+      </a>
+      <a href="#" class="nav-item project-nav-item" data-project-page="domain-config">
+        <span class="nav-icon">🌐</span>
+        <span class="nav-label">Domain Configuration</span>
+      </a>
+      <a href="#" class="nav-item project-nav-item" data-project-page="env-vars">
+        <span class="nav-icon">🔐</span>
+        <span class="nav-label">Environment Variables</span>
+      </a>
+    </nav>
+    
+    <div class="sidebar-footer">
+      <div class="user-section">
+        <div class="user-avatar" id="projectSidebarUserAvatar">G</div>
+        <div class="user-info">
+          <div class="user-name" id="projectSidebarUserName">Guest</div>
+          <div class="user-email" id="projectSidebarUserEmail">Not logged in</div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Add click handlers for project navigation
+  sidebar.querySelectorAll('.project-nav-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      const page = item.getAttribute('data-project-page');
+      showProjectContent(page);
+      
+      // Update active nav
+      sidebar.querySelectorAll('.project-nav-item').forEach(nav => nav.classList.remove('active'));
+      item.classList.add('active');
+    });
+  });
+  
+  return sidebar;
+}
+
+function hideProjectSidebar() {
+  const projectSidebar = document.getElementById('projectSidebar');
+  if (projectSidebar) {
+    projectSidebar.style.display = 'none';
+  }
+  
+  const mainSidebar = document.getElementById('sidebar');
+  if (mainSidebar) {
+    mainSidebar.style.display = 'block';
+  }
+  
+  currentProject = null;
+  document.getElementById('pageTitle').textContent = 'Projects';
+  
+  // Hide ALL pages first to ensure clean state
+  document.querySelectorAll('.page').forEach(p => {
+    p.style.display = 'none';
+  });
+  
+  // Show only the projects page
+  const projectsPage = document.getElementById('page-projects');
+  if (projectsPage) {
+    projectsPage.style.display = 'block';
+  }
+  
+  // Reload projects to ensure fresh data
+  loadProjects();
+}
+
+function showProjectContent(page) {
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(p => {
+    p.style.display = 'none';
+  });
+  
+  // Show project-specific content based on page
+  switch(page) {
+    case 'deploy':
+      // Show original deploy page
+      const deployPage = document.getElementById('page-deploy');
+      if (deployPage) {
+        deployPage.style.display = 'block';
+      }
+      document.getElementById('pageTitle').textContent = 'Deploy';
+      break;
+    case 'configuration':
+      showProjectConfiguration();
+      break;
+    case 'logs':
+      const logsPage = document.getElementById('page-logs');
+      if (logsPage) {
+        logsPage.style.display = 'block';
+        loadLogs();
+      }
+      break;
+    case 'domain-config':
+      showProjectDomainConfig();
+      break;
+    case 'env-vars':
+      const envVarsPage = document.getElementById('page-env-vars');
+      if (envVarsPage) {
+        envVarsPage.style.display = 'block';
+        loadEnvVars();
+      }
+      break;
+  }
+}
+
+
+
+async function loadProjectLogs(projectId) {
+  const logsContainer = document.getElementById('projectLogsContainer');
+  if (!logsContainer) return;
+  
+  try {
+    logsContainer.innerHTML = '<div class="logs-loading">Loading logs...</div>';
+    
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    const response = await fetch(`/projects/${projectId}/logs`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      displayProjectLogs(data);
+  } else {
+      logsContainer.innerHTML = `<div class="logs-error">Error: ${data.detail || 'Failed to load logs'}</div>`;
+    }
+  } catch (error) {
+    console.error('Error loading project logs:', error);
+    logsContainer.innerHTML = `<div class="logs-error">Error: ${error.message}</div>`;
+  }
+}
+
+function displayProjectLogs(logData) {
+  const logsContainer = document.getElementById('projectLogsContainer');
+  if (!logsContainer) return;
+  
+  const logsHtml = `
+    <div class="logs-status">
+      <span class="status-badge status-${logData.is_running ? 'running' : 'stopped'}">
+        ${logData.is_running ? 'RUNNING' : 'STOPPED'}
+      </span>
+      <span class="logs-timestamp">Last updated: ${new Date().toLocaleTimeString()}</span>
+    </div>
+    <div class="logs-content">
+      <pre>${escapeHtml(logData.logs)}</pre>
+    </div>
+  `;
+  
+  logsContainer.innerHTML = logsHtml;
+}
+
+function refreshProjectLogs() {
+  if (currentProject) {
+    loadProjectLogs(currentProject.id);
+  }
+}
+
+
+
+
+
+function showProjectConfiguration() {
+  // Create project configuration page if it doesn't exist
+  let configPage = document.getElementById('page-project-config');
+  if (!configPage) {
+    configPage = document.createElement('div');
+    configPage.id = 'page-project-config';
+    configPage.className = 'page';
+    configPage.innerHTML = `
+      <div class="card">
+        <h2>Project Configuration</h2>
+        <div class="project-config-grid">
+          <div class="config-item">
+            <label>Project Name</label>
+            <div class="config-value">
+              <span id="projectConfigName">${currentProject?.name || 'Unknown'}</span>
+              <button class="btn-secondary" id="changeProjectNameBtn">Change</button>
+          </div>
+            </div>
+          <div class="config-item">
+            <label>Project ID</label>
+            <div class="config-value" id="projectConfigId">${currentProject?.id || '-'}</div>
+          </div>
+          <div class="config-item">
+            <label>Created</label>
+            <div class="config-value" id="projectConfigCreated">${currentProject?.createdAt ? getRelativeTime(new Date(currentProject.createdAt)) : 'Unknown'}</div>
+          </div>
+          <div class="config-item">
+            <label>Last Updated</label>
+            <div class="config-value" id="projectConfigUpdated">${currentProject?.updatedAt ? getRelativeTime(new Date(currentProject.updatedAt)) : 'Unknown'}</div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.getElementById('pageContent').appendChild(configPage);
+  }
+  
+  configPage.style.display = 'block';
+}
+
+function showProjectDomainConfig() {
+  // Create project domain configuration page if it doesn't exist
+  let domainPage = document.getElementById('page-project-domain');
+  if (!domainPage) {
+    domainPage = document.createElement('div');
+    domainPage.id = 'page-project-domain';
+    domainPage.className = 'page';
+    domainPage.innerHTML = `
+      <div class="card">
+        <h2>Domain Configuration</h2>
+        <div class="domain-config">
+          <div class="config-option">
+            <h3>🌐 Use Custom Domain</h3>
+            <p>Configure a custom domain for this project</p>
+            <div class="form-group">
+              <label for="customDomain">Custom Domain</label>
+              <input type="text" id="customDomain" placeholder="example.com" />
+          </div>
+            <button class="btn-primary">Save Domain</button>
+            </div>
+          <div class="config-option">
+            <h3>🏠 Use Localhost</h3>
+            <p>Deploy to localhost with dynamic port</p>
+            <button class="btn-secondary">Use Localhost</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.getElementById('pageContent').appendChild(domainPage);
+  }
+  
+  domainPage.style.display = 'block';
+}
+
+function openProject(projectId) {
+  // This is called when clicking the "Open" button
+  selectProject(projectId);
+}
+
+// Load user profile into project sidebar
+async function loadUserProfileIntoProjectSidebar() {
+  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+  if (!token) {
+    console.log('No auth token found');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/user/profile', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      
+      // Update project sidebar user info
+      const projectSidebar = document.getElementById('projectSidebar');
+      if (projectSidebar) {
+        const userName = projectSidebar.querySelector('#projectSidebarUserName');
+        const userEmail = projectSidebar.querySelector('#projectSidebarUserEmail');
+        const userAvatar = projectSidebar.querySelector('#projectSidebarUserAvatar');
+        
+        if (userName) {
+          userName.textContent = data.display_name || data.username || 'User';
+        }
+        
+        if (userEmail) {
+          userEmail.textContent = data.email || 'No email';
+        }
+        
+        if (userAvatar) {
+          if (data.avatar_url) {
+            // Test if the avatar URL is valid before setting it
+            const img = new Image();
+            img.onload = () => {
+              userAvatar.style.backgroundImage = `url(${data.avatar_url})`;
+              userAvatar.style.backgroundSize = 'cover';
+              userAvatar.style.backgroundPosition = 'center';
+              userAvatar.textContent = '';
+            };
+            img.onerror = () => {
+              // Avatar failed to load, fall back to initials
+              userAvatar.style.backgroundImage = '';
+              userAvatar.textContent = (data.display_name || data.username || 'U').charAt(0).toUpperCase();
+            };
+            img.src = data.avatar_url;
+  } else {
+            userAvatar.style.backgroundImage = '';
+            userAvatar.textContent = (data.display_name || data.username || 'U').charAt(0).toUpperCase();
+          }
+        }
+      }
+  } else {
+      console.error('Failed to load user profile:', response.status);
+    }
+  } catch (error) {
+    console.error('Error loading user profile:', error);
+  }
+}
+
+function getRelativeTime(timestamp) {
+  if (!timestamp) return 'Recently';
+  
+  const now = Date.now();
+  const diff = now - new Date(timestamp).getTime();
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  
+  // For older dates, show formatted date
+  const date = new Date(timestamp);
+  return date.toLocaleDateString('en-US', { 
+    month: 'short', 
+    day: 'numeric',
+    year: date.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+  });
 }
 
 // Legacy loadDashboard for compatibility
@@ -666,17 +1248,17 @@ async function destroyDeployment(containerName) {
   try {
     const response = await fetch(`/deployments/${containerName}`, { 
       method: 'DELETE',
-      headers: getAuthHeaders()
-    });
-    
+            headers: getAuthHeaders()
+        });
+        
     if (response.ok) {
       showToast('Deployment destroyed successfully', 'success');
       loadHistory();
       loadApplications();
-    } else {
+        } else {
       showToast('Error destroying deployment', 'error');
-    }
-  } catch (error) {
+        }
+    } catch (error) {
     showToast('Network error', 'error');
   }
 }
@@ -687,7 +1269,7 @@ async function searchRepositories() {
   
   if (!username) {
         showToast('Please enter a GitHub username', 'error');
-      return;
+        return;
     }
     
   const grid = document.getElementById('repositoriesGrid');
@@ -700,25 +1282,28 @@ async function searchRepositories() {
         if (response.ok && data.repositories) {
       if (data.repositories.length === 0) {
         grid.innerHTML = '<div class="empty-state"><p>No repositories found</p></div>';
-    } else {
+        } else {
         grid.innerHTML = data.repositories.map(repo => `
-          <div class="repository-card" onclick="selectRepository('${repo.clone_url}')">
+          <div class="repository-card">
             <h3>${repo.name}</h3>
             <p style="color: var(--text-secondary); margin: 0.5rem 0;">
               ${repo.description || 'No description'}
             </p>
-            <div style="margin-top: 1rem;">
+            <div style="margin-top: 1rem; display: flex; justify-content: space-between; align-items: center;">
               <span style="font-size: 0.875rem; color: var(--text-secondary);">
                 ${repo.language || 'Unknown'} • ${repo.stargazers_count || 0} stars
-                </span>
+              </span>
+              <button class="btn-primary btn-small" onclick="importRepository('${repo.clone_url}', '${repo.name}')">
+                📥 Import
+              </button>
             </div>
         </div>
     `).join('');
       }
     } else {
       grid.innerHTML = `<div class="empty-state"><p>${data.detail || 'Error loading repositories'}</p></div>`;
-    }
-  } catch (error) {
+        }
+    } catch (error) {
     grid.innerHTML = '<div class="empty-state"><p>Error loading repositories</p></div>';
   }
 }
@@ -727,6 +1312,49 @@ function selectRepository(repoUrl) {
   document.getElementById('git-url').value = repoUrl;
   router.navigate('/deploy');
   showToast('Repository selected', 'success');
+}
+
+// Import repository as a project
+async function importRepository(repoUrl, repoName) {
+  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+  if (!token) {
+    showToast('Please login first', 'error');
+    return;
+  }
+  
+  try {
+    showToast('Importing repository...', 'info');
+    
+    // Create a deployment for this repository
+    const response = await fetch('/deploy', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Bearer ${token}`
+      },
+      body: new URLSearchParams({
+        'git_url': repoUrl,
+        'app_name': repoName || repoUrl.split('/').pop() || 'Untitled Project'
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showToast('Repository imported successfully! Navigate to Projects to see it.', 'success');
+      
+      // Reload projects if on projects page
+      const projectsPage = document.getElementById('page-projects');
+      if (projectsPage && projectsPage.style.display !== 'none') {
+        loadProjects();
+      }
+    } else {
+      showToast(data.detail || 'Failed to import repository', 'error');
+    }
+  } catch (error) {
+    console.error('Error importing repository:', error);
+    showToast('Failed to import repository: ' + error.message, 'error');
+  }
 }
 
 function loadRepositories() {
@@ -760,7 +1388,7 @@ async function loadProjectsForSelector() {
   
   try {
     const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
-    const response = await fetch('/api/deployments', {
+    const response = await fetch('/deployments', {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -1299,7 +1927,7 @@ async function handleProfileUpdate(e) {
       await loadUserProfile();
       
       showToast('Profile updated successfully!', 'success');
-        } else {
+    } else {
       const errorText = data.detail || data.message || 'Failed to update profile';
       messageDiv.textContent = errorText;
       messageDiv.className = 'profile-message error';
@@ -1322,6 +1950,7 @@ async function handleProfileUpdate(e) {
 // Make functions globally available
 window.destroyDeployment = destroyDeployment;
 window.selectRepository = selectRepository;
+window.importRepository = importRepository;
 window.editEnvVar = editEnvVar;
 window.deleteEnvVar = deleteEnvVar;
 window.toggleEnvVarVisibility = toggleEnvVarVisibility;
@@ -1330,6 +1959,13 @@ window.closeEnvVarModal = closeEnvVarModal;
 window.toggleModalValueVisibility = toggleModalValueVisibility;
 window.editEnvVarModal = editEnvVarModal;
 window.showEnvVarModal = showEnvVarModal;
+
+// Project-specific functions
+window.selectProject = selectProject;
+window.showProjectSidebar = showProjectSidebar;
+window.hideProjectSidebar = hideProjectSidebar;
+window.openProject = openProject;
+window.loadUserProfileIntoProjectSidebar = loadUserProfileIntoProjectSidebar;
 
 // Logs Page with WebSocket
 let logsWebSocket = null;
@@ -1611,10 +2247,10 @@ function setupCommandPalette() {
       const query = e.target.value.toLowerCase();
       commandItems.forEach(item => {
         const text = item.querySelector('.command-text').textContent.toLowerCase();
-        if (text.includes(query)) {
-          item.style.display = 'flex';
-        } else {
-          item.style.display = 'none';
+          if (text.includes(query)) {
+            item.style.display = 'flex';
+          } else {
+            item.style.display = 'none';
         }
       });
       selectedIndex = -1;

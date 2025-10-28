@@ -26,33 +26,22 @@
           <span class="nav-icon">📊</span>
           <span class="nav-label">Projects</span>
         </a>
-        <a href="/deploy" class="nav-item" data-page="deploy">
-          <span class="nav-icon">🚀</span>
-          <span class="nav-label">Deploy</span>
-        </a>
-        <a href="/applications" class="nav-item" data-page="applications">
-          <span class="nav-icon">📦</span>
-          <span class="nav-label">Applications</span>
+        <a href="/repositories" class="nav-item" data-page="repositories">
+          <span class="nav-icon">🐙</span>
+          <span class="nav-label">Repositories</span>
         </a>
         <a href="/history" class="nav-item" data-page="history">
           <span class="nav-icon">📜</span>
           <span class="nav-label">History</span>
         </a>
-        <a href="/repositories" class="nav-item" data-page="repositories">
-          <span class="nav-icon">🐙</span>
-          <span class="nav-label">Repositories</span>
-        </a>
-        <a href="/env-vars" class="nav-item" data-page="env-vars">
-          <span class="nav-icon">🔐</span>
-          <span class="nav-label">Environmental Variables</span>
+
+        <a href="/domain" class="nav-item" data-page="domain">
+          <span class="nav-icon">🌐</span>
+          <span class="nav-label">Domain</span>
         </a>
         <a href="/settings" class="nav-item" data-page="settings">
           <span class="nav-icon">⚙️</span>
           <span class="nav-label">Settings</span>
-        </a>
-        <a href="/logs" class="nav-item" data-page="logs">
-          <span class="nav-icon">📋</span>
-          <span class="nav-label">Logs</span>
         </a>
       </nav>
       
@@ -107,6 +96,19 @@
           </div>
         </div>
 
+        <!-- Projects Page -->
+        <div class="page" id="page-projects" style="display: none;">
+          <div class="page-header">
+            <h2>Your Projects</h2>
+          </div>
+          <div class="applications-grid" id="projectsGrid">
+            <div class="empty-state">
+              <p>No projects found</p>
+              <button class="btn-primary" onclick="if(window.router){window.router.navigate('/deploy');}else{window.location.href='/deploy';}">Create First Project</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Deploy Page -->
         <div class="page" id="page-deploy" style="display: none;">
           <div class="card">
@@ -149,7 +151,7 @@
         <div class="page" id="page-applications" style="display: none;">
           <div class="page-header">
             <h2>Your Applications</h2>
-            <button class="btn-secondary" id="refreshAppsBtn">🔄 Refresh</button>
+            
           </div>
           <div class="applications-grid" id="applicationsGrid">
             <div class="empty-state">
@@ -338,6 +340,18 @@
               </div>
               <div id="profileMessage" class="profile-message" style="display: none;"></div>
             </form>
+          </div>
+        </div>
+
+        <!-- Domain (Main) Page -->
+        <div class="page" id="page-domain" style="display: none;">
+          <div class="card">
+            <h2>Domain Options</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Choose a domain provider:</p>
+            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+              <a class="btn-primary" href="https://register.com.np/" target="_blank" rel="noopener noreferrer">Get a free .np domain</a>
+              <a class="btn-secondary" href="https://nestnepal.com/domains/" target="_blank" rel="noopener noreferrer">Buy a domain</a>
+            </div>
           </div>
         </div>
 

@@ -19,6 +19,7 @@ from pathlib import Path
 
 # Import core modules
 from simple_pipeline import run_deployment_pipeline, extract_repo_name, validate_git_url, run_split_deployment
+import subprocess
 from database import create_db_and_tables, get_session, engine
 from connection_manager import manager
 from sqlmodel import Session, select
@@ -30,6 +31,28 @@ from datetime import timedelta
 # Import robust features (simplified versions)
 from robust_error_handler import global_error_handler, with_error_handling, RetryConfig
 from robust_logging import global_logger, LogLevel, LogCategory
+
+# Helper functions
+def get_running_containers():
+    """Get list of currently running container names"""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            return set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
+        else:
+            global_logger.log_error(f"Docker ps failed: {result.stderr}")
+            return set()
+    except subprocess.TimeoutExpired:
+        global_logger.log_error("Docker ps command timed out")
+        return set()
+    except Exception as e:
+        global_logger.log_error(f"Error running docker ps: {str(e)}")
+        return set()
 
 # Pydantic models
 class Project(BaseModel):
@@ -639,12 +662,12 @@ async def deploy(
         raise HTTPException(status_code=500, detail="Deployment failed. Check logs for details.")
 
 
-@app.get("/deployments", response_model=List[Deployment])
+@app.get("/deployments")
 def list_deployments(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """List all deployments for the current user"""
+    """List all deployments for the current user with real-time container status"""
     global_logger.log_user_action(
         user_id=str(current_user.id),
         action="list_deployments"
@@ -652,7 +675,37 @@ def list_deployments(
     
     statement = select(Deployment).where(Deployment.user_id == current_user.id)
     deployments = session.exec(statement).all()
-    return deployments
+    
+    # Get running containers
+    running_containers = get_running_containers()
+    
+    # Convert to dict format for JSON response with real-time status
+    deployment_list = []
+    for deployment in deployments:
+        # Check if container is actually running
+        is_running = deployment.container_name in running_containers
+        
+        # Determine real status
+        if is_running:
+            real_status = "running"
+        elif deployment.status == "success":
+            real_status = "stopped"  # Was successful but not currently running
+        else:
+            real_status = deployment.status
+        
+        deployment_dict = {
+            "id": deployment.id,
+            "container_name": deployment.container_name,
+            "git_url": deployment.git_url,
+            "status": real_status,
+            "deployed_url": deployment.deployed_url,
+            "created_at": deployment.created_at,
+            "user_id": deployment.user_id,
+            "is_running": is_running
+        }
+        deployment_list.append(deployment_dict)
+    
+    return deployment_list
 
 @app.delete("/deployments/clear")
 def clear_user_deployments(
@@ -701,6 +754,111 @@ async def get_deployment_logs(
         "trace_info": trace.__dict__ if trace else None,
         "logs": logs
     }
+
+@app.get("/projects/{project_id}/logs")
+async def get_project_logs(
+    project_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Get logs for a specific project/container"""
+    try:
+        with Session(engine) as session:
+            # Verify project belongs to user
+            deployment = session.exec(
+                select(Deployment).where(
+                    Deployment.id == project_id,
+                    Deployment.user_id == current_user.id
+                )
+            ).first()
+            
+            if not deployment:
+                raise HTTPException(status_code=404, detail="Project not found")
+            
+            # Get container logs using docker logs
+            try:
+                result = subprocess.run(
+                    ["docker", "logs", "--tail", "100", deployment.container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                
+                if result.returncode == 0:
+                    logs = result.stdout
+                else:
+                    logs = f"Error getting logs: {result.stderr}"
+                    
+            except subprocess.TimeoutExpired:
+                logs = "Log retrieval timed out"
+            except Exception as e:
+                logs = f"Error retrieving logs: {str(e)}"
+            
+            return {
+                "project_id": project_id,
+                "container_name": deployment.container_name,
+                "logs": logs,
+                "is_running": deployment.container_name in get_running_containers()
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        global_logger.log_error(f"Error getting project logs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get project logs")
+
+@app.post("/projects/{project_id}/restart")
+async def restart_project(
+    project_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Restart a specific project/container"""
+    try:
+        with Session(engine) as session:
+            # Verify project belongs to user
+            deployment = session.exec(
+                select(Deployment).where(
+                    Deployment.id == project_id,
+                    Deployment.user_id == current_user.id
+                )
+            ).first()
+            
+            if not deployment:
+                raise HTTPException(status_code=404, detail="Project not found")
+            
+            # Restart container using docker restart
+            try:
+                result = subprocess.run(
+                    ["docker", "restart", deployment.container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                if result.returncode == 0:
+                    global_logger.log_user_action(
+                        user_id=str(current_user.id),
+                        action="restart_project",
+                        details={"project_id": project_id, "container_name": deployment.container_name}
+                    )
+                    return {
+                        "project_id": project_id,
+                        "container_name": deployment.container_name,
+                        "status": "restarted",
+                        "message": "Project restarted successfully"
+                    }
+                else:
+                    raise HTTPException(status_code=500, detail=f"Failed to restart container: {result.stderr}")
+                    
+            except subprocess.TimeoutExpired:
+                raise HTTPException(status_code=500, detail="Restart operation timed out")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error restarting container: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        global_logger.log_error(f"Error restarting project: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to restart project")
 
 
 # WebSocket endpoint for real-time updates
