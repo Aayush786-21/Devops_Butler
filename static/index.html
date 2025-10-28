@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>DevOps Butler</title>
   <link rel="icon" type="image/png" href="/icons/logo.png"/>
-  <script type="module" crossorigin src="/assets/main-DHgbhU1g.js"></script>
+  <script type="module" crossorigin src="/assets/main-B635aRcB.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/styles-DnPnDAwC.css">
+  <link rel="stylesheet" crossorigin href="/assets/styles-sBb-5glv.css">
 </head>
 <body>
   <div class="app-container">
@@ -17,10 +17,10 @@
         <div class="logo">
           <span class="logo-icon">DB</span>
           <span class="logo-text">DevOps Butler</span>
-        </div>
+    </div>
         <div class="sidebar-search">
-          <input type="text" placeholder="Search..." id="sidebarSearch" />
-        </div>
+          <input type="text" placeholder="Search..." id="sidebarSearch" class="search-input" />
+  </div>
       </div>
       
       <nav class="sidebar-nav">
@@ -53,7 +53,7 @@
           <div class="user-info">
             <div class="user-name" id="userName">Guest</div>
             <div class="user-email" id="userEmail">Not logged in</div>
-          </div>
+    </div>
         </div>
         <div class="auth-buttons" id="authButtons">
           <a href="/login" class="btn-login">Login</a>
@@ -83,7 +83,7 @@
           <div class="dashboard-grid">
             <div class="card">
               <h3>Total Deployments</h3>
-              <div class="stat-value" id="totalDeployments">0</div>
+                <div class="stat-value" id="totalDeployments">0</div>
             </div>
             <div class="card">
               <h3>Running Applications</h3>
@@ -94,10 +94,10 @@
               <div class="activity-list" id="recentActivity">
                 <p style="text-align: center; color: var(--text-secondary); padding: 1rem 0;">No recent activity</p>
               </div>
-            </div>
-          </div>
         </div>
-
+      </div>
+      </div>
+          
         <!-- Projects Page -->
         <div class="page" id="page-projects" style="display: none;">
           <div class="page-header">
@@ -107,7 +107,7 @@
             <div class="empty-state">
               <p>No projects found</p>
               <button class="btn-primary" onclick="if(window.router){window.router.navigate('/deploy');}else{window.location.href='/deploy';}">Create First Project</button>
-            </div>
+      </div>
           </div>
         </div>
 
@@ -135,8 +135,8 @@
                 <div class="form-group">
                   <label for="backend-url">Backend Repository URL</label>
                   <input type="text" id="backend-url" name="backend_url" placeholder="https://github.com/username/backend-repo" />
-                </div>
-              </div>
+      </div>
+    </div>
               <button type="submit" class="btn-primary btn-large">
                 🚀 Deploy
               </button>
@@ -159,33 +159,33 @@
             <div class="empty-state">
               <p>No applications deployed yet</p>
               <button class="btn-primary" onclick="if(window.router){window.router.navigate('/deploy');}else{window.location.href='/deploy';}">Deploy Your First App</button>
-            </div>
-          </div>
         </div>
+      </div>
+    </div>
 
         <!-- History Page -->
         <div class="page" id="page-history" style="display: none;">
           <div class="page-header">
             <h2>Deployment History</h2>
             <button class="btn-secondary" id="clearHistoryBtn">Clear History</button>
-          </div>
+      </div>
           <div class="table-container">
             <table class="history-table" id="historyTable">
-              <thead>
-                <tr>
-                  <th>Project</th>
-                  <th>Status</th>
-                  <th>URL</th>
-                  <th>Time</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
+          <thead>
+            <tr>
+              <th>Project</th>
+              <th>Status</th>
+              <th>URL</th>
+              <th>Time</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
               <tbody id="historyTableBody">
                 <tr>
                   <td colspan="5" class="empty-state">No deployment history</td>
                 </tr>
-              </tbody>
-            </table>
+          </tbody>
+        </table>
           </div>
         </div>
 
@@ -226,8 +226,8 @@
             <div style="display: flex; gap: 0.75rem;">
               <button class="btn-secondary" id="importEnvBtn">📥 Import .env</button>
               <button class="btn-primary" id="addEnvVarBtn">+ Add Variable</button>
-            </div>
-          </div>
+      </div>
+    </div>
           
           <!-- Import .env Section -->
           <div class="card" id="importEnvCard" style="display: none; margin-bottom: 1.5rem;">
@@ -245,14 +245,14 @@
           </div>
           
           <!-- Environment Variables List -->
-          <div class="card">
+    <div class="card">
             <div id="envVarsList">
               <div class="empty-state">
                 <p>No environment variables configured</p>
                 <p style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem;">
                   Click "Add Variable" to create one, or import from a .env file
-                </p>
-              </div>
+      </p>
+    </div>
             </div>
           </div>
           
@@ -382,6 +382,39 @@
 
   <!-- Toast Notification -->
   <div id="toast" class="toast"></div>
+
+  <!-- Spotlight Search Modal -->
+  <div id="spotlightModal" class="spotlight-overlay" style="display: none;">
+    <div class="spotlight-container">
+      <div class="spotlight-header">
+        <div class="spotlight-icon">🔍</div>
+        <input type="text" id="spotlightSearch" class="spotlight-input" placeholder="Search projects, repositories, and more..." autocomplete="off" />
+      </div>
+      <div class="spotlight-results" id="spotlightResults">
+        <div class="spotlight-empty">
+          <div class="empty-icon">🔍</div>
+          <p>Start typing to search...</p>
+          <div class="search-suggestions">
+            <div class="suggestion-category">
+              <h4>Quick Actions</h4>
+              <div class="suggestion-item" data-action="new-deploy">
+                <span class="suggestion-icon">🚀</span>
+                <span class="suggestion-text">New Deploy</span>
+          </div>
+              <div class="suggestion-item" data-action="repositories">
+                <span class="suggestion-icon">📁</span>
+                <span class="suggestion-text">Repositories</span>
+          </div>
+              <div class="suggestion-item" data-action="history">
+                <span class="suggestion-icon">📜</span>
+                <span class="suggestion-text">History</span>
+          </div>
+        </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Scripts -->
 </body>

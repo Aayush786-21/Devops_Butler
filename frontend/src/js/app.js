@@ -274,49 +274,278 @@ function setupEventListeners() {
   document.getElementById('clearHistoryBtn')?.addEventListener('click', clearHistory);
   document.getElementById('searchReposBtn')?.addEventListener('click', searchRepositories);
   
-  // Keyboard shortcuts
-  setupKeyboardShortcuts();
+  // Spotlight search
+  setupSpotlightSearch();
 }
 
-// Enhanced keyboard shortcuts
-function setupKeyboardShortcuts() {
-  document.addEventListener('keydown', (e) => {
-    // Cmd/Ctrl + K for search focus
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-      e.preventDefault();
-      const searchInput = document.querySelector('.search-input');
-      if (searchInput) {
-        searchInput.focus();
-        searchInput.select();
-      }
-    }
-    
-    // Cmd/Ctrl + N for new deploy
-    if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
-      e.preventDefault();
-      const newDeployBtn = document.querySelector('.new-deploy-btn');
-      if (newDeployBtn) {
-        newDeployBtn.click();
-      }
-    }
-    
-    // Escape to close modals
-    if (e.key === 'Escape') {
-      const modal = document.querySelector('.modal-overlay');
-      if (modal) {
-        modal.remove();
-      }
-    }
-    
-    // R for refresh projects (when on projects page)
-    if (e.key === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      const projectsPage = document.getElementById('page-projects');
-      if (projectsPage && projectsPage.style.display !== 'none') {
-        e.preventDefault();
-        loadProjects();
-      }
+// Spotlight Search Functionality
+function setupSpotlightSearch() {
+  const searchInput = document.querySelector('.search-input');
+  const spotlightModal = document.getElementById('spotlightModal');
+  const spotlightSearch = document.getElementById('spotlightSearch');
+  const spotlightResults = document.getElementById('spotlightResults');
+  
+  if (!searchInput || !spotlightModal || !spotlightSearch || !spotlightResults) return;
+  
+  // Open spotlight when clicking search input
+  searchInput.addEventListener('click', openSpotlight);
+  
+  // Close spotlight when clicking overlay
+  spotlightModal.addEventListener('click', (e) => {
+    if (e.target === spotlightModal) {
+      closeSpotlight();
     }
   });
+  
+  // Handle search input
+  spotlightSearch.addEventListener('input', handleSpotlightSearch);
+  
+  // Handle suggestion clicks
+  spotlightResults.addEventListener('click', handleSuggestionClick);
+  
+  // Close on escape
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && spotlightModal.style.display !== 'none') {
+      closeSpotlight();
+    }
+  });
+}
+
+function openSpotlight() {
+  const spotlightModal = document.getElementById('spotlightModal');
+  const spotlightSearch = document.getElementById('spotlightSearch');
+  
+  spotlightModal.style.display = 'flex';
+  setTimeout(() => {
+    spotlightSearch.focus();
+  }, 100);
+}
+
+function closeSpotlight() {
+  const spotlightModal = document.getElementById('spotlightModal');
+  const spotlightSearch = document.getElementById('spotlightSearch');
+  const spotlightResults = document.getElementById('spotlightResults');
+  
+  spotlightModal.style.display = 'none';
+  spotlightSearch.value = '';
+  
+  // Reset to empty state
+  spotlightResults.innerHTML = `
+    <div class="spotlight-empty">
+      <div class="empty-icon">🔍</div>
+      <p>Start typing to search...</p>
+      <div class="search-suggestions">
+        <div class="suggestion-category">
+          <h4>Quick Actions</h4>
+          <div class="suggestion-item" data-action="new-deploy">
+            <span class="suggestion-icon">🚀</span>
+            <span class="suggestion-text">New Deploy</span>
+          </div>
+          <div class="suggestion-item" data-action="repositories">
+            <span class="suggestion-icon">📁</span>
+            <span class="suggestion-text">Repositories</span>
+          </div>
+          <div class="suggestion-item" data-action="history">
+            <span class="suggestion-icon">📜</span>
+            <span class="suggestion-text">History</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function handleSpotlightSearch(e) {
+  const query = e.target.value.toLowerCase().trim();
+  const spotlightResults = document.getElementById('spotlightResults');
+  
+  if (!query) {
+    // Show empty state with suggestions
+    spotlightResults.innerHTML = `
+      <div class="spotlight-empty">
+        <div class="empty-icon">🔍</div>
+        <p>Start typing to search...</p>
+        <div class="search-suggestions">
+          <div class="suggestion-category">
+            <h4>Quick Actions</h4>
+            <div class="suggestion-item" data-action="new-deploy">
+              <span class="suggestion-icon">🚀</span>
+              <span class="suggestion-text">New Deploy</span>
+            </div>
+            <div class="suggestion-item" data-action="repositories">
+              <span class="suggestion-icon">📁</span>
+              <span class="suggestion-text">Repositories</span>
+            </div>
+            <div class="suggestion-item" data-action="history">
+              <span class="suggestion-icon">📜</span>
+              <span class="suggestion-text">History</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  
+  // Search through projects and other content
+  const results = searchContent(query);
+  displaySearchResults(results);
+}
+
+function searchContent(query) {
+  const results = {
+    projects: [],
+    actions: [],
+    navigation: []
+  };
+  
+  // Search projects
+  if (allProjects && allProjects.length > 0) {
+    results.projects = allProjects.filter(project => 
+      project.name.toLowerCase().includes(query) ||
+      (project.repository && project.repository.toLowerCase().includes(query))
+    );
+  }
+  
+  // Search actions
+  const actions = [
+    { name: 'New Deploy', action: 'new-deploy', icon: '🚀' },
+    { name: 'Repositories', action: 'repositories', icon: '📁' },
+    { name: 'History', action: 'history', icon: '📜' },
+    { name: 'Settings', action: 'settings', icon: '⚙️' },
+    { name: 'Domain', action: 'domain', icon: '🌐' }
+  ];
+  
+  results.actions = actions.filter(action => 
+    action.name.toLowerCase().includes(query)
+  );
+  
+  // Search navigation items
+  const navItems = [
+    { name: 'Projects', action: 'projects', icon: '📊' },
+    { name: 'Repositories', action: 'repositories', icon: '📁' },
+    { name: 'History', action: 'history', icon: '📜' },
+    { name: 'Domain', action: 'domain', icon: '🌐' },
+    { name: 'Settings', action: 'settings', icon: '⚙️' }
+  ];
+  
+  results.navigation = navItems.filter(item => 
+    item.name.toLowerCase().includes(query)
+  );
+  
+  return results;
+}
+
+function displaySearchResults(results) {
+  const spotlightResults = document.getElementById('spotlightResults');
+  let html = '<div class="search-results">';
+  
+  // Projects
+  if (results.projects.length > 0) {
+    html += '<div class="search-category">';
+    html += '<div class="search-category-title">Projects</div>';
+    results.projects.forEach(project => {
+      const statusIcon = project.status === 'running' ? '🚀' : '📦';
+      const statusBadge = project.status === 'running' ? 'RUNNING' : 
+                         project.status === 'failed' ? 'FAILED' : 'IMPORTED';
+      html += `
+        <div class="search-result-item" data-type="project" data-id="${project.id}">
+          <span class="search-result-icon">${statusIcon}</span>
+          <div class="search-result-content">
+            <div class="search-result-title">${escapeHtml(project.name)}</div>
+            <div class="search-result-subtitle">${project.repository || 'No repository'}</div>
+          </div>
+          <span class="search-result-badge">${statusBadge}</span>
+        </div>
+      `;
+    });
+    html += '</div>';
+  }
+  
+  // Actions
+  if (results.actions.length > 0) {
+    html += '<div class="search-category">';
+    html += '<div class="search-category-title">Actions</div>';
+    results.actions.forEach(action => {
+      html += `
+        <div class="search-result-item" data-type="action" data-action="${action.action}">
+          <span class="search-result-icon">${action.icon}</span>
+          <div class="search-result-content">
+            <div class="search-result-title">${action.name}</div>
+          </div>
+        </div>
+      `;
+    });
+    html += '</div>';
+  }
+  
+  // Navigation
+  if (results.navigation.length > 0) {
+    html += '<div class="search-category">';
+    html += '<div class="search-category-title">Navigation</div>';
+    results.navigation.forEach(item => {
+      html += `
+        <div class="search-result-item" data-type="navigation" data-action="${item.action}">
+          <span class="search-result-icon">${item.icon}</span>
+          <div class="search-result-content">
+            <div class="search-result-title">${item.name}</div>
+          </div>
+        </div>
+      `;
+    });
+    html += '</div>';
+  }
+  
+  // No results
+  if (results.projects.length === 0 && results.actions.length === 0 && results.navigation.length === 0) {
+    html = `
+      <div class="no-results">
+        <div class="no-results-icon">🔍</div>
+        <p>No results found for "${escapeHtml(document.getElementById('spotlightSearch').value)}"</p>
+      </div>
+    `;
+  }
+  
+  html += '</div>';
+  spotlightResults.innerHTML = html;
+}
+
+function handleSuggestionClick(e) {
+  const item = e.target.closest('.suggestion-item, .search-result-item');
+  if (!item) return;
+  
+  const action = item.dataset.action;
+  const type = item.dataset.type;
+  const id = item.dataset.id;
+  
+  closeSpotlight();
+  
+  if (type === 'project' && id) {
+    // Open specific project
+    selectProject(parseInt(id));
+  } else if (action) {
+    // Handle actions
+    switch (action) {
+      case 'new-deploy':
+        if (window.router) window.router.navigate('/deploy');
+        break;
+      case 'repositories':
+        if (window.router) window.router.navigate('/repositories');
+        break;
+      case 'history':
+        if (window.router) window.router.navigate('/history');
+        break;
+      case 'domain':
+        if (window.router) window.router.navigate('/domain');
+        break;
+      case 'settings':
+        if (window.router) window.router.navigate('/settings');
+        break;
+      case 'projects':
+        if (window.router) window.router.navigate('/projects');
+        break;
+    }
+  }
 }
 
 // Load Domain main page (external links only)
