@@ -15,19 +15,31 @@ SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing - lazy initialization to avoid bcrypt issues
+pwd_context = None
+
+def get_pwd_context():
+    global pwd_context
+    if pwd_context is None:
+        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    return pwd_context
 
 # JWT token security
 security = HTTPBearer()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    # Truncate password to 72 bytes to avoid bcrypt limitation
+    if len(plain_password.encode('utf-8')) > 72:
+        plain_password = plain_password[:72]
+    return get_pwd_context().verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    return pwd_context.hash(password)
+    # Truncate password to 72 bytes to avoid bcrypt limitation
+    if len(password.encode('utf-8')) > 72:
+        password = password[:72]
+    return get_pwd_context().hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create a JWT access token."""

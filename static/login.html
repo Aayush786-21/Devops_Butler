@@ -63,6 +63,37 @@
       transition: border-color 0.2s;
     }
     
+    .password-input-container {
+      position: relative;
+    }
+    
+    .password-toggle {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--text-secondary);
+      font-size: 1.2rem;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s;
+    }
+    
+    .password-toggle:hover {
+      color: var(--text-primary);
+    }
+    
+    .password-input-container input {
+      padding-right: 3rem;
+    }
+    
     .form-group input:focus {
       outline: none;
       border-color: var(--primary);
@@ -129,7 +160,7 @@
       display: none;
     }
   </style>
-  <script type="module" crossorigin src="/assets/login-gSnUEgc_.js"></script>
+  <script type="module" crossorigin src="/assets/login-DuMyN2Ym.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
   <link rel="stylesheet" crossorigin href="/assets/styles-BZYa6Lor.css">
 </head>
@@ -153,7 +184,12 @@
         
         <div class="form-group">
           <label for="loginPassword">Password</label>
-          <input type="password" id="loginPassword" required />
+          <div class="password-input-container">
+            <input type="password" id="loginPassword" required />
+            <button type="button" class="password-toggle" id="loginPasswordToggle" title="Show password">
+              👁️
+            </button>
+          </div>
         </div>
         
         <button type="submit" class="btn-submit" id="loginBtn">
@@ -178,12 +214,22 @@
         
         <div class="form-group">
           <label for="registerPassword">Password</label>
-          <input type="password" id="registerPassword" required />
+          <div class="password-input-container">
+            <input type="password" id="registerPassword" required />
+            <button type="button" class="password-toggle" id="registerPasswordToggle" title="Show password">
+              👁️
+            </button>
+          </div>
         </div>
         
         <div class="form-group">
           <label for="registerConfirmPassword">Confirm Password</label>
-          <input type="password" id="registerConfirmPassword" required />
+          <div class="password-input-container">
+            <input type="password" id="registerConfirmPassword" required />
+            <button type="button" class="password-toggle" id="registerConfirmPasswordToggle" title="Show password">
+              👁️
+            </button>
+          </div>
         </div>
         
         <button type="submit" class="btn-submit" id="registerBtn">

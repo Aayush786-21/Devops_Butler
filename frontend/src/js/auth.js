@@ -15,6 +15,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Setup form event listeners
     setupFormListeners();
     
+    // Setup password toggle functionality
+    setupPasswordToggles();
+    
     // Check if user is already logged in
     checkAuthStatus();
 });
@@ -246,6 +249,50 @@ function setupFormListeners() {
                 showToast('Failed to initiate GitHub login', 'error');
             }
         });
+    }
+}
+
+function setupPasswordToggles() {
+    // Setup password toggle for login form
+    const loginPasswordToggle = document.getElementById('loginPasswordToggle');
+    const loginPasswordInput = document.getElementById('loginPassword');
+    
+    if (loginPasswordToggle && loginPasswordInput) {
+        loginPasswordToggle.addEventListener('click', () => {
+            togglePasswordVisibility(loginPasswordInput, loginPasswordToggle);
+        });
+    }
+    
+    // Setup password toggle for register password
+    const registerPasswordToggle = document.getElementById('registerPasswordToggle');
+    const registerPasswordInput = document.getElementById('registerPassword');
+    
+    if (registerPasswordToggle && registerPasswordInput) {
+        registerPasswordToggle.addEventListener('click', () => {
+            togglePasswordVisibility(registerPasswordInput, registerPasswordToggle);
+        });
+    }
+    
+    // Setup password toggle for confirm password
+    const registerConfirmPasswordToggle = document.getElementById('registerConfirmPasswordToggle');
+    const registerConfirmPasswordInput = document.getElementById('registerConfirmPassword');
+    
+    if (registerConfirmPasswordToggle && registerConfirmPasswordInput) {
+        registerConfirmPasswordToggle.addEventListener('click', () => {
+            togglePasswordVisibility(registerConfirmPasswordInput, registerConfirmPasswordToggle);
+        });
+    }
+}
+
+function togglePasswordVisibility(input, toggleButton) {
+    if (input.type === 'password') {
+        input.type = 'text';
+        toggleButton.textContent = '🙈';
+        toggleButton.title = 'Hide password';
+    } else {
+        input.type = 'password';
+        toggleButton.textContent = '👁️';
+        toggleButton.title = 'Show password';
     }
 }
 
