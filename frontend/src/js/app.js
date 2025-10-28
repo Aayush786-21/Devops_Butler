@@ -614,7 +614,13 @@ async function loadProjects() {
         url: deployment.deployed_url || deployment.app_url,
         createdAt: deployment.created_at,
         updatedAt: deployment.updated_at,
-          repository: repoUrl
+          repository: repoUrl,
+          // Real container metrics from docker ps
+          containerUptime: deployment.container_uptime || 'Unknown',
+          containerPorts: deployment.container_ports || 'No ports',
+          containerImage: deployment.container_image || 'Unknown',
+          containerStatus: deployment.container_status || 'Unknown',
+          isRunning: deployment.is_running || false
         };
       });
       filteredProjects = [...allProjects];
@@ -655,7 +661,7 @@ function renderProjects(projects) {
         <div class="project-header">
           <div class="project-icon">${icon}</div>
           <div class="project-status ${statusClass}">${statusText}</div>
-        </div>
+          </div>
         
         <div class="project-info">
           <h3 class="project-name">${escapeHtml(project.name)}</h3>
@@ -665,21 +671,17 @@ function renderProjects(projects) {
               <polyline points="12,6 12,12 16,14"></polyline>
             </svg>
             <span>Updated ${timeAgo}</span>
-          </div>
-          
-          ${project.status === 'running' ? `
-          <div class="project-metrics">
-            <div class="metric">
-              <span class="metric-label">Uptime</span>
-              <span class="metric-value">99.9%</span>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Status</span>
-              <span class="metric-value">Active</span>
-            </div>
-          </div>
-          ` : ''}
         </div>
+          
+                 ${project.status === 'running' ? `
+                 <div class="project-metrics">
+                   <div class="metric">
+                     <span class="metric-label">Uptime</span>
+                     <span class="metric-value">${project.containerUptime}</span>
+            </div>
+            </div>
+            ` : ''}
+            </div>
         
         <div class="project-actions">
           <button class="btn-icon" title="View logs" onclick="event.stopPropagation(); viewProjectLogs(${project.id})">
@@ -690,7 +692,7 @@ function renderProjects(projects) {
               <line x1="16" y1="17" x2="8" y2="17"></line>
               <polyline points="10,9 9,9 8,9"></polyline>
             </svg>
-          </button>
+            </button>
           ${project.status === 'running' ? `
           <button class="btn-icon" title="Restart" onclick="event.stopPropagation(); restartProject(${project.id})">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -698,11 +700,11 @@ function renderProjects(projects) {
               <polyline points="1 20 1 14 7 14"></polyline>
               <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path>
             </svg>
-          </button>
+            </button>
           ` : ''}
+          </div>
         </div>
-      </div>
-    `;
+      `;
   }).join('');
 }
 
@@ -818,7 +820,13 @@ function selectProject(projectId) {
   if (!project) return;
   
   currentProject = project;
-      showProjectSidebar(project);
+  showProjectSidebar(project);
+  
+  // Update configuration page if it's currently visible
+  const configPage = document.getElementById('page-project-config');
+  if (configPage && configPage.style.display !== 'none') {
+    updateProjectConfigValues();
+  }
 }
 
 function showProjectSidebar(project) {
@@ -1057,34 +1065,115 @@ function showProjectConfiguration() {
     configPage.className = 'page';
     configPage.innerHTML = `
       <div class="card">
-        <h2>Project Configuration</h2>
-        <div class="project-config-grid">
-          <div class="config-item">
-            <label>Project Name</label>
-            <div class="config-value">
-              <span id="projectConfigName">${currentProject?.name || 'Unknown'}</span>
-              <button class="btn-secondary" id="changeProjectNameBtn">Change</button>
-          </div>
+        <h2>Project information</h2>
+        <hr class="config-divider">
+        <div class="config-info-grid">
+          <div class="config-row">
+            <div class="config-label">Project name:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigName">${currentProject?.name || 'Unknown'}</span>
             </div>
-          <div class="config-item">
-            <label>Project ID</label>
-            <div class="config-value" id="projectConfigId">${currentProject?.id || '-'}</div>
           </div>
-          <div class="config-item">
-            <label>Created</label>
-            <div class="config-value" id="projectConfigCreated">${currentProject?.createdAt ? getRelativeTime(new Date(currentProject.createdAt)) : 'Unknown'}</div>
+          <div class="config-row">
+            <div class="config-label">Owner:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigOwner">${currentProject?.owner || 'Unknown'}</span>
+            </div>
           </div>
-          <div class="config-item">
-            <label>Last Updated</label>
-            <div class="config-value" id="projectConfigUpdated">${currentProject?.updatedAt ? getRelativeTime(new Date(currentProject.updatedAt)) : 'Unknown'}</div>
+          <div class="config-row">
+            <div class="config-label">Project ID:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigId">${currentProject?.id || '-'}</span>
+              <button class="copy-btn" onclick="copyToClipboard('${currentProject?.id || ''}')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="config-subtext">Also known as Site ID</div>
           </div>
+          <div class="config-row">
+            <div class="config-label">Created:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigCreated">${currentProject?.createdAt ? getRelativeTime(new Date(currentProject.createdAt)) : 'Unknown'}</span>
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="config-label">Last update:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigUpdated">${currentProject?.updatedAt ? getRelativeTime(new Date(currentProject.updatedAt)) : 'Unknown'}</span>
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="config-label">Container Ports:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigPorts">${currentProject?.containerPorts || 'No ports'}</span>
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="config-label">Docker Image:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigImage">${currentProject?.containerImage || 'Unknown'}</span>
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="config-label">Container Status:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigStatus">${currentProject?.containerStatus || 'Unknown'}</span>
+            </div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <button class="btn-secondary" id="changeProjectNameBtn">Change project name</button>
         </div>
       </div>
     `;
     document.getElementById('pageContent').appendChild(configPage);
   }
   
+  // Update the configuration values with current project data
+  updateProjectConfigValues();
+  
   configPage.style.display = 'block';
+}
+
+function updateProjectConfigValues() {
+  if (!currentProject) return;
+  
+  // Update all configuration values
+  const nameEl = document.getElementById('projectConfigName');
+  const ownerEl = document.getElementById('projectConfigOwner');
+  const idEl = document.getElementById('projectConfigId');
+  const createdEl = document.getElementById('projectConfigCreated');
+  const updatedEl = document.getElementById('projectConfigUpdated');
+  const portsEl = document.getElementById('projectConfigPorts');
+  const imageEl = document.getElementById('projectConfigImage');
+  const statusEl = document.getElementById('projectConfigStatus');
+  
+  if (nameEl) nameEl.textContent = currentProject.name || 'Unknown';
+  if (ownerEl) ownerEl.textContent = 'Aayush786-21\'s team'; // Static for now
+  if (idEl) idEl.textContent = currentProject.id || '-';
+  if (createdEl) createdEl.textContent = currentProject.createdAt ? getRelativeTime(new Date(currentProject.createdAt)) : 'Unknown';
+  if (updatedEl) updatedEl.textContent = currentProject.updatedAt ? getRelativeTime(new Date(currentProject.updatedAt)) : 'Unknown';
+  if (portsEl) portsEl.textContent = currentProject.containerPorts || 'No ports';
+  if (imageEl) imageEl.textContent = currentProject.containerImage || 'Unknown';
+  if (statusEl) statusEl.textContent = currentProject.containerStatus || 'Unknown';
+}
+
+// Copy to clipboard functionality
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    // Show a brief success message
+    const copyBtn = event.target.closest('.copy-btn');
+    const originalContent = copyBtn.innerHTML;
+    copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"></polyline></svg>';
+    setTimeout(() => {
+      copyBtn.innerHTML = originalContent;
+    }, 1000);
+  }).catch(err => {
+    console.error('Failed to copy: ', err);
+  });
 }
 
 function showProjectDomainConfig() {
@@ -1128,7 +1217,7 @@ function openProject(projectId) {
 
 // Load user profile into project sidebar
 async function loadUserProfileIntoProjectSidebar() {
-  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
   if (!token) {
     console.log('No auth token found');
     return;

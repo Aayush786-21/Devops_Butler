@@ -54,6 +54,54 @@ def get_running_containers():
         global_logger.log_error(f"Error running docker ps: {str(e)}")
         return set()
 
+def get_container_details():
+    """Get detailed information about running containers"""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}|{{.Status}}|{{.Ports}}|{{.Image}}"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            containers = {}
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    parts = line.split('|')
+                    if len(parts) >= 4:
+                        name = parts[0]
+                        status = parts[1]
+                        ports = parts[2]
+                        image = parts[3]
+                        
+                        # Parse uptime from status (e.g., "Up 2 hours", "Up 3 days")
+                        uptime = "Unknown"
+                        if "Up" in status:
+                            uptime_match = status.split("Up ")[1].split(",")[0] if "Up " in status else "Unknown"
+                            uptime = uptime_match.strip()
+                        
+                        # Parse port information
+                        port_info = "No ports"
+                        if ports and ports != "":
+                            port_info = ports
+                        
+                        containers[name] = {
+                            "status": status,
+                            "uptime": uptime,
+                            "ports": port_info,
+                            "image": image
+                        }
+            return containers
+        else:
+            global_logger.log_error(f"Docker ps failed: {result.stderr}")
+            return {}
+    except subprocess.TimeoutExpired:
+        global_logger.log_error("Docker ps command timed out")
+        return {}
+    except Exception as e:
+        global_logger.log_error(f"Error running docker ps: {str(e)}")
+        return {}
+
 # Pydantic models
 class Project(BaseModel):
     git_url: HttpUrl
@@ -667,7 +715,7 @@ def list_deployments(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """List all deployments for the current user with real-time container status"""
+    """List all deployments for the current user with real-time container status and metrics"""
     global_logger.log_user_action(
         user_id=str(current_user.id),
         action="list_deployments"
@@ -676,14 +724,18 @@ def list_deployments(
     statement = select(Deployment).where(Deployment.user_id == current_user.id)
     deployments = session.exec(statement).all()
     
-    # Get running containers
+    # Get detailed container information
+    container_details = get_container_details()
     running_containers = get_running_containers()
     
-    # Convert to dict format for JSON response with real-time status
+    # Convert to dict format for JSON response with real-time status and metrics
     deployment_list = []
     for deployment in deployments:
         # Check if container is actually running
         is_running = deployment.container_name in running_containers
+        
+        # Get detailed container info if running
+        container_info = container_details.get(deployment.container_name, {})
         
         # Determine real status
         if is_running:
@@ -701,7 +753,11 @@ def list_deployments(
             "deployed_url": deployment.deployed_url,
             "created_at": deployment.created_at,
             "user_id": deployment.user_id,
-            "is_running": is_running
+            "is_running": is_running,
+            "container_uptime": container_info.get("uptime", "Unknown"),
+            "container_ports": container_info.get("ports", "No ports"),
+            "container_image": container_info.get("image", "Unknown"),
+            "container_status": container_info.get("status", "Unknown")
         }
         deployment_list.append(deployment_dict)
     
