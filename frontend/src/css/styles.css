@@ -2050,3 +2050,59 @@ body {
 .btn-danger:hover {
   background: #dc2626 !important; /* red-600 */
 }
+
+/* Dark CTA button and block layout */
+.btn-dark {
+  background: #0f172a; /* slate-900 */
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+.btn-dark:hover { 
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.25); 
+  transform: translateY(-1px); 
+}
+.btn-dark:active { 
+  transform: translateY(0); 
+}
+.btn-block { 
+  width: 100%; 
+  display: inline-flex; 
+  justify-content: center; 
+  align-items: center; 
+}
+
+/* Enhanced project card hover animations */
+.project-card:hover .btn-open-site {
+  transform: scale(0.95);
+  padding: 8px 12px;
+}
+
+.project-card:hover .btn-delete {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.btn-delete {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: all 0.2s ease;
+}
+
+/* Footer row: CTA left, delete right */
+.project-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.project-footer .btn-open-site {
+  flex: 1;
+}
+.project-card:hover .project-footer .btn-delete { opacity: 1; transform: translateY(0); }
+
+/* Remove absolute positioning overlap from legacy project-actions */
+.project-actions { position: static; opacity: 1; display: none; }

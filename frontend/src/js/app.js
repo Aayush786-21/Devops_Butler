@@ -882,11 +882,9 @@ function renderProjects(projects) {
             ` : ''}
             </div>
         
-        <div class="project-actions">
-          <button class="btn-icon btn-text" title="Open site" onclick="event.stopPropagation(); openProjectSite(${project.id})">
-            Open site
-            </button>
-          <button class="btn-icon btn-danger" title="Delete project" onclick="event.stopPropagation(); deleteProject(${project.id})">
+        <div class="project-footer">
+          <button class="btn-dark btn-block btn-open-site" onclick="event.stopPropagation(); openProjectSite(${project.id})">Open Site</button>
+          <button class="btn-icon btn-danger btn-delete" title="Delete project" onclick="event.stopPropagation(); deleteProject(${project.id})">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
@@ -894,17 +892,8 @@ function renderProjects(projects) {
               <path d="M14 11v6"></path>
               <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
             </svg>
-            </button>
-          ${project.status === 'running' ? `
-          <button class="btn-icon" title="Restart" onclick="event.stopPropagation(); restartProject(${project.id})">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <polyline points="1 20 1 14 7 14"></polyline>
-              <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path>
-            </svg>
-            </button>
-          ` : ''}
-          </div>
+          </button>
+        </div>
         </div>
       `;
   }).join('');
