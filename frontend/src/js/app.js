@@ -184,36 +184,15 @@ function showDeleteConfirmation(projectName) {
     // Create modal overlay
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.5);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10000;
-    `;
     
     // Create modal content
     const modal = document.createElement('div');
     modal.className = 'delete-confirmation-modal';
-    modal.style.cssText = `
-      background: white;
-      border-radius: 12px;
-      padding: 24px;
-      max-width: 400px;
-      width: 90%;
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-      animation: modalSlideIn 0.2s ease-out;
-    `;
     
     modal.innerHTML = `
-      <div style="text-align: center; margin-bottom: 20px;">
-        <div style="width: 48px; height: 48px; background: #fef2f2; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
+      <div class="delete-confirmation-modal-center">
+        <div class="delete-confirmation-icon-wrapper">
+          <svg class="delete-confirmation-icon" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
             <polyline points="3 6 5 6 21 6"></polyline>
             <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
             <path d="M10 11v6"></path>
@@ -221,47 +200,17 @@ function showDeleteConfirmation(projectName) {
             <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
           </svg>
         </div>
-        <h3 style="margin: 0 0 8px; font-size: 18px; font-weight: 600; color: #111827;">Delete Project</h3>
-        <p style="margin: 0; color: #6b7280; line-height: 1.5;">
+        <h3 class="delete-confirmation-title">Delete Project</h3>
+        <p class="delete-confirmation-text">
           Are you sure you want to delete <strong>${escapeHtml(projectName)}</strong>?<br>
           This will stop and remove its container and image.
         </p>
       </div>
-      <div style="display: flex; gap: 12px; justify-content: flex-end;">
-        <button class="cancel-btn" style="
-          padding: 8px 16px;
-          border: 1px solid #d1d5db;
-          background: white;
-          color: #374151;
-          border-radius: 6px;
-          cursor: pointer;
-          font-weight: 500;
-          transition: all 0.2s;
-        ">Cancel</button>
-        <button class="delete-btn" style="
-          padding: 8px 16px;
-          border: none;
-          background: #ef4444;
-          color: white;
-          border-radius: 6px;
-          cursor: pointer;
-          font-weight: 500;
-          transition: all 0.2s;
-        ">Delete</button>
+      <div class="delete-confirmation-actions">
+        <button class="cancel-btn">Cancel</button>
+        <button class="delete-btn">Delete</button>
       </div>
     `;
-    
-    // Add CSS animation
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes modalSlideIn {
-        from { opacity: 0; transform: scale(0.95) translateY(-10px); }
-        to { opacity: 1; transform: scale(1) translateY(0); }
-      }
-      .cancel-btn:hover { background: #f9fafb; border-color: #9ca3af; }
-      .delete-btn:hover { background: #dc2626; }
-    `;
-    document.head.appendChild(style);
     
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
@@ -272,7 +221,6 @@ function showDeleteConfirmation(projectName) {
     
     const cleanup = () => {
       document.body.removeChild(overlay);
-      document.head.removeChild(style);
     };
     
     cancelBtn.onclick = () => {
@@ -883,7 +831,9 @@ function renderProjects(projects) {
             </div>
         
         <div class="project-footer">
+          ${project.status === 'running' && project.url ? `
           <button class="btn-dark btn-block btn-open-site" onclick="event.stopPropagation(); openProjectSite(${project.id})">Open Site</button>
+          ` : ''}
           <button class="btn-icon btn-danger btn-delete" title="Delete project" onclick="event.stopPropagation(); deleteProject(${project.id})">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
@@ -892,8 +842,8 @@ function renderProjects(projects) {
               <path d="M14 11v6"></path>
               <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
             </svg>
-          </button>
-        </div>
+            </button>
+          </div>
         </div>
       `;
   }).join('');
@@ -1235,7 +1185,7 @@ function displayProjectLogs(logData) {
     <div class="logs-status">
       <span class="status-badge status-${logData.is_running ? 'running' : 'stopped'}">
         ${logData.is_running ? 'RUNNING' : 'STOPPED'}
-      </span>
+              </span>
       <span class="logs-timestamp">Last updated: ${new Date().toLocaleTimeString()}</span>
     </div>
     <div class="logs-content">
@@ -1335,7 +1285,148 @@ function showProjectConfiguration() {
   // Update the configuration values with current project data
   updateProjectConfigValues();
   
+  // Setup change project name button
+  const changeNameBtn = document.getElementById('changeProjectNameBtn');
+  if (changeNameBtn) {
+    changeNameBtn.onclick = () => openProjectNameModal();
+  }
+  
   configPage.style.display = 'block';
+}
+
+function openProjectNameModal() {
+  if (!currentProject) {
+    showToast('No project selected', 'error');
+    return;
+  }
+  
+  // Create modal overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  // Create modal content
+  const modal = document.createElement('div');
+  modal.className = 'modal-content enhanced';
+  
+  modal.innerHTML = `
+    <div class="project-name-modal-header">
+      <h2 class="project-name-modal-title">Change Project Name</h2>
+      <p class="project-name-modal-subtitle">
+        Update the name for <strong>${escapeHtml(currentProject.name)}</strong>
+      </p>
+    </div>
+    
+    <div class="project-name-modal-form-group">
+      <label class="project-name-modal-label">Project Name</label>
+      <input 
+        type="text" 
+        id="newProjectNameInput"
+        class="project-name-modal-input"
+        value="${escapeHtml(currentProject.name)}"
+        placeholder="Enter new project name"
+      />
+    </div>
+    
+    <div class="project-name-modal-actions">
+      <button class="cancel-name-btn">Cancel</button>
+      <button class="save-name-btn">Save Changes</button>
+    </div>
+  `;
+  
+  
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  
+  // Focus input
+  const nameInput = document.getElementById('newProjectNameInput');
+  if (nameInput) {
+    nameInput.focus();
+    nameInput.select();
+  }
+  
+  // Event handlers
+  const cancelBtn = modal.querySelector('.cancel-name-btn');
+  const saveBtn = modal.querySelector('.save-name-btn');
+  
+  const cleanup = () => {
+    document.body.removeChild(overlay);
+  };
+  
+  cancelBtn.onclick = () => {
+    cleanup();
+  };
+  
+  saveBtn.onclick = async () => {
+    const newName = nameInput.value.trim();
+    if (!newName) {
+      showToast('Project name cannot be empty', 'error');
+      return;
+    }
+    
+    if (newName === currentProject.name) {
+      cleanup();
+      return;
+    }
+  
+  try {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+      const response = await fetch(`/projects/${currentProject.id}/name`, {
+        method: 'PUT',
+      headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Bearer ${token}`
+        },
+        body: new URLSearchParams({
+          'app_name': newName
+        })
+    });
+      
+      const data = await response.json();
+    
+    if (response.ok) {
+        showToast('Project name updated successfully!', 'success');
+        currentProject.name = newName;
+        cleanup();
+        
+        // Update the project in allProjects
+        const projectIndex = allProjects.findIndex(p => p.id === currentProject.id);
+        if (projectIndex >= 0) {
+          allProjects[projectIndex].name = newName;
+        }
+        
+        // Refresh UI
+        updateProjectConfigValues();
+        renderProjects(filteredProjects);
+        
+        // Update sidebar project name if visible
+        const sidebarName = document.getElementById('projectSidebarName');
+        if (sidebarName) {
+          sidebarName.textContent = newName;
+        }
+        
+        document.getElementById('pageTitle').textContent = newName;
+      } else {
+        showToast(data.detail || 'Failed to update project name', 'error');
+    }
+  } catch (error) {
+      console.error('Error updating project name:', error);
+      showToast('Failed to update project name: ' + error.message, 'error');
+    }
+  };
+  
+  overlay.onclick = (e) => {
+    if (e.target === overlay) {
+      cleanup();
+    }
+  };
+  
+  // Close on Escape key
+  const handleEscape = (e) => {
+    if (e.key === 'Escape') {
+      cleanup();
+      document.removeEventListener('keydown', handleEscape);
+    }
+  };
+  document.addEventListener('keydown', handleEscape);
 }
 
 function updateProjectConfigValues() {
@@ -1533,7 +1624,7 @@ async function loadDashboard() {
           </div>
         `).join('');
   } else {
-        recentActivity.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 1rem 0;">No recent activity</p>';
+        recentActivity.innerHTML = '<p class="recent-activity-empty">No recent activity</p>';
       }
     }
   } catch (error) {
@@ -1791,12 +1882,22 @@ async function destroyDeployment(containerName) {
 }
 
 // Repositories functions
+// Track selected repositories for split import
+let selectedRepositories = [];
+let lastRepoUsername = '';
+
 async function searchRepositories() {
   const username = document.getElementById('usernameSearch').value.trim();
   
   if (!username) {
         showToast('Please enter a GitHub username', 'error');
         return;
+    }
+    
+  // Reset selection only when searching a different username
+  if (username !== lastRepoUsername) {
+    selectedRepositories = [];
+    lastRepoUsername = username;
     }
     
   const grid = document.getElementById('repositoriesGrid');
@@ -1810,8 +1911,10 @@ async function searchRepositories() {
       if (data.repositories.length === 0) {
         grid.innerHTML = '<div class="empty-state"><p>No repositories found</p></div>';
         } else {
-        grid.innerHTML = data.repositories.map(repo => `
-          <div class="repository-card">
+        grid.innerHTML = data.repositories.map(repo => {
+          const isSelected = selectedRepositories.some(r => r.url === repo.clone_url);
+          return `
+          <div class="repository-card ${isSelected ? 'selected' : ''}" data-repo-url="${repo.clone_url}" onclick="toggleRepositorySelection('${repo.clone_url}', '${repo.name}')">
             <h3>${repo.name}</h3>
             <p style="color: var(--text-secondary); margin: 0.5rem 0;">
               ${repo.description || 'No description'}
@@ -1820,18 +1923,220 @@ async function searchRepositories() {
               <span style="font-size: 0.875rem; color: var(--text-secondary);">
                 ${repo.language || 'Unknown'} • ${repo.stargazers_count || 0} stars
               </span>
-              <button class="btn-primary btn-small" onclick="importRepository('${repo.clone_url}', '${repo.name}')">
+              <button class="btn-primary btn-small" onclick="event.stopPropagation(); importRepository('${repo.clone_url}', '${repo.name}')">
                 📥 Import
               </button>
             </div>
         </div>
-    `).join('');
+        `;
+        }).join('');
+        
+        // Update visuals after initial render
+        updateRepositorySelectionVisuals();
       }
     } else {
       grid.innerHTML = `<div class="empty-state"><p>${data.detail || 'Error loading repositories'}</p></div>`;
         }
     } catch (error) {
     grid.innerHTML = '<div class="empty-state"><p>Error loading repositories</p></div>';
+  }
+}
+
+function toggleRepositorySelection(url, name) {
+  const existing = selectedRepositories.findIndex(r => r.url === url);
+  
+  if (existing >= 0) {
+    // Deselect
+    selectedRepositories.splice(existing, 1);
+    updateRepositorySelectionVisuals();
+  } else {
+    // Select (max 2 for split repo)
+    if (selectedRepositories.length >= 2) {
+      showToast('You can only select up to 2 repositories for a split repository', 'error');
+      return;
+    }
+    selectedRepositories.push({ url, name });
+    
+    // Show dialog when 2nd repo is selected
+    if (selectedRepositories.length === 2) {
+      showSplitImportDialog();
+    }
+    
+    // Update visual state without full re-render
+    updateRepositorySelectionVisuals();
+  }
+}
+
+function showSplitImportDialog() {
+  const [frontend, backend] = selectedRepositories;
+  
+  // Create modal overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'splitImportModal';
+  // Create modal content
+  const modal = document.createElement('div');
+  modal.className = 'modal-content enhanced';
+  
+  modal.innerHTML = `
+    <div class="split-import-modal-center">
+      <div class="split-import-icon-wrapper">
+        📦
+      </div>
+      <h2 class="split-import-modal-title">Import as Split Repository?</h2>
+      <p class="split-import-modal-text">
+        This will create a split project with frontend and backend components.
+      </p>
+    </div>
+    
+    <div class="split-import-repo-info">
+      <div class="split-import-repo-item">
+        <div class="split-import-repo-label">Frontend</div>
+        <div class="split-import-repo-name">${escapeHtml(frontend.name)}</div>
+        <div class="split-import-repo-url">${escapeHtml(frontend.url)}</div>
+      </div>
+      
+      <div class="split-import-divider"></div>
+      
+      <div class="split-import-repo-item">
+        <div class="split-import-repo-label">Backend</div>
+        <div class="split-import-repo-name">${escapeHtml(backend.name)}</div>
+        <div class="split-import-repo-url">${escapeHtml(backend.url)}</div>
+      </div>
+    </div>
+    
+    <div class="split-import-actions">
+      <button class="cancel-btn">Cancel</button>
+      <button class="confirm-btn">Import Split Repository</button>
+    </div>
+  `;
+  
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  
+  // Event handlers
+  const cancelBtn = modal.querySelector('.cancel-btn');
+  const confirmBtn = modal.querySelector('.confirm-btn');
+  
+  const cleanup = () => {
+    document.body.removeChild(overlay);
+    document.head.removeChild(style);
+  };
+  
+  cancelBtn.onclick = () => {
+    cleanup();
+  };
+  
+  confirmBtn.onclick = () => {
+    cleanup();
+    const [frontend, backend] = selectedRepositories;
+    importSplitRepositories(frontend.url, backend.url, `${frontend.name}-${backend.name}`);
+  };
+  
+  overlay.onclick = (e) => {
+    if (e.target === overlay) {
+      cleanup();
+    }
+  };
+  
+  // Close on Escape key
+  const handleEscape = (e) => {
+    if (e.key === 'Escape') {
+      cleanup();
+      document.removeEventListener('keydown', handleEscape);
+    }
+  };
+  document.addEventListener('keydown', handleEscape);
+  
+  // Focus confirm button for keyboard navigation
+  confirmBtn.focus();
+}
+
+function updateRepositorySelectionVisuals() {
+  const grid = document.getElementById('repositoriesGrid');
+  if (!grid) return;
+  
+  // Update all cards
+  const cards = grid.querySelectorAll('.repository-card');
+  cards.forEach(card => {
+    const repoUrl = card.getAttribute('data-repo-url');
+    const isSelected = selectedRepositories.some(r => r.url === repoUrl);
+    
+    if (isSelected) {
+      card.classList.add('selected');
+    } else {
+      card.classList.remove('selected');
+    }
+  });
+}
+
+function confirmSplitImport() {
+  if (selectedRepositories.length !== 2) {
+    showToast('Please select exactly 2 repositories', 'error');
+    return;
+  }
+  
+  const [frontend, backend] = selectedRepositories;
+  
+  // Show confirmation dialog
+  const confirmed = confirm(
+    `Import as Split Repository?\n\n` +
+    `Frontend: ${frontend.name}\n` +
+    `Backend: ${backend.name}\n\n` +
+    `Click OK to import these repositories as a split project.`
+  );
+  
+  if (confirmed) {
+    importSplitRepositories(frontend.url, backend.url, `${frontend.name}-${backend.name}`);
+  }
+}
+
+async function importSplitRepositories(frontendUrl, backendUrl, projectName) {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    if (!token) {
+    showToast('Please login first', 'error');
+      return;
+    }
+    
+  try {
+    showToast('Importing split repositories...', 'info');
+    
+    const response = await fetch('/api/import-split', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Bearer ${token}`
+      },
+      body: new URLSearchParams({
+        'frontend_url': frontendUrl,
+        'backend_url': backendUrl,
+        'app_name': projectName
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showToast('Split repository imported successfully! Navigate to Projects to see it.', 'success');
+      selectedRepositories = []; // Clear selection
+      
+      // Reload projects if on projects page
+      const projectsPage = document.getElementById('page-projects');
+      if (projectsPage && projectsPage.style.display !== 'none') {
+        loadProjects();
+      }
+      
+      // Refresh repository grid
+      const username = document.getElementById('usernameSearch').value.trim();
+      if (username) {
+        searchRepositories();
+      }
+    } else {
+      showToast(data.detail || 'Failed to import split repository', 'error');
+    }
+  } catch (error) {
+    console.error('Error importing split repositories:', error);
+    showToast('Failed to import split repository: ' + error.message, 'error');
   }
 }
 
@@ -2502,6 +2807,9 @@ window.openProject = openProject;
 window.loadUserProfileIntoProjectSidebar = loadUserProfileIntoProjectSidebar;
 window.openProjectSite = openProjectSite;
 window.deleteProject = deleteProject;
+window.toggleRepositorySelection = toggleRepositorySelection;
+window.confirmSplitImport = confirmSplitImport;
+window.openProjectNameModal = openProjectNameModal;
 
 function updateTeamAndOwnerInfo(userName) {
   // Update team name in sidebar
@@ -2527,7 +2835,7 @@ function loadLogs() {
   if (!logsContent) return;
   
   // Initialize logs display
-  logsContent.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 2rem;">Connecting to WebSocket...</p>';
+  logsContent.innerHTML = '<p class="logs-connecting">Connecting to WebSocket...</p>';
   
   // Connect to WebSocket
   connectLogsWebSocket();

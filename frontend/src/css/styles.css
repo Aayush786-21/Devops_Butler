@@ -2106,3 +2106,35 @@ body {
 
 /* Remove absolute positioning overlap from legacy project-actions */
 .project-actions { position: static; opacity: 1; display: none; }
+
+/* Repository selection styles */
+.repository-card {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid #e2e8f0;
+}
+
+.repository-card.selected {
+  border: 3px solid #10b981;
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
+  transform: translateY(-2px);
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+}
+
+.split-import-section {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border: 2px solid #10b981;
+  border-radius: 12px;
+}
+
+.split-import-notice {
+  text-align: center;
+}
+
+.split-import-notice p {
+  margin: 0 0 1rem 0;
+  font-size: 1.1rem;
+  color: #059669;
+}

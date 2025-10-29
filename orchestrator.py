@@ -766,6 +766,7 @@ async def import_repository(
                 status='imported',  # Set status as imported, not deployed
                 deployed_url=None,  # No URL since not deployed
                 container_name=f"{app_name.lower().replace(' ', '-')}-{current_user.id}",
+                app_name=app_name,
                 created_at=datetime.datetime.utcnow()
             )
             
@@ -794,6 +795,113 @@ async def import_repository(
         global_logger.log_error(f"Import failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to import repository: {str(e)}")
 
+
+# Split repository import (frontend + backend)
+@app.post("/api/import-split")
+async def import_split_repository(
+    frontend_url: str = Form(...),
+    backend_url: str = Form(...),
+    app_name: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user)
+):
+    """Import two repositories as a split project without deploying them."""
+    try:
+        # Basic validation
+        if not validate_git_url(frontend_url) or not validate_git_url(backend_url):
+            raise HTTPException(status_code=422, detail="Invalid repository URL(s).")
+
+        if not app_name:
+            fe_name = extract_repo_name(frontend_url)
+            be_name = extract_repo_name(backend_url)
+            app_name = f"{fe_name}-{be_name}"
+
+        combined_git_url = f"split::{frontend_url}|{backend_url}"
+
+        with Session(engine) as session:
+            deployment = Deployment(
+                user_id=current_user.id,
+                git_url=combined_git_url,
+                status='imported_split',
+                deployed_url=None,
+                container_name=f"{app_name.lower().replace(' ', '-')}-{current_user.id}",
+                app_name=app_name,
+                created_at=datetime.datetime.utcnow()
+            )
+            session.add(deployment)
+            session.commit()
+            session.refresh(deployment)
+
+            global_logger.log_user_action(
+                user_id=str(current_user.id),
+                action="repository_imported_split",
+                details={
+                    "frontend_url": frontend_url,
+                    "backend_url": backend_url,
+                    "app_name": app_name,
+                    "project_id": deployment.id
+                }
+            )
+
+            return {
+                "message": "Split repository imported successfully!",
+                "project_id": deployment.id,
+                "app_name": app_name,
+                "frontend_url": frontend_url,
+                "backend_url": backend_url
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        global_logger.log_error(f"Split import failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to import split repository: {str(e)}")
+
+@app.put("/projects/{project_id}/name")
+async def update_project_name(
+    project_id: int,
+    app_name: str = Form(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Update project name"""
+    try:
+        with Session(engine) as session:
+            deployment = session.exec(
+                select(Deployment).where(
+                    Deployment.id == project_id,
+                    Deployment.user_id == current_user.id
+                )
+            ).first()
+            
+            if not deployment:
+                raise HTTPException(status_code=404, detail="Project not found")
+            
+            old_name = deployment.app_name
+            deployment.app_name = app_name
+            deployment.updated_at = datetime.datetime.utcnow()
+            session.add(deployment)
+            session.commit()
+            
+            global_logger.log_user_action(
+                user_id=str(current_user.id),
+                action="project_name_updated",
+                details={
+                    "project_id": project_id,
+                    "old_name": old_name,
+                    "new_name": app_name
+                }
+            )
+            
+            return {
+                "message": "Project name updated successfully",
+                "project_id": project_id,
+                "app_name": app_name
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        global_logger.log_error(f"Failed to update project name: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update project name: {str(e)}")
 
 @app.get("/deployments")
 def list_deployments(
@@ -834,9 +942,11 @@ def list_deployments(
             "id": deployment.id,
             "container_name": deployment.container_name,
             "git_url": deployment.git_url,
+            "app_name": deployment.app_name,
             "status": real_status,
             "deployed_url": deployment.deployed_url,
             "created_at": deployment.created_at,
+            "updated_at": deployment.updated_at,
             "user_id": deployment.user_id,
             "is_running": is_running,
             "container_uptime": container_info.get("uptime", "Unknown"),

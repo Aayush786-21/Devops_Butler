@@ -37,9 +37,15 @@ class Deployment(SQLModel, table=True):
     # It's 'Optional' because a deployment might fail before a URL is created.
     deployed_url: Optional[str] = None
     
+    # Custom project name (optional - if not set, derived from git_url or container_name)
+    app_name: Optional[str] = None
+    
     # The timestamp when the deployment was created.
     # 'default_factory=datetime.datetime.utcnow' automatically sets the current time.
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
+    
+    # The timestamp when the deployment was last updated.
+    updated_at: Optional[datetime.datetime] = None
     
     # User who created this deployment
     user_id: Optional[int] = Field(default=None, foreign_key="user.id")
