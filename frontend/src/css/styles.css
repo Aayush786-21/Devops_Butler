@@ -2014,3 +2014,30 @@ body {
   color: var(--text-secondary);
   margin-bottom: 1rem;
 }
+
+/* Text button styling for project actions */
+.btn-text {
+  padding: 0.5rem 0.75rem !important;
+  font-size: 0.75rem !important;
+  font-weight: 500 !important;
+  background: var(--primary) !important;
+  color: white !important;
+  border: none !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  min-width: auto !important;
+  height: auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.btn-text:hover {
+  background: var(--primary-hover) !important;
+  transform: translateY(-1px) !important;
+}
+
+.btn-text:active {
+  transform: translateY(0) !important;
+}

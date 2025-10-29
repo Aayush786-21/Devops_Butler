@@ -684,14 +684,8 @@ function renderProjects(projects) {
             </div>
         
         <div class="project-actions">
-          <button class="btn-icon" title="View logs" onclick="event.stopPropagation(); viewProjectLogs(${project.id})">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14,2 14,8 20,8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-              <polyline points="10,9 9,9 8,9"></polyline>
-            </svg>
+          <button class="btn-icon btn-text" title="Open site" onclick="event.stopPropagation(); openProjectSite(${project.id})">
+            Open site
             </button>
           ${project.status === 'running' ? `
           <button class="btn-icon" title="Restart" onclick="event.stopPropagation(); restartProject(${project.id})">
@@ -709,27 +703,28 @@ function renderProjects(projects) {
 }
 
 // Enhanced project actions
-async function viewProjectLogs(projectId) {
+async function openProjectSite(projectId) {
   try {
-    showToast('Loading project logs...', 'info');
+    // Find the project in allProjects
+    const project = allProjects.find(p => p.id === projectId);
     
-    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
-    const response = await fetch(`/projects/${projectId}/logs`, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
-    
-    const data = await response.json();
-    
-    if (response.ok) {
-      showProjectLogsModal(data);
-    } else {
-      showToast(data.detail || 'Failed to load project logs', 'error');
+    if (!project) {
+      showToast('Project not found', 'error');
+      return;
     }
+    
+    if (!project.url || project.url === '#') {
+      showToast('Project URL not available. Make sure the project is deployed.', 'error');
+      return;
+    }
+    
+    // Open the project URL in a new tab
+    window.open(project.url, '_blank');
+    showToast(`Opening ${project.name}...`, 'info');
+    
   } catch (error) {
-    console.error('Error loading project logs:', error);
-    showToast('Failed to load project logs: ' + error.message, 'error');
+    console.error('Error opening project site:', error);
+    showToast('Failed to open project site: ' + error.message, 'error');
   }
 }
 
@@ -1152,7 +1147,12 @@ function updateProjectConfigValues() {
   const statusEl = document.getElementById('projectConfigStatus');
   
   if (nameEl) nameEl.textContent = currentProject.name || 'Unknown';
-  if (ownerEl) ownerEl.textContent = 'Aayush786-21\'s team'; // Static for now
+  if (ownerEl) {
+    // Get user info from localStorage or fetch it
+    const username = localStorage.getItem('username');
+    const displayName = localStorage.getItem('displayName');
+    ownerEl.textContent = displayName || username || 'Unknown User';
+  }
   if (idEl) idEl.textContent = currentProject.id || '-';
   if (createdEl) createdEl.textContent = currentProject.createdAt ? getRelativeTime(new Date(currentProject.createdAt)) : 'Unknown';
   if (updatedEl) updatedEl.textContent = currentProject.updatedAt ? getRelativeTime(new Date(currentProject.updatedAt)) : 'Unknown';
@@ -2071,10 +2071,17 @@ async function loadUserProfile() {
       const userEmail = document.getElementById('userEmail');
       const userAvatar = document.getElementById('userAvatar');
       
+      // Store user info in localStorage for use in other parts of the app
+      localStorage.setItem('displayName', data.display_name || '');
+      localStorage.setItem('userEmail', data.email || '');
+      
       // Show display name if available, otherwise username
       if (userName) {
         userName.textContent = data.display_name || data.username || 'User';
       }
+      
+      // Update team name and project owner information
+      updateTeamAndOwnerInfo(data.display_name || data.username || 'User');
       if (userEmail) {
         userEmail.textContent = data.email || 'Logged in';
       }
@@ -2284,6 +2291,21 @@ window.showProjectSidebar = showProjectSidebar;
 window.hideProjectSidebar = hideProjectSidebar;
 window.openProject = openProject;
 window.loadUserProfileIntoProjectSidebar = loadUserProfileIntoProjectSidebar;
+window.openProjectSite = openProjectSite;
+
+function updateTeamAndOwnerInfo(userName) {
+  // Update team name in sidebar
+  const teamNameEl = document.getElementById('teamName');
+  if (teamNameEl) {
+    teamNameEl.textContent = `${userName}'s team`;
+  }
+  
+  // Update all project owner references
+  const projectOwners = document.querySelectorAll('.project-owner');
+  projectOwners.forEach(owner => {
+    owner.textContent = `${userName}'s team`;
+  });
+}
 
 // Logs Page with WebSocket
 let logsWebSocket = null;
