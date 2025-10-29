@@ -15,6 +15,11 @@ export default defineConfig({
         login: resolve(__dirname, 'src/login.html'),
         applications: resolve(__dirname, 'src/applications.html'),
         'repository-tree': resolve(__dirname, 'src/repository-tree.html')
+      },
+      output: {
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]'
       }
     }
   },

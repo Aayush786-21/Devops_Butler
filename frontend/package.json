@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "rm -f ../../static/index*.html ../../static/login*.html ../../static/applications*.html ../../static/repository-tree*.html || true",
     "build": "vite build",
     "preview": "vite preview"
   },

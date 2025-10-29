@@ -615,6 +615,7 @@ async function loadProjects() {
         createdAt: deployment.created_at,
         updatedAt: deployment.updated_at,
           repository: repoUrl,
+          repository_url: repoUrl,  // Add this for deploy page compatibility
           // Real container metrics from docker ps
           containerUptime: deployment.container_uptime || 'Unknown',
           containerPorts: deployment.container_ports || 'No ports',
@@ -710,8 +711,8 @@ async function openProjectSite(projectId) {
     
     if (!project) {
       showToast('Project not found', 'error');
-      return;
-    }
+        return;
+      }
     
     if (!project.url || project.url === '#') {
       showToast('Project URL not available. Make sure the project is deployed.', 'error');
@@ -963,10 +964,18 @@ function showProjectContent(page) {
   // Show project-specific content based on page
   switch(page) {
     case 'deploy':
-      // Show original deploy page
+      // Show original deploy page and pre-fill GitHub URL
       const deployPage = document.getElementById('page-deploy');
       if (deployPage) {
         deployPage.style.display = 'block';
+        
+        // Pre-fill the GitHub URL if we have a current project
+        if (currentProject && currentProject.repository_url) {
+          const gitUrlInput = document.getElementById('git-url');
+          if (gitUrlInput) {
+            gitUrlInput.value = currentProject.repository_url;
+          }
+        }
       }
       document.getElementById('pageTitle').textContent = 'Deploy';
       break;
@@ -1643,8 +1652,8 @@ async function importRepository(repoUrl, repoName) {
   try {
     showToast('Importing repository...', 'info');
     
-    // Create a deployment for this repository
-    const response = await fetch('/deploy', {
+    // Import repository without deploying
+    const response = await fetch('/api/import', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',

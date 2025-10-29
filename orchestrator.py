@@ -231,6 +231,14 @@ async def applications_dashboard():
     with open(html_file_path, "r") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
+@app.get("/repositories", response_class=HTMLResponse)
+async def repositories_page():
+    """Serve repositories page"""
+    html_file_path = os.path.join(static_dir, "index.html")
+    with open(html_file_path, "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
+
 @app.get("/repository-tree", response_class=HTMLResponse)
 async def repository_tree_page():
     """Serve repository browser page"""
@@ -708,6 +716,61 @@ async def deploy(
         
         # Provide user-friendly error without leaking internals
         raise HTTPException(status_code=500, detail="Deployment failed. Check logs for details.")
+
+
+@app.post("/api/import")
+async def import_repository(
+    git_url: str = Form(...),
+    app_name: str = Form(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Import a repository without deploying it - just create a project record"""
+    try:
+        # Validate git URL
+        if not validate_git_url(git_url):
+            raise HTTPException(status_code=422, detail="Invalid or unsupported repository URL.")
+        
+        # Extract repository name if not provided
+        if not app_name or app_name == "Untitled Project":
+            app_name = extract_repo_name(git_url)
+        
+        # Create a deployment record with 'imported' status
+        with Session(engine) as session:
+            deployment = Deployment(
+                user_id=current_user.id,
+                repository_url=git_url,
+                app_name=app_name,
+                status='imported',  # Set status as imported, not deployed
+                deployed_url=None,  # No URL since not deployed
+                container_name=f"{app_name.lower().replace(' ', '-')}-{current_user.id}",
+                created_at=datetime.now(),
+                updated_at=datetime.now()
+            )
+            
+            session.add(deployment)
+            session.commit()
+            session.refresh(deployment)
+            
+            global_logger.log_user_action(
+                user_id=str(current_user.id),
+                action="repository_imported",
+                details={
+                    "repo_url": git_url,
+                    "app_name": app_name,
+                    "project_id": deployment.id
+                }
+            )
+            
+            return {
+                "message": "Repository imported successfully!",
+                "project_id": deployment.id,
+                "app_name": app_name,
+                "git_url": git_url
+            }
+            
+    except Exception as e:
+        global_logger.log_error(f"Import failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to import repository: {str(e)}")
 
 
 @app.get("/deployments")
