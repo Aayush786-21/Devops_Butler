@@ -905,6 +905,20 @@ body {
   border-color: var(--text-tertiary);
 }
 
+/* Accent button (purple) used for Deploy All) */
+.btn-accent {
+  padding: 0.625rem 1.25rem;
+  background: #7c3aed; /* violet-600 */
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-accent:hover { background: #6d28d9; }
+
 .btn-logout {
   padding: 0.625rem 1.25rem;
   background: transparent;

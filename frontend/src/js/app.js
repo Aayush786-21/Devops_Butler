@@ -752,6 +752,25 @@ async function loadProjects() {
           // Treat any non-running successful/unknown as imported
           normalizedStatus = 'imported';
         }
+
+        // Detect split imports and extract component URLs
+        let isSplit = false;
+        let frontendUrl = null;
+        let backendUrl = null;
+        const gitUrlStr = String(deployment.git_url || '');
+        if (rawStatus === 'imported_split' || gitUrlStr.startsWith('split::')) {
+          isSplit = true;
+          try {
+            // Expected format: split::{frontend}|{backend}
+            const parts = gitUrlStr.replace('split::','').split('|');
+            if (parts.length === 2) {
+              frontendUrl = parts[0];
+              backendUrl = parts[1];
+            }
+          } catch (_) {
+            // Best-effort only; keep nulls if parsing fails
+          }
+        }
         
         return {
         id: deployment.id,
@@ -762,6 +781,9 @@ async function loadProjects() {
         updatedAt: deployment.updated_at,
           repository: repoUrl,
           repository_url: repoUrl,  // Add this for deploy page compatibility
+          isSplit,
+          frontend_url: frontendUrl,
+          backend_url: backendUrl,
           // Real container metrics from docker ps
           containerUptime: deployment.container_uptime || 'Unknown',
           containerPorts: deployment.container_ports || 'No ports',
@@ -1115,12 +1137,95 @@ function showProjectContent(page) {
       if (deployPage) {
         deployPage.style.display = 'block';
         
-        // Pre-fill the GitHub URL if we have a current project
-        if (currentProject && currentProject.repository_url) {
-          const gitUrlInput = document.getElementById('git-url');
-          if (gitUrlInput) {
+        // Determine UI based on whether project was imported as single or split
+        const deployTypeSelect = document.getElementById('deploy-type');
+        const deployTypeGroup = document.getElementById('deploy-type-group');
+        const singleGroup = document.getElementById('single-repo-group');
+        const splitGroup = document.getElementById('split-repo-group');
+        const splitLayout = document.getElementById('split-deploy-layout');
+        const gitUrlInput = document.getElementById('git-url');
+        const feInput = document.getElementById('frontend-url');
+        const beInput = document.getElementById('backend-url');
+        const submitBtn = document.getElementById('deploy-submit-default');
+
+        // Clean any previous dynamic buttons
+        deployPage.querySelectorAll('.dynamic-split-btn').forEach(b => b.remove());
+
+        if (currentProject && currentProject.isSplit) {
+          // Hide dropdown and single-group, show split group with two separate buttons
+          if (deployTypeGroup) deployTypeGroup.style.display = 'none';
+          if (singleGroup) singleGroup.style.display = 'none';
+          if (splitGroup) splitGroup.style.display = 'none';
+          if (splitLayout) splitLayout.style.display = 'block';
+          if (feInput) feInput.value = currentProject.frontend_url || '';
+          if (beInput) beInput.value = currentProject.backend_url || '';
+          if (gitUrlInput) gitUrlInput.removeAttribute('required');
+          // Wire up the structured layout buttons
+          const deployFrontendBtn = document.getElementById('deploy-frontend-btn');
+          const deployBackendBtn = document.getElementById('deploy-backend-btn');
+          const deployBothBtn = document.getElementById('deploy-both-btn');
+          if (deployFrontendBtn) deployFrontendBtn.onclick = async () => {
+            const url = feInput?.value?.trim();
+            if (!url || !url.startsWith('http')) return showToast('Enter a valid frontend URL', 'error');
+            await deploySingle(url);
+          };
+          if (deployBackendBtn) deployBackendBtn.onclick = async () => {
+            const url = beInput?.value?.trim();
+            if (!url || !url.startsWith('http')) return showToast('Enter a valid backend URL', 'error');
+            await deploySingle(url);
+          };
+          if (deployBothBtn) deployBothBtn.onclick = async () => {
+            // Simulate form submit for split deploy
+            const deployStatus = document.getElementById('deploy-status');
+            const deploySuccess = document.getElementById('deploy-success');
+            deploySuccess.style.display = 'none';
+            deployStatus.textContent = '';
+            const frontendUrl = feInput?.value?.trim();
+            const backendUrl = beInput?.value?.trim();
+            if (!frontendUrl || !frontendUrl.startsWith('http') || !backendUrl || !backendUrl.startsWith('http')) {
+              deployStatus.textContent = 'Please enter valid Frontend and Backend repository URLs';
+              deployStatus.style.color = 'var(--error)';
+              return;
+            }
+            try {
+              const formData = new FormData();
+              formData.append('deploy_type', 'split');
+              formData.append('frontend_url', frontendUrl);
+              formData.append('backend_url', backendUrl);
+              if (typeof currentProject === 'object' && currentProject && currentProject.id) {
+                formData.append('project_id', String(currentProject.id));
+              }
+              const response = await fetch('/deploy', { method: 'POST', headers: getAuthHeaders(), body: formData });
+              const result = await response.json();
+              if (response.ok) {
+                deployStatus.textContent = '✅ Deployment successful!';
+                deployStatus.style.color = 'var(--success)';
+                if (result.deployed_url) {
+                  document.getElementById('deploy-success').style.display = 'block';
+                  document.getElementById('openAppBtn').href = result.deployed_url;
+                  document.getElementById('openAppBtn').textContent = `Open ${result.deployed_url}`;
+                }
+                setTimeout(() => { loadDashboard(); router.navigate('/applications'); }, 2000);
+              } else {
+                deployStatus.textContent = `❌ Error: ${result.detail || 'Deployment failed'}`;
+                deployStatus.style.color = 'var(--error)';
+              }
+            } catch (err) {
+              deployStatus.textContent = '❌ Network error. Please try again.';
+              deployStatus.style.color = 'var(--error)';
+            }
+          };
+          if (submitBtn) submitBtn.style.display = 'none';
+        } else {
+          // Default behaviour (new deploy or single import): show dropdown and single input by default
+          if (deployTypeGroup) deployTypeGroup.style.display = '';
+          if (splitGroup) splitGroup.style.display = 'none';
+          if (splitLayout) splitLayout.style.display = 'none';
+          if (singleGroup) singleGroup.style.display = 'block';
+          if (gitUrlInput && currentProject && currentProject.repository_url) {
             gitUrlInput.value = currentProject.repository_url;
           }
+          if (submitBtn) { submitBtn.textContent = '🚀 Deploy'; submitBtn.style.display = ''; }
         }
       }
       document.getElementById('pageTitle').textContent = 'Deploy';
@@ -1718,6 +1823,53 @@ async function handleDeploy(e) {
       deployStatus.style.color = 'var(--error)';
     }
   } catch (error) {
+    deployStatus.textContent = '❌ Network error. Please try again.';
+    deployStatus.style.color = 'var(--error)';
+  }
+}
+
+// Helper to deploy a single repository (used by split projects' individual buttons)
+async function deploySingle(repoUrl) {
+  const deployStatus = document.getElementById('deploy-status');
+  const deploySuccess = document.getElementById('deploy-success');
+  if (!authToken) {
+    showToast('Please login to deploy applications', 'error');
+    window.location.href = '/login';
+    return;
+  }
+  deploySuccess.style.display = 'none';
+  deployStatus.textContent = '';
+  deployStatus.style.color = 'var(--primary)';
+  try {
+    const formData = new FormData();
+    formData.append('deploy_type', 'single');
+    formData.append('git_url', repoUrl);
+    if (typeof currentProject === 'object' && currentProject && currentProject.id) {
+      formData.append('project_id', String(currentProject.id));
+    }
+    const response = await fetch('/deploy', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: formData
+    });
+    const result = await response.json();
+    if (response.ok) {
+      deployStatus.textContent = '✅ Deployment successful!';
+      deployStatus.style.color = 'var(--success)';
+      if (result.deployed_url) {
+        document.getElementById('deploy-success').style.display = 'block';
+        document.getElementById('openAppBtn').href = result.deployed_url;
+        document.getElementById('openAppBtn').textContent = `Open ${result.deployed_url}`;
+      }
+      setTimeout(() => {
+        loadDashboard();
+        router.navigate('/applications');
+      }, 2000);
+    } else {
+      deployStatus.textContent = `❌ Error: ${result.detail || 'Deployment failed'}`;
+      deployStatus.style.color = 'var(--error)';
+    }
+  } catch (err) {
     deployStatus.textContent = '❌ Network error. Please try again.';
     deployStatus.style.color = 'var(--error)';
   }

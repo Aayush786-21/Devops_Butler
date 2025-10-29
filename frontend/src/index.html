@@ -97,7 +97,7 @@
           <div class="card">
             <h2>Deploy New Application</h2>
             <form class="deploy-form" id="deployForm">
-              <div class="form-group">
+              <div class="form-group" id="deploy-type-group">
                 <label for="deploy-type">Deployment Type</label>
                 <select id="deploy-type" name="deploy_type" style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9375rem;">
                   <option value="single">Single Repository (Full-stack)</option>
@@ -108,6 +108,51 @@
                 <label for="git-url">Git Repository URL</label>
                 <input type="text" id="git-url" name="git_url" placeholder="https://github.com/username/repo" required />
               </div>
+
+              <!-- New structured split layout -->
+              <div id="split-deploy-layout" style="display: none;">
+                <div class="card" style="margin-bottom: 1rem;">
+                  <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem;">
+                    <div style="font-size:1.25rem;">🌐</div>
+                    <div>
+                      <div style="font-weight:600;">Frontend</div>
+                      <div style="color:var(--text-secondary); font-size:0.875rem;">Client-side application</div>
+                    </div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0.75rem;">
+                    <label for="frontend-url">Repository URL</label>
+                    <input type="text" id="frontend-url" name="frontend_url" placeholder="https://github.com/username/frontend-repo" />
+                  </div>
+                  <button type="button" id="deploy-frontend-btn" class="btn-dark btn-block">Deploy Frontend</button>
+                </div>
+
+                <div class="card" style="margin-bottom: 1rem;">
+                  <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem;">
+                    <div style="font-size:1.25rem;">💻</div>
+                    <div>
+                      <div style="font-weight:600;">Backend</div>
+                      <div style="color:var(--text-secondary); font-size:0.875rem;">Server-side application</div>
+                    </div>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0.75rem;">
+                    <label for="backend-url">Repository URL</label>
+                    <input type="text" id="backend-url" name="backend_url" placeholder="https://github.com/username/backend-repo" />
+                  </div>
+                  <button type="button" id="deploy-backend-btn" class="btn-dark btn-block">Deploy Backend</button>
+                </div>
+
+                <div class="card" style="background:#faf5ff; border-color:#e9d5ff;">
+                  <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem;">
+                    <div>
+                      <div style="font-weight:600; margin-bottom:0.25rem;">Deploy Full Stack</div>
+                      <div style="color:#6b7280; font-size:0.875rem;">Deploy both frontend and backend together</div>
+                    </div>
+                    <button type="button" id="deploy-both-btn" class="btn-primary">🚀 Deploy All</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Legacy split group kept for non-structured mode toggle -->
               <div id="split-repo-group" style="display: none;">
                 <div class="form-group">
                   <label for="frontend-url">Frontend Repository URL</label>
@@ -116,11 +161,11 @@
                 <div class="form-group">
                   <label for="backend-url">Backend Repository URL</label>
                   <input type="text" id="backend-url" name="backend_url" placeholder="https://github.com/username/backend-repo" />
-      </div>
-    </div>
-              <button type="submit" class="btn-primary btn-large">
-                🚀 Deploy
-              </button>
+                </div>
+                <button type="submit" class="btn-primary btn-large">🚀 Deploy Both</button>
+              </div>
+
+              <button type="submit" class="btn-primary btn-large" id="deploy-submit-default">🚀 Deploy</button>
             </form>
             <div id="deploy-status" class="deploy-status"></div>
             <div id="deploy-success" class="deploy-success" style="display: none;">
