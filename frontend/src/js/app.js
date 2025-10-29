@@ -121,9 +121,207 @@ class Router {
   }
 }
 
-// Initialize router
+// Restore SPA router initialization
 const router = new Router();
-window.router = router; // Make router globally accessible
+window.router = router;
+
+async function deleteProject(projectId) {
+  const token = await ensureValidToken();
+  if (!token) {
+    return;
+  }
+  
+  const project = allProjects.find(p => p.id == projectId);
+  const name = project ? project.name : 'this project';
+  
+  // Show custom confirmation dialog
+  const confirmed = await showDeleteConfirmation(name);
+  if (!confirmed) {
+    return;
+  }
+  
+  try {
+    console.log('Deleting project with token:', token.substring(0, 20) + '...');
+    const res = await fetch(`/projects/${projectId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    
+    console.log('Delete response status:', res.status);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      console.error('Delete error response:', data);
+      
+      // Handle authentication errors
+      if (res.status === 401) {
+        showToast('Session expired. Please login again.', 'error');
+        // Clear stored tokens
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('authToken');
+        // Redirect to login after a short delay
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
+        return;
+      }
+      
+      throw new Error(data.detail || 'Failed to delete project');
+    }
+    
+    // Remove from local lists and re-render
+    allProjects = allProjects.filter(p => p.id != projectId);
+    filteredProjects = filteredProjects.filter(p => p.id != projectId);
+    renderProjects(filteredProjects);
+    showToast('Project deleted', 'success');
+  } catch (e) {
+    console.error('Delete project error:', e);
+    showToast(`Delete failed: ${e.message}`, 'error');
+  }
+}
+
+function showDeleteConfirmation(projectName) {
+  return new Promise((resolve) => {
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    `;
+    
+    // Create modal content
+    const modal = document.createElement('div');
+    modal.className = 'delete-confirmation-modal';
+    modal.style.cssText = `
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      animation: modalSlideIn 0.2s ease-out;
+    `;
+    
+    modal.innerHTML = `
+      <div style="text-align: center; margin-bottom: 20px;">
+        <div style="width: 48px; height: 48px; background: #fef2f2; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+            <path d="M10 11v6"></path>
+            <path d="M14 11v6"></path>
+            <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
+          </svg>
+        </div>
+        <h3 style="margin: 0 0 8px; font-size: 18px; font-weight: 600; color: #111827;">Delete Project</h3>
+        <p style="margin: 0; color: #6b7280; line-height: 1.5;">
+          Are you sure you want to delete <strong>${escapeHtml(projectName)}</strong>?<br>
+          This will stop and remove its container and image.
+        </p>
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: flex-end;">
+        <button class="cancel-btn" style="
+          padding: 8px 16px;
+          border: 1px solid #d1d5db;
+          background: white;
+          color: #374151;
+          border-radius: 6px;
+          cursor: pointer;
+          font-weight: 500;
+          transition: all 0.2s;
+        ">Cancel</button>
+        <button class="delete-btn" style="
+          padding: 8px 16px;
+          border: none;
+          background: #ef4444;
+          color: white;
+          border-radius: 6px;
+          cursor: pointer;
+          font-weight: 500;
+          transition: all 0.2s;
+        ">Delete</button>
+      </div>
+    `;
+    
+    // Add CSS animation
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes modalSlideIn {
+        from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+      .cancel-btn:hover { background: #f9fafb; border-color: #9ca3af; }
+      .delete-btn:hover { background: #dc2626; }
+    `;
+    document.head.appendChild(style);
+    
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    
+    // Event handlers
+    const cancelBtn = modal.querySelector('.cancel-btn');
+    const deleteBtn = modal.querySelector('.delete-btn');
+    
+    const cleanup = () => {
+      document.body.removeChild(overlay);
+      document.head.removeChild(style);
+    };
+    
+    cancelBtn.onclick = () => {
+      cleanup();
+      resolve(false);
+    };
+    
+    deleteBtn.onclick = () => {
+      cleanup();
+      resolve(true);
+    };
+    
+    overlay.onclick = (e) => {
+      if (e.target === overlay) {
+        cleanup();
+        resolve(false);
+      }
+    };
+    
+    // Focus delete button for keyboard navigation
+    deleteBtn.focus();
+  });
+}
+
+// Token management
+function isTokenExpired(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const exp = payload.exp * 1000; // Convert to milliseconds
+    const now = Date.now();
+    return exp < now + (5 * 60 * 1000); // Expire 5 minutes before actual expiry
+  } catch (e) {
+    return true; // If we can't parse, consider it expired
+  }
+}
+
+async function ensureValidToken() {
+  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+  if (!token || isTokenExpired(token)) {
+    showToast('Session expired. Please login again.', 'error');
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('authToken');
+    setTimeout(() => {
+      window.location.href = '/login';
+    }, 2000);
+    return null;
+  }
+  return token;
+}
 
 // Auth state
 let authToken = localStorage.getItem('access_token') || localStorage.getItem('authToken');
@@ -687,6 +885,15 @@ function renderProjects(projects) {
         <div class="project-actions">
           <button class="btn-icon btn-text" title="Open site" onclick="event.stopPropagation(); openProjectSite(${project.id})">
             Open site
+            </button>
+          <button class="btn-icon btn-danger" title="Delete project" onclick="event.stopPropagation(); deleteProject(${project.id})">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+              <path d="M10 11v6"></path>
+              <path d="M14 11v6"></path>
+              <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
+            </svg>
             </button>
           ${project.status === 'running' ? `
           <button class="btn-icon" title="Restart" onclick="event.stopPropagation(); restartProject(${project.id})">
@@ -1394,6 +1601,10 @@ async function handleDeploy(e) {
     } else {
       formData.append('deploy_type', 'single');
       formData.append('git_url', gitUrl);
+    }
+    // If deploying from a selected project, include its id to update in-place
+    if (typeof currentProject === 'object' && currentProject && currentProject.id) {
+      formData.append('project_id', String(currentProject.id));
     }
     
     const response = await fetch('/deploy', {
@@ -2301,6 +2512,7 @@ window.hideProjectSidebar = hideProjectSidebar;
 window.openProject = openProject;
 window.loadUserProfileIntoProjectSidebar = loadUserProfileIntoProjectSidebar;
 window.openProjectSite = openProjectSite;
+window.deleteProject = deleteProject;
 
 function updateTeamAndOwnerInfo(userName) {
   // Update team name in sidebar

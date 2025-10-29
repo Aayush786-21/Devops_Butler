@@ -578,6 +578,7 @@ async def deploy(
     git_url: Optional[str] = Form(None),
     frontend_url: Optional[str] = Form(None),
     backend_url: Optional[str] = Form(None),
+    project_id: Optional[int] = Form(None),
     current_user: User = Depends(get_current_user)
 ):
     """Deploy a Git repository (single or split frontend/backend)"""
@@ -642,7 +643,20 @@ async def deploy(
                 await manager.broadcast("🚀 Deploying split repositories (Frontend + Backend)")
                 result = await run_split_deployment(frontend_url, backend_url, user_id=current_user.id, env_dir=repo_dir)
             else:
-                result = await run_deployment_pipeline(git_url, user_id=current_user.id, env_dir=repo_dir)
+                # If a project_id is provided, reuse/update that deployment record
+                existing_id: Optional[int] = None
+                if project_id is not None:
+                    with Session(engine) as session:
+                        existing = session.exec(
+                            select(Deployment).where(
+                                Deployment.id == project_id,
+                                Deployment.user_id == current_user.id
+                            )
+                        ).first()
+                        if not existing:
+                            raise HTTPException(status_code=404, detail="Project not found")
+                        existing_id = existing.id
+                result = await run_deployment_pipeline(git_url, user_id=current_user.id, env_dir=repo_dir, existing_deployment_id=existing_id)
             
             # Check if deployment was successful
             if result is not None:
@@ -667,6 +681,16 @@ async def deploy(
                             }
                         )
                         
+                        # If this was a redeploy of an imported project, ensure DB is updated with final details
+                        if project_id is not None:
+                            with Session(engine) as session:
+                                dep = session.get(Deployment, project_id)
+                                if dep:
+                                    dep.status = "success"
+                                    dep.deployed_url = deployed_url
+                                    dep.container_name = container_name
+                                    session.add(dep)
+                                    session.commit()
                         return {
                             "message": "Deployment successful!",
                             "deployed_url": deployed_url,
@@ -738,13 +762,11 @@ async def import_repository(
         with Session(engine) as session:
             deployment = Deployment(
                 user_id=current_user.id,
-                repository_url=git_url,
-                app_name=app_name,
+                git_url=git_url,
                 status='imported',  # Set status as imported, not deployed
                 deployed_url=None,  # No URL since not deployed
                 container_name=f"{app_name.lower().replace(' ', '-')}-{current_user.id}",
-                created_at=datetime.now(),
-                updated_at=datetime.now()
+                created_at=datetime.datetime.utcnow()
             )
             
             session.add(deployment)
@@ -979,6 +1001,85 @@ async def restart_project(
         global_logger.log_error(f"Error restarting project: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to restart project")
 
+
+# Delete project: stop/remove container, remove image if possible, delete DB + env vars
+@app.delete("/projects/{project_id}")
+async def delete_project(
+    project_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        with Session(engine) as session:
+            deployment = session.exec(
+                select(Deployment).where(
+                    Deployment.id == project_id,
+                    Deployment.user_id == current_user.id
+                )
+            ).first()
+            if not deployment:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+            container_name = deployment.container_name
+
+            # Attempt to detect image name for the container (if present)
+            image_name = None
+            try:
+                proc = subprocess.run(
+                    ["docker", "ps", "-a", "--filter", f"name={container_name}", "--format", "{{.Image}}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    image_name = proc.stdout.strip().splitlines()[0].strip()
+            except Exception:
+                image_name = None
+
+            # Stop container if running
+            try:
+                subprocess.run(["docker", "stop", container_name], capture_output=True, text=True, timeout=20)
+            except Exception:
+                pass
+
+            # Remove container (force)
+            try:
+                subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, timeout=20)
+            except Exception:
+                pass
+
+            # Remove image if known
+            if image_name:
+                try:
+                    subprocess.run(["docker", "rmi", "-f", image_name], capture_output=True, text=True, timeout=30)
+                except Exception:
+                    pass
+
+            # Delete related environment variables
+            env_vars = session.exec(
+                select(EnvironmentVariable).where(
+                    EnvironmentVariable.user_id == current_user.id,
+                    EnvironmentVariable.project_id == project_id
+                )
+            ).all()
+            for ev in env_vars:
+                session.delete(ev)
+
+            # Delete deployment record
+            session.delete(deployment)
+            session.commit()
+
+            global_logger.log_user_action(
+                user_id=str(current_user.id),
+                action="project_deleted",
+                details={"project_id": project_id, "container_name": container_name, "image": image_name}
+            )
+
+            return {"message": "Project deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        global_logger.log_error(f"Error deleting project: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to delete project")
 
 # WebSocket endpoint for real-time updates
 @app.websocket("/ws/{client_id}")

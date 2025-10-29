@@ -2041,3 +2041,12 @@ body {
 .btn-text:active {
   transform: translateY(0) !important;
 }
+
+/* Danger icon button (red) */
+.btn-danger {
+  background: #ef4444 !important; /* red-500 */
+  color: #ffffff !important;
+}
+.btn-danger:hover {
+  background: #dc2626 !important; /* red-600 */
+}

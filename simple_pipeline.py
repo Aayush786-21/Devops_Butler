@@ -775,7 +775,7 @@ async def handle_ai_dockerfile_deployment(repo_dir: str, repo_name: str, contain
         return None
 
 
-async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, env_dir: Optional[str] = None) -> Optional[Tuple[str, str]]:
+async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, env_dir: Optional[str] = None, existing_deployment_id: Optional[int] = None) -> Optional[Tuple[str, str]]:
     """
     Main deployment pipeline that handles the entire deployment process.
     
@@ -813,17 +813,30 @@ async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, e
             await destroy_deployment(old_deployment.container_name)
             await manager.broadcast("🧹 Cleaned up previous deployment")
     
-    # Create new deployment record
+    # Use existing deployment record if provided, otherwise create new
     with Session(engine) as session:
-        db_deployment = Deployment(
-            container_name=new_container_name,
-            git_url=git_url,
-            status="starting",
-            user_id=user_id
-        )
-        session.add(db_deployment)
-        session.commit()
-        session.refresh(db_deployment)
+        if existing_deployment_id is not None:
+            db_deployment = session.get(Deployment, existing_deployment_id)
+            if not db_deployment:
+                return None
+            # Reuse existing container name to represent same project
+            if db_deployment.container_name:
+                new_container_name = db_deployment.container_name
+            db_deployment.git_url = git_url
+            db_deployment.status = "starting"
+            session.add(db_deployment)
+            session.commit()
+            session.refresh(db_deployment)
+        else:
+            db_deployment = Deployment(
+                container_name=new_container_name,
+                git_url=git_url,
+                status="starting",
+                user_id=user_id
+            )
+            session.add(db_deployment)
+            session.commit()
+            session.refresh(db_deployment)
     
     await manager.broadcast(f"🔵 Starting deployment - Container: {new_container_name}")
     
