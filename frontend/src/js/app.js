@@ -190,22 +190,11 @@ function showDeleteConfirmation(projectName) {
     modal.className = 'delete-confirmation-modal';
     
     modal.innerHTML = `
-      <div class="delete-confirmation-modal-center">
-        <div class="delete-confirmation-icon-wrapper">
-          <svg class="delete-confirmation-icon" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
-            <path d="M10 11v6"></path>
-            <path d="M14 11v6"></path>
-            <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
-          </svg>
-        </div>
-        <h3 class="delete-confirmation-title">Delete Project</h3>
-        <p class="delete-confirmation-text">
-          Are you sure you want to delete <strong>${escapeHtml(projectName)}</strong>?<br>
-          This will stop and remove its container and image.
-        </p>
-      </div>
+      <h3>Delete Project</h3>
+      <p>
+        Are you sure you want to delete <strong>${escapeHtml(projectName)}</strong>?<br>
+        This will stop and remove its container and image.
+      </p>
       <div class="delete-confirmation-actions">
         <button class="cancel-btn">Cancel</button>
         <button class="delete-btn">Delete</button>
@@ -1311,7 +1300,7 @@ function refreshProjectLogs() {
 
 
 
-function showProjectConfiguration() {
+async function showProjectConfiguration() {
   // Create project configuration page if it doesn't exist
   let configPage = document.getElementById('page-project-config');
   if (!configPage) {
@@ -1387,6 +1376,15 @@ function showProjectConfiguration() {
     document.getElementById('pageContent').appendChild(configPage);
   }
   
+  // Check if this is a split project and show components
+  if (currentProject && currentProject.isSplit) {
+    await loadAndDisplayProjectComponents();
+  } else {
+    // Hide components section if not split
+    const componentsSection = document.getElementById('project-components-section');
+    if (componentsSection) componentsSection.style.display = 'none';
+  }
+  
   // Update the configuration values with current project data
   updateProjectConfigValues();
   
@@ -1397,6 +1395,125 @@ function showProjectConfiguration() {
   }
   
   configPage.style.display = 'block';
+}
+
+async function loadAndDisplayProjectComponents() {
+  if (!currentProject || !currentProject.id) return;
+  
+  try {
+    const response = await fetch(`/projects/${currentProject.id}/components`, {
+      headers: getAuthHeaders()
+    });
+    
+    if (!response.ok) {
+      // Project might not have components yet, that's okay
+      return;
+    }
+    
+    const data = await response.json();
+    const components = data.components || [];
+    
+    // Find or create components section
+    let componentsSection = document.getElementById('project-components-section');
+    if (!componentsSection) {
+      const configPage = document.getElementById('page-project-config');
+      if (!configPage) return;
+      
+      componentsSection = document.createElement('div');
+      componentsSection.id = 'project-components-section';
+      componentsSection.className = 'card';
+      componentsSection.style.marginTop = '1.5rem';
+      configPage.appendChild(componentsSection);
+    }
+    
+    componentsSection.style.display = 'block';
+    
+    // Group components by type
+    const frontend = components.find(c => c.component_type === 'frontend');
+    const backend = components.find(c => c.component_type === 'backend');
+    
+    const frontendStatus = frontend ? (frontend.status === 'running' ? 'RUNNING' : frontend.status.toUpperCase()) : 'NOT DEPLOYED';
+    const backendStatus = backend ? (backend.status === 'running' ? 'RUNNING' : backend.status.toUpperCase()) : 'NOT DEPLOYED';
+    const frontendStatusClass = frontend?.status === 'running' ? 'status-success' : frontend?.status === 'failed' ? 'status-error' : 'status-info';
+    const backendStatusClass = backend?.status === 'running' ? 'status-success' : backend?.status === 'failed' ? 'status-error' : 'status-info';
+    
+    componentsSection.innerHTML = `
+      <h2 style="margin-bottom: 1.5rem;">Project Components</h2>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+        <!-- Frontend Card -->
+        <div class="project-card" style="margin: 0;">
+          <div class="project-header">
+            <div class="project-icon">🌐</div>
+            <div class="project-status ${frontendStatusClass}">${frontendStatus}</div>
+          </div>
+          <div class="project-info">
+            <h3 class="project-name">Frontend</h3>
+            <div class="project-meta">
+              ${frontend ? `
+                <svg class="icon-clock" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12,6 12,12 16,14"></polyline>
+                </svg>
+                <span>Updated ${frontend.updated_at ? getRelativeTime(new Date(frontend.updated_at)) : 'Recently'}</span>
+              ` : '<span>Not deployed yet</span>'}
+            </div>
+            ${frontend && frontend.status === 'running' ? `
+              <div class="project-metrics">
+                <div class="metric">
+                  <span class="metric-label">Uptime</span>
+                  <span class="metric-value">${frontend.container_uptime || 'Unknown'}</span>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+          ${frontend && frontend.deployed_url ? `
+            <div class="project-footer">
+              <button class="btn-dark btn-block btn-open-site" onclick="openSite('${frontend.deployed_url}')">Open Frontend</button>
+            </div>
+          ` : ''}
+        </div>
+        
+        <!-- Backend Card -->
+        <div class="project-card" style="margin: 0;">
+          <div class="project-header">
+            <div class="project-icon">💻</div>
+            <div class="project-status ${backendStatusClass}">${backendStatus}</div>
+          </div>
+          <div class="project-info">
+            <h3 class="project-name">Backend</h3>
+            <div class="project-meta">
+              ${backend ? `
+                <svg class="icon-clock" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12,6 12,12 16,14"></polyline>
+                </svg>
+                <span>Updated ${backend.updated_at ? getRelativeTime(new Date(backend.updated_at)) : 'Recently'}</span>
+              ` : '<span>Not deployed yet</span>'}
+            </div>
+            ${backend && backend.status === 'running' ? `
+              <div class="project-metrics">
+                <div class="metric">
+                  <span class="metric-label">Uptime</span>
+                  <span class="metric-value">${backend.container_uptime || 'Unknown'}</span>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+          ${backend && backend.deployed_url ? `
+            <div class="project-footer">
+              <button class="btn-dark btn-block btn-open-site" onclick="openSite('${backend.deployed_url}')">Open Backend</button>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  } catch (error) {
+    console.error('Error loading project components:', error);
+  }
+}
+
+function openSite(url) {
+  if (url) window.open(url, '_blank');
 }
 
 function openProjectNameModal() {
@@ -2172,7 +2289,6 @@ function showSplitImportDialog() {
   
   const cleanup = () => {
     document.body.removeChild(overlay);
-    document.head.removeChild(style);
   };
   
   cancelBtn.onclick = () => {
