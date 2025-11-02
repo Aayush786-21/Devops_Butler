@@ -11,6 +11,7 @@ from pydantic import BaseModel, HttpUrl
 from contextlib import asynccontextmanager
 import asyncio
 import os
+import re
 import tempfile
 import uuid
 import datetime
@@ -1297,7 +1298,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 
 @app.websocket("/ws/logs")
 async def logs_websocket(websocket: WebSocket):
-    """WebSocket endpoint for real-time logs streaming"""
+    """WebSocket endpoint for real-time application logs streaming"""
     await websocket.accept()
     global_logger.log_structured(
         level=LogLevel.INFO,
@@ -1309,18 +1310,41 @@ async def logs_websocket(websocket: WebSocket):
     try:
         # Send initial connection message
         await websocket.send_json({
-            "message": "Connected to logs stream",
+            "message": "Connected to application logs stream",
             "type": "success"
         })
         
-        # Keep connection alive and send periodic heartbeat
+        # Stream application logs from logs/application.log
+        log_file_path = Path("logs/application.log")
+        last_position = 0
+        
         while True:
-            await asyncio.sleep(1)
-            # Send heartbeat to keep connection alive
-            await websocket.send_json({
-                "message": f"Heartbeat - {datetime.datetime.utcnow().isoformat()}",
-                "type": "debug"
-            })
+            try:
+                if log_file_path.exists():
+                    # Read new lines from log file
+                    with open(log_file_path, 'r') as f:
+                        f.seek(last_position)
+                        new_lines = f.readlines()
+                        last_position = f.tell()
+                        
+                        # Send new log lines
+                        for line in new_lines:
+                            if line.strip():
+                                await websocket.send_json({
+                                    "message": line.strip(),
+                                    "type": "info"
+                                })
+                else:
+                    # Log file doesn't exist yet
+                    await asyncio.sleep(1)
+                
+                # Wait before next fetch
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                global_logger.log_error(f"Error in logs loop: {str(e)}")
+                await asyncio.sleep(2)
+                
     except WebSocketDisconnect:
         global_logger.log_structured(
             level=LogLevel.INFO,
@@ -1329,10 +1353,108 @@ async def logs_websocket(websocket: WebSocket):
             component="websocket"
         )
     except Exception as e:
+        global_logger.log_error(f"Logs WebSocket error: {str(e)}")
         global_logger.log_structured(
             level=LogLevel.ERROR,
             category=LogCategory.SYSTEM,
             message=f"Logs WebSocket error: {str(e)}",
+            component="websocket"
+        )
+
+
+@app.websocket("/ws/project/{project_id}/logs")
+async def project_logs_websocket(websocket: WebSocket, project_id: int):
+    """WebSocket endpoint for project-specific container logs streaming"""
+    await websocket.accept()
+    global_logger.log_structured(
+        level=LogLevel.INFO,
+        category=LogCategory.SYSTEM,
+        message=f"Project logs WebSocket client connected for project {project_id}",
+        component="websocket"
+    )
+    
+    try:
+        # Send initial connection message
+        await websocket.send_json({
+            "message": "Connected to container logs stream",
+            "type": "success"
+        })
+        
+        # Get container name from project
+        container_name = None
+        with Session(engine) as session:
+            deployment = session.exec(
+                select(Deployment).where(Deployment.id == project_id)
+            ).first()
+            if deployment and deployment.container_name:
+                container_name = deployment.container_name
+        
+        if not container_name:
+            await websocket.send_json({
+                "message": f"No container found for project {project_id}",
+                "type": "error"
+            })
+            await websocket.close()
+            return
+        
+        # Stream Docker container logs
+        last_log_count = 0
+        while True:
+            try:
+                # Get recent logs from container with ANSI color codes stripped
+                result = subprocess.run(
+                    ["docker", "logs", "--tail", "50", "--no-color", container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                
+                if result.returncode == 0 and result.stdout:
+                    # Send logs line by line
+                    lines = result.stdout.strip().split('\n')
+                    # Only send new lines to avoid spamming
+                    new_lines = lines[-10:] if len(lines) > last_log_count else []
+                    last_log_count = len(lines)
+                    
+                    for line in new_lines:
+                        if line.strip():
+                            # Clean up ANSI escape codes
+                            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                            clean_line = ansi_escape.sub('', line)
+                            await websocket.send_json({
+                                "message": clean_line,
+                                "type": "info"
+                            })
+                
+                # Wait before next fetch
+                await asyncio.sleep(2)
+                
+            except subprocess.TimeoutExpired:
+                await websocket.send_json({
+                    "message": "Container logs timeout",
+                    "type": "warning"
+                })
+            except Exception as e:
+                global_logger.log_error(f"Error in logs loop: {str(e)}")
+                await websocket.send_json({
+                    "message": f"Error fetching logs: {str(e)}",
+                    "type": "error"
+                })
+                await asyncio.sleep(5)
+                
+    except WebSocketDisconnect:
+        global_logger.log_structured(
+            level=LogLevel.INFO,
+            category=LogCategory.SYSTEM,
+            message=f"Project logs WebSocket client disconnected for project {project_id}",
+            component="websocket"
+        )
+    except Exception as e:
+        global_logger.log_error(f"WebSocket error for project {project_id}: {str(e)}")
+        global_logger.log_structured(
+            level=LogLevel.ERROR,
+            category=LogCategory.SYSTEM,
+            message=f"Project logs WebSocket error for project {project_id}: {str(e)}",
             component="websocket"
         )
 

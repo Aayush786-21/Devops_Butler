@@ -1082,6 +1082,18 @@ body {
   transform: translateY(0);
 }
 
+.toast.success {
+  background: #10b981;
+}
+
+.toast.error {
+  background: #ef4444;
+}
+
+.toast.info {
+  background: #3b82f6;
+}
+
 /* Deploy Status */
 .deploy-status {
   margin-top: 1rem;

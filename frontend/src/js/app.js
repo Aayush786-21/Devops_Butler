@@ -1479,13 +1479,6 @@ function showProjectContent(page) {
     case 'configuration':
       showProjectConfiguration();
       break;
-    case 'logs':
-      const logsPage = document.getElementById('page-logs');
-      if (logsPage) {
-        logsPage.style.display = 'block';
-        loadLogs();
-      }
-      break;
     case 'domain-config':
       showProjectDomainConfig();
       break;
@@ -1553,9 +1546,49 @@ function refreshProjectLogs() {
   }
 }
 
-
-
-
+async function showProjectLogs() {
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+  
+  // Find or create logs page
+  let logsPage = document.getElementById('page-project-logs');
+  if (!logsPage) {
+    logsPage = document.createElement('div');
+    logsPage.id = 'page-project-logs';
+    logsPage.className = 'page';
+    document.getElementById('pageContent').appendChild(logsPage);
+  }
+  
+  // Clear previous content
+  logsPage.innerHTML = '';
+  
+  // Show loading state
+  logsPage.innerHTML = `
+    <div class="card">
+      <div class="page-header">
+        <h2>Container Logs</h2>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn-secondary" id="clearProjectLogsBtn">Clear</button>
+          <button class="btn-secondary" id="toggleProjectLogsBtn">Pause</button>
+        </div>
+      </div>
+      <div class="logs-container">
+        <div id="projectLogsContent" class="logs-content">
+          <p style="text-align: center; color: var(--text-secondary); padding: 2rem;">
+            Connecting to logs stream...
+          </p>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  logsPage.style.display = 'block';
+  
+  // Start WebSocket connection for container logs
+  if (currentProject && currentProject.id) {
+    connectProjectLogsWebSocket(currentProject.id);
+  }
+}
 
 async function showProjectConfiguration() {
   // Create project configuration page if it doesn't exist
@@ -3590,27 +3623,41 @@ async function loadSettings() {
   try {
     const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
     const response = await fetch('/api/user/profile', {
-            headers: {
+      headers: {
         'Authorization': `Bearer ${token}`
-            }
-        });
+      }
+    });
         
-        if (response.ok) {
+    if (response.ok) {
       const data = await response.json();
       // Populate form fields
-      document.getElementById('username').value = data.username || '';
-      document.getElementById('email').value = data.email || '';
-      document.getElementById('displayName').value = data.display_name || '';
+      const usernameInput = document.getElementById('username');
+      const emailInput = document.getElementById('email');
+      const displayNameInput = document.getElementById('displayName');
+      
+      if (usernameInput) usernameInput.value = data.username || '';
+      if (emailInput) emailInput.value = data.email || '';
+      if (displayNameInput) displayNameInput.value = data.display_name || '';
       
       // Load avatar
-      if (data.avatar_url) {
-        document.getElementById('avatarPreview').src = data.avatar_url;
-        document.getElementById('avatarPreview').style.display = 'block';
-        document.getElementById('avatarPlaceholder').style.display = 'none';
-        document.getElementById('removeAvatarBtn').style.display = 'block';
+      const avatarPreview = document.getElementById('avatarPreview');
+      const avatarInitial = document.getElementById('avatarInitial');
+      const removeAvatarBtn = document.getElementById('removeAvatarBtn');
+      
+      if (data.avatar_url && avatarPreview) {
+        avatarPreview.src = data.avatar_url;
+        avatarPreview.style.display = 'block';
+        if (avatarInitial) avatarInitial.style.display = 'none';
+        if (removeAvatarBtn) removeAvatarBtn.style.display = 'block';
+      } else if (avatarInitial) {
+        // Show initial based on display name or username
+        const initial = (data.display_name && data.display_name.charAt(0).toUpperCase()) || 
+                       (data.username && data.username.charAt(0).toUpperCase()) || 'S';
+        avatarInitial.textContent = initial;
+        avatarInitial.style.display = 'block';
       }
-        }
-    } catch (error) {
+    }
+  } catch (error) {
     console.error('Error loading profile:', error);
   }
   
@@ -3633,6 +3680,159 @@ function setupSettingsListeners() {
   if (removeAvatarBtn) {
     removeAvatarBtn.addEventListener('click', handleRemoveAvatar);
   }
+  
+  // Password modal handlers
+  const changePasswordBtn = document.getElementById('changePasswordBtn');
+  const closePasswordModal = document.getElementById('closePasswordModal');
+  const cancelPasswordBtn = document.getElementById('cancelPasswordBtn');
+  const updatePasswordBtn = document.getElementById('updatePasswordBtn');
+  const passwordModal = document.getElementById('passwordModal');
+  const modalNewPassword = document.getElementById('modalNewPassword');
+  const strengthFill = document.getElementById('strengthFill');
+  
+  if (changePasswordBtn) {
+    changePasswordBtn.addEventListener('click', () => {
+      if (passwordModal) {
+        passwordModal.style.display = 'flex';
+      }
+    });
+  }
+  
+  if (closePasswordModal) {
+    closePasswordModal.addEventListener('click', () => {
+      if (passwordModal) {
+        passwordModal.style.display = 'none';
+      }
+    });
+  }
+  
+  if (cancelPasswordBtn) {
+    cancelPasswordBtn.addEventListener('click', () => {
+      if (passwordModal) {
+        passwordModal.style.display = 'none';
+      }
+    });
+  }
+  
+  // Close modal when clicking outside
+  if (passwordModal) {
+    passwordModal.addEventListener('click', (e) => {
+      if (e.target === passwordModal) {
+        passwordModal.style.display = 'none';
+      }
+    });
+  }
+  
+  // Password strength indicator
+  if (modalNewPassword) {
+    modalNewPassword.addEventListener('input', (e) => {
+      const password = e.target.value;
+      let strength = 0;
+      
+      if (password.length >= 8) strength += 25;
+      if (/[a-z]/.test(password) && /[A-Z]/.test(password)) strength += 25;
+      if (/\d/.test(password)) strength += 25;
+      if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) strength += 25;
+      
+      if (strengthFill) {
+        strengthFill.style.width = `${strength}%`;
+        if (strength < 50) {
+          strengthFill.style.background = '#ef4444';
+        } else if (strength < 75) {
+          strengthFill.style.background = '#f59e0b';
+        } else {
+          strengthFill.style.background = '#10b981';
+        }
+      }
+    });
+  }
+  
+  // Update password handler
+  if (updatePasswordBtn) {
+    updatePasswordBtn.addEventListener('click', handlePasswordUpdate);
+  }
+  
+  // Enable 2FA handler
+  const enable2FABtn = document.getElementById('enable2FABtn');
+  if (enable2FABtn) {
+    enable2FABtn.addEventListener('click', () => {
+      showToast('2FA feature coming soon!', 'info');
+    });
+  }
+  
+  // Cancel profile changes
+  const cancelProfileBtn = document.getElementById('cancelProfileBtn');
+  if (cancelProfileBtn) {
+    cancelProfileBtn.addEventListener('click', async () => {
+      await loadSettings(); // Reload original values
+    });
+  }
+}
+
+async function handlePasswordUpdate() {
+  const modalCurrentPassword = document.getElementById('modalCurrentPassword');
+  const modalNewPassword = document.getElementById('modalNewPassword');
+  const modalConfirmPassword = document.getElementById('modalConfirmPassword');
+  const passwordModal = document.getElementById('passwordModal');
+  
+  if (!modalCurrentPassword || !modalNewPassword || !modalConfirmPassword) {
+    return;
+  }
+  
+  const currentPassword = modalCurrentPassword.value;
+  const newPassword = modalNewPassword.value;
+  const confirmPassword = modalConfirmPassword.value;
+  
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    showToast('Please fill in all password fields', 'error');
+    return;
+  }
+  
+  if (newPassword !== confirmPassword) {
+    showToast('New passwords do not match', 'error');
+    return;
+  }
+  
+  if (newPassword.length < 8) {
+    showToast('Password must be at least 8 characters', 'error');
+    return;
+  }
+  
+  try {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    const formData = new FormData();
+    formData.append('current_password', currentPassword);
+    formData.append('new_password', newPassword);
+    
+    const response = await fetch('/api/user/profile', {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showToast('Password updated successfully!', 'success');
+      if (passwordModal) {
+        passwordModal.style.display = 'none';
+      }
+      modalCurrentPassword.value = '';
+      modalNewPassword.value = '';
+      modalConfirmPassword.value = '';
+      const strengthFill = document.getElementById('strengthFill');
+      if (strengthFill) {
+        strengthFill.style.width = '0%';
+      }
+    } else {
+      showToast(data.detail || data.message || 'Failed to update password', 'error');
+    }
+  } catch (error) {
+    console.error('Error updating password:', error);
+    showToast('Network error. Please try again.', 'error');
+  }
 }
 
 function handleAvatarPreview(e) {
@@ -3640,61 +3840,67 @@ function handleAvatarPreview(e) {
   if (file) {
     const reader = new FileReader();
     reader.onload = (event) => {
-      document.getElementById('avatarPreview').src = event.target.result;
-      document.getElementById('avatarPreview').style.display = 'block';
-      document.getElementById('avatarPlaceholder').style.display = 'none';
-      document.getElementById('removeAvatarBtn').style.display = 'block';
+      const avatarPreview = document.getElementById('avatarPreview');
+      const avatarInitial = document.getElementById('avatarInitial');
+      if (avatarPreview) {
+        avatarPreview.src = event.target.result;
+        avatarPreview.style.display = 'block';
+      }
+      if (avatarInitial) {
+        avatarInitial.style.display = 'none';
+      }
+      const removeAvatarBtn = document.getElementById('removeAvatarBtn');
+      if (removeAvatarBtn) {
+        removeAvatarBtn.style.display = 'block';
+      }
     };
     reader.readAsDataURL(file);
   }
 }
 
 function handleRemoveAvatar() {
-  document.getElementById('avatarPreview').src = '';
-  document.getElementById('avatarPreview').style.display = 'none';
-  document.getElementById('avatarPlaceholder').style.display = 'block';
-  document.getElementById('removeAvatarBtn').style.display = 'none';
-  document.getElementById('avatarFile').value = '';
+  const avatarPreview = document.getElementById('avatarPreview');
+  const avatarInitial = document.getElementById('avatarInitial');
+  if (avatarPreview) {
+    avatarPreview.src = '';
+    avatarPreview.style.display = 'none';
+  }
+  if (avatarInitial) {
+    avatarInitial.style.display = 'block';
+  }
+  const removeAvatarBtn = document.getElementById('removeAvatarBtn');
+  if (removeAvatarBtn) {
+    removeAvatarBtn.style.display = 'none';
+  }
+  const avatarFile = document.getElementById('avatarFile');
+  if (avatarFile) {
+    avatarFile.value = '';
+  }
 }
 
 async function handleProfileUpdate(e) {
   e.preventDefault();
   
   const messageDiv = document.getElementById('profileMessage');
-  messageDiv.style.display = 'none';
-  
-  const formData = new FormData();
-  formData.append('email', document.getElementById('email').value);
-  formData.append('display_name', document.getElementById('displayName').value);
-  
-  const currentPassword = document.getElementById('currentPassword').value;
-  const newPassword = document.getElementById('newPassword').value;
-  const confirmPassword = document.getElementById('confirmPassword').value;
-  
-  if (newPassword || currentPassword) {
-    if (newPassword !== confirmPassword) {
-      messageDiv.textContent = 'New passwords do not match';
-      messageDiv.className = 'profile-message error';
-      messageDiv.style.display = 'block';
-      return;
-    }
-    if (newPassword.length < 6) {
-      messageDiv.textContent = 'New password must be at least 6 characters';
-      messageDiv.className = 'profile-message error';
-      messageDiv.style.display = 'block';
-      return;
-    }
-    formData.append('current_password', currentPassword);
-    formData.append('new_password', newPassword);
+  if (messageDiv) {
+    messageDiv.style.display = 'none';
   }
   
-  const avatarFile = document.getElementById('avatarFile').files[0];
-  if (avatarFile) {
-    formData.append('avatar', avatarFile);
+  const formData = new FormData();
+  const emailInput = document.getElementById('email');
+  const displayNameInput = document.getElementById('displayName');
+  
+  if (emailInput) formData.append('email', emailInput.value);
+  if (displayNameInput) formData.append('display_name', displayNameInput.value);
+  
+  const avatarFile = document.getElementById('avatarFile');
+  if (avatarFile && avatarFile.files[0]) {
+    formData.append('avatar', avatarFile.files[0]);
   }
   
   // Handle avatar removal
-  if (document.getElementById('avatarPreview').style.display === 'none') {
+  const avatarPreview = document.getElementById('avatarPreview');
+  if (avatarPreview && avatarPreview.style.display === 'none') {
     formData.append('remove_avatar', 'true');
   }
   
@@ -3702,28 +3908,25 @@ async function handleProfileUpdate(e) {
     const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
     const response = await fetch('/api/user/profile', {
       method: 'PUT',
-            headers: {
+      headers: {
         'Authorization': `Bearer ${token}`
       },
       body: formData
-        });
+    });
     
     const data = await response.json();
-        
-        if (response.ok) {
-      messageDiv.textContent = 'Profile updated successfully!';
-      messageDiv.className = 'profile-message success';
-      messageDiv.style.display = 'block';
+    
+    if (response.ok) {
+      if (messageDiv) {
+        messageDiv.textContent = 'Profile updated successfully!';
+        messageDiv.className = 'profile-message success';
+        messageDiv.style.display = 'block';
+      }
       
       // Update localStorage if username changed
       if (data.username) {
         localStorage.setItem('username', data.username);
       }
-      
-      // Clear password fields
-      document.getElementById('currentPassword').value = '';
-      document.getElementById('newPassword').value = '';
-      document.getElementById('confirmPassword').value = '';
       
       // Reload user profile in sidebar
       await loadUserProfile();
@@ -3731,21 +3934,22 @@ async function handleProfileUpdate(e) {
       showToast('Profile updated successfully!', 'success');
     } else {
       const errorText = data.detail || data.message || 'Failed to update profile';
-      messageDiv.textContent = errorText;
+      if (messageDiv) {
+        messageDiv.textContent = errorText;
+        messageDiv.className = 'profile-message error';
+        messageDiv.style.display = 'block';
+      }
+      showToast(errorText, 'error');
+      console.error('Profile update failed:', data);
+    }
+  } catch (error) {
+    console.error('Error updating profile:', error);
+    if (messageDiv) {
+      messageDiv.textContent = 'Network error. Please try again.';
       messageDiv.className = 'profile-message error';
       messageDiv.style.display = 'block';
-      console.error('Profile update failed:', data);
-        }
-    } catch (error) {
-    console.error('Error updating profile:', error);
-    try {
-      const errorData = await response.json();
-      messageDiv.textContent = errorData.detail || 'Network error. Please try again.';
-    } catch {
-      messageDiv.textContent = 'Network error. Please try again.';
     }
-    messageDiv.className = 'profile-message error';
-    messageDiv.style.display = 'block';
+    showToast('Network error. Please try again.', 'error');
   }
 }
 
@@ -3920,10 +4124,140 @@ function setupLogsButtons() {
   }
 }
 
+// Project-specific logs WebSocket
+let projectLogsWebSocket = null;
+let projectLogsPaused = false;
+let projectLogsBuffer = [];
+
+function connectProjectLogsWebSocket(projectId) {
+  // Close existing connection if any
+  if (projectLogsWebSocket) {
+    projectLogsWebSocket.close();
+  }
+  
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}/ws/project/${projectId}/logs`;
+  
+  projectLogsWebSocket = new WebSocket(wsUrl);
+  
+  projectLogsWebSocket.onopen = () => {
+    console.log(`Project logs WebSocket connected for project ${projectId}`);
+    appendProjectLog('Connected to container logs stream', 'success');
+    
+    // Send any buffered logs
+    if (projectLogsBuffer.length > 0) {
+      projectLogsBuffer.forEach(log => appendProjectLog(log.message, log.type));
+      projectLogsBuffer = [];
+    }
+    
+    // Setup button handlers
+    setupProjectLogsButtons();
+  };
+  
+  projectLogsWebSocket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      
+      if (projectLogsPaused) {
+        // Buffer logs when paused
+        projectLogsBuffer.push({ message: data.message, type: data.type || 'info' });
+      } else {
+        appendProjectLog(data.message, data.type || 'info');
+      }
+    } catch (error) {
+      console.error('Error parsing project log message:', error);
+      appendProjectLog(event.data, 'info');
+    }
+  };
+  
+  projectLogsWebSocket.onerror = (error) => {
+    console.error('Project logs WebSocket error:', error);
+    appendProjectLog('WebSocket connection error', 'error');
+  };
+  
+  projectLogsWebSocket.onclose = () => {
+    console.log('Project logs WebSocket disconnected');
+    appendProjectLog('Disconnected from logs stream', 'warning');
+    
+    // Try to reconnect after 3 seconds
+    setTimeout(() => {
+      const logsPage = document.getElementById('page-project-logs');
+      if (logsPage && logsPage.style.display !== 'none' && currentProject) {
+        connectProjectLogsWebSocket(currentProject.id);
+      }
+    }, 3000);
+  };
+}
+
+function appendProjectLog(message, type = 'info') {
+  const logsContent = document.getElementById('projectLogsContent');
+  if (!logsContent) return;
+  
+  const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kathmandu' });
+  const logEntry = document.createElement('div');
+  logEntry.className = `log-entry ${type}`;
+  
+  logEntry.innerHTML = `
+    <span class="log-timestamp">[${timestamp}]</span>
+    <span class="log-message">${escapeHtml(message)}</span>
+  `;
+  
+  logsContent.appendChild(logEntry);
+  
+  // Auto-scroll to bottom
+  logsContent.scrollTop = logsContent.scrollHeight;
+  
+  // Limit log entries to prevent memory issues
+  const maxLogs = 1000;
+  const logs = logsContent.querySelectorAll('.log-entry');
+  if (logs.length > maxLogs) {
+    logs[0].remove();
+  }
+}
+
+function setupProjectLogsButtons() {
+  const clearLogsBtn = document.getElementById('clearProjectLogsBtn');
+  const toggleLogsBtn = document.getElementById('toggleProjectLogsBtn');
+  
+  if (clearLogsBtn) {
+    // Remove existing listeners
+    clearLogsBtn.replaceWith(clearLogsBtn.cloneNode(true));
+    const newClearBtn = document.getElementById('clearProjectLogsBtn');
+    newClearBtn.addEventListener('click', () => {
+      const logsContent = document.getElementById('projectLogsContent');
+      if (logsContent) {
+        logsContent.innerHTML = '';
+        projectLogsBuffer = [];
+        appendProjectLog('Logs cleared', 'info');
+      }
+    });
+  }
+  
+  if (toggleLogsBtn) {
+    // Remove existing listeners
+    toggleLogsBtn.replaceWith(toggleLogsBtn.cloneNode(true));
+    const newToggleBtn = document.getElementById('toggleProjectLogsBtn');
+    newToggleBtn.addEventListener('click', () => {
+      projectLogsPaused = !projectLogsPaused;
+      newToggleBtn.textContent = projectLogsPaused ? 'Resume' : 'Pause';
+      
+      if (!projectLogsPaused && projectLogsBuffer.length > 0) {
+        projectLogsBuffer.forEach(log => appendProjectLog(log.message, log.type));
+        projectLogsBuffer = [];
+      }
+      
+      appendProjectLog(projectLogsPaused ? 'Logs paused' : 'Logs resumed', 'info');
+    });
+  }
+}
+
 // Cleanup WebSocket when navigating away
 window.addEventListener('beforeunload', () => {
   if (logsWebSocket) {
     logsWebSocket.close();
+  }
+  if (projectLogsWebSocket) {
+    projectLogsWebSocket.close();
   }
 });
 

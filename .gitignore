@@ -52,6 +52,10 @@ deploy_request.json
 .env
 .env.local
 
+# User avatars (keep directory, ignore contents except .gitkeep)
+static/avatars/*
+!static/avatars/.gitkeep
+
 # Empty directories
 services/
 pids/
