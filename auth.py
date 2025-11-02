@@ -9,6 +9,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlmodel import Session, select
 from database import engine
 from login import User
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Security configuration
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))

@@ -55,3 +55,4 @@ deploy_request.json
 # Empty directories
 services/
 pids/
+.env

@@ -49,6 +49,12 @@ class Deployment(SQLModel, table=True):
     
     # User who created this deployment
     user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    
+    # For split repositories: link to parent project
+    parent_project_id: Optional[int] = Field(default=None, foreign_key="deployment.id", index=True)
+    
+    # Component type: 'frontend', 'backend', or None (standalone/parent)
+    component_type: Optional[str] = Field(default=None, index=True)
 
 class EnvironmentVariable(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

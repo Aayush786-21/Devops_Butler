@@ -227,7 +227,8 @@ async def login_page():
 @app.get("/applications", response_class=HTMLResponse)
 async def applications_dashboard():
     """Serve applications dashboard page"""
-    html_file_path = os.path.join(static_dir, "applications.html")
+    # Serve SPA index for applications; page routing handled client-side
+    html_file_path = os.path.join(static_dir, "index.html")
     with open(html_file_path, "r") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
@@ -641,7 +642,9 @@ async def deploy(
             if deploy_type == "split":
                 # Handle split frontend/backend deployment
                 await manager.broadcast("🚀 Deploying split repositories (Frontend + Backend)")
-                result = await run_split_deployment(frontend_url, backend_url, user_id=current_user.id, env_dir=repo_dir)
+                # If deploying from an imported split project, use its id as parent
+                parent_id = project_id if project_id is not None else None
+                result = await run_split_deployment(frontend_url, backend_url, user_id=current_user.id, env_dir=repo_dir, parent_project_id=parent_id)
             else:
                 # If a project_id is provided, reuse/update that deployment record
                 existing_id: Optional[int] = None
@@ -914,7 +917,11 @@ def list_deployments(
         action="list_deployments"
     )
     
-    statement = select(Deployment).where(Deployment.user_id == current_user.id)
+    # Filter out child deployments (frontend/backend components) - only show parent projects
+    statement = select(Deployment).where(
+        Deployment.user_id == current_user.id,
+        Deployment.parent_project_id.is_(None)  # Only return parent projects, not child components
+    )
     deployments = session.exec(statement).all()
     
     # Get detailed container information
@@ -952,11 +959,73 @@ def list_deployments(
             "container_uptime": container_info.get("uptime", "Unknown"),
             "container_ports": container_info.get("ports", "No ports"),
             "container_image": container_info.get("image", "Unknown"),
-            "container_status": container_info.get("status", "Unknown")
+            "container_status": container_info.get("status", "Unknown"),
+            "parent_project_id": getattr(deployment, 'parent_project_id', None),
+            "component_type": getattr(deployment, 'component_type', None)
         }
         deployment_list.append(deployment_dict)
     
     return deployment_list
+
+@app.get("/projects/{project_id}/components")
+def get_project_components(
+    project_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get frontend and backend component deployments for a split project"""
+    # Verify project belongs to user
+    parent = session.exec(
+        select(Deployment).where(
+            Deployment.id == project_id,
+            Deployment.user_id == current_user.id
+        )
+    ).first()
+    
+    if not parent:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Get child components
+    components = session.exec(
+        select(Deployment).where(
+            Deployment.parent_project_id == project_id,
+            Deployment.user_id == current_user.id
+        )
+    ).all()
+    
+    # Get container details
+    container_details = get_container_details()
+    running_containers = get_running_containers()
+    
+    component_list = []
+    for component in components:
+        is_running = component.container_name in running_containers
+        container_info = container_details.get(component.container_name, {})
+        
+        if is_running:
+            real_status = "running"
+        elif component.status == "success":
+            real_status = "stopped"
+        else:
+            real_status = component.status
+        
+        component_list.append({
+            "id": component.id,
+            "container_name": component.container_name,
+            "git_url": component.git_url,
+            "component_type": component.component_type,
+            "status": real_status,
+            "deployed_url": component.deployed_url,
+            "is_running": is_running,
+            "container_uptime": container_info.get("uptime", "Unknown"),
+            "container_ports": container_info.get("ports", "No ports"),
+            "container_image": container_info.get("image", "Unknown"),
+            "container_status": container_info.get("status", "Unknown"),
+            "created_at": component.created_at,
+            "updated_at": component.updated_at
+        })
+    
+    return {"components": component_list}
 
 @app.delete("/deployments/clear")
 def clear_user_deployments(

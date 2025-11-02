@@ -41,6 +41,23 @@ class Router {
 
   loadPage(path) {
     const pageId = this.routes[path] || 'dashboard';
+    
+    // Clear current project when navigating to deploy via router (from main menu, not project sidebar)
+    // Project sidebar uses showProjectContent('deploy') directly, not router.navigate()
+    if (pageId === 'deploy') {
+      currentProject = null;
+      // Hide project sidebar if visible
+      const projectSidebar = document.getElementById('projectSidebar');
+      if (projectSidebar) {
+        projectSidebar.style.display = 'none';
+      }
+      // Show main sidebar
+      const mainSidebar = document.getElementById('sidebar');
+      if (mainSidebar) {
+        mainSidebar.style.display = 'block';
+      }
+    }
+    
     this.showPage(pageId);
     this.updateActiveNav(path);
     this.updatePageTitle(pageId);
@@ -376,6 +393,21 @@ function setupEventListeners() {
 
   // New Deploy button
   document.getElementById('newDeployBtn').addEventListener('click', () => {
+    // Clear current project to show new deploy form
+    currentProject = null;
+    
+    // Hide project sidebar if visible
+    const projectSidebar = document.getElementById('projectSidebar');
+    if (projectSidebar) {
+      projectSidebar.style.display = 'none';
+    }
+    
+    // Show main sidebar
+    const mainSidebar = document.getElementById('sidebar');
+    if (mainSidebar) {
+      mainSidebar.style.display = 'block';
+    }
+    
     router.navigate('/deploy');
   });
 
@@ -725,9 +757,10 @@ async function loadProjects() {
       const deployments = await response.json();
       // Convert deployments to projects format
       allProjects = deployments.map(deployment => {
-        // Derive a friendly name from git_url/repository_url or fallback to container_name
-        const repoUrl = deployment.repository_url || deployment.git_url;
-        const derivedName = repoUrl ? String(repoUrl).split('/').pop()?.replace(/\.git$/,'') : null;
+        // Always use git_url from backend - it's the source of truth
+        const gitUrl = deployment.git_url || '';
+        const repoUrl = gitUrl; // Use git_url as repository_url
+        const derivedName = gitUrl ? String(gitUrl).split('/').pop()?.replace(/\.git$/,'') : null;
         const projectName = deployment.app_name || derivedName || deployment.container_name || 'Untitled Project';
         
         // Map backend status to UI status: running | imported | failed
@@ -743,12 +776,24 @@ async function loadProjects() {
         }
 
         // Detect split imports and extract component URLs
+        // ALWAYS check git_url first - it's the source of truth
         let isSplit = false;
+        let projectType = 'single'; // Default to single
         let frontendUrl = null;
         let backendUrl = null;
         const gitUrlStr = String(deployment.git_url || '');
-        if (rawStatus === 'imported_split' || gitUrlStr.startsWith('split::')) {
+        
+        // A project is split if:
+        // 1. git_url starts with 'split::' (MOST RELIABLE - always works before and after deployment)
+        // 2. Status is 'imported_split' (before deployment)
+        // 3. parent_project_id is null and component_type is null (it's a parent project with split format)
+        const hasSplitFormat = gitUrlStr.startsWith('split::');
+        const isParentProject = !deployment.parent_project_id && !deployment.component_type;
+        
+        // Prioritize git_url format check - it's the most reliable
+        if (hasSplitFormat) {
           isSplit = true;
+          projectType = 'split';
           try {
             // Expected format: split::{frontend}|{backend}
             const parts = gitUrlStr.replace('split::','').split('|');
@@ -758,6 +803,23 @@ async function loadProjects() {
             }
           } catch (_) {
             // Best-effort only; keep nulls if parsing fails
+          }
+        } else if (rawStatus === 'imported_split') {
+          // Fallback: check status (only applies before deployment)
+          isSplit = true;
+          projectType = 'split';
+        } else if (isParentProject && gitUrlStr.includes('|')) {
+          // Additional fallback: parent project with pipe separator in git_url
+          isSplit = true;
+          projectType = 'split';
+          try {
+            const parts = gitUrlStr.split('|');
+            if (parts.length === 2) {
+              frontendUrl = parts[0];
+              backendUrl = parts[1];
+            }
+          } catch (_) {
+            // Best-effort only
           }
         }
         
@@ -770,6 +832,8 @@ async function loadProjects() {
         updatedAt: deployment.updated_at,
           repository: repoUrl,
           repository_url: repoUrl,  // Add this for deploy page compatibility
+          git_url: gitUrl,  // Always use the git_url from backend
+          project_type: projectType,  // Explicit project type: 'split' or 'single'
           isSplit,
           frontend_url: frontendUrl,
           backend_url: backendUrl,
@@ -969,11 +1033,22 @@ function showLoadingState() {
 let currentProject = null;
 
 function selectProject(projectId) {
-  const project = allProjects.find(p => p.id == projectId);
-  if (!project) return;
-  
-  currentProject = project;
-  showProjectSidebar(project);
+  // Reload projects to ensure we have latest data, especially project_type
+  loadProjects().then(() => {
+    const project = allProjects.find(p => p.id == projectId);
+    if (!project) {
+      // If still not found, try finding in filteredProjects
+      const filtered = filteredProjects.find(p => p.id == projectId);
+      if (filtered) {
+        currentProject = filtered;
+        showProjectSidebar(filtered);
+      }
+      return;
+    }
+    
+    currentProject = project;
+    showProjectSidebar(project);
+  });
   
   // Update configuration page if it's currently visible
   const configPage = document.getElementById('page-project-config');
@@ -1126,7 +1201,42 @@ function showProjectContent(page) {
       if (deployPage) {
         deployPage.style.display = 'block';
         
-        // Determine UI based on whether project was imported as single or split
+        // Hide "Deploy New Application" card if viewing an existing project
+        const deployNewAppCard = deployPage.querySelector('.card h2')?.closest('.card');
+        
+        if (currentProject) {
+          // Show deploy form card when viewing existing project (for redeploying)
+          if (deployNewAppCard) {
+            deployNewAppCard.style.display = 'block';
+          }
+          
+          // Load and display project components if split repo and both deployed
+          const componentsSection = document.getElementById('project-components-section');
+          const projectType = currentProject?.project_type || 
+                            (currentProject?.isSplit ? 'split' : 'single');
+          
+          if (projectType === 'split') {
+            // For split repos, try to load components (will show if both deployed)
+            loadAndDisplayProjectComponents();
+          } else {
+            // Hide components section for single repos
+            if (componentsSection) {
+              componentsSection.style.display = 'none';
+            }
+          }
+        } else {
+          // Show deploy form when no project is selected (from + New Deploy button)
+          if (deployNewAppCard) {
+            deployNewAppCard.style.display = 'block';
+          }
+          
+          // Hide any components section that might be visible
+          const componentsSection = document.getElementById('project-components-section');
+          if (componentsSection) {
+            componentsSection.style.display = 'none';
+          }
+        }
+        
         const deployTypeSelect = document.getElementById('deploy-type');
         const deployTypeGroup = document.getElementById('deploy-type-group');
         const singleGroup = document.getElementById('single-repo-group');
@@ -1140,81 +1250,170 @@ function showProjectContent(page) {
         // Clean any previous dynamic buttons
         deployPage.querySelectorAll('.dynamic-split-btn').forEach(b => b.remove());
 
-        if (currentProject && currentProject.isSplit) {
-          // Hide dropdown and single-group, show split group with two separate buttons
+        // Determine project type to show correct deploy layout
+        // Use explicit project_type field if available, otherwise fallback to detection
+        let projectType = currentProject?.project_type;
+        
+        // Always double-check git_url format as final source of truth
+        const gitUrl = currentProject?.git_url || currentProject?.repository_url || '';
+        const hasSplitFormat = gitUrl.startsWith('split::');
+        
+        if (!projectType) {
+          // Fallback detection: check isSplit flag or git_url format
+          if (currentProject?.isSplit || hasSplitFormat) {
+            projectType = 'split';
+          } else {
+            projectType = 'single';
+          }
+        }
+        
+        // Override if git_url format contradicts project_type (git_url is always correct)
+        if (hasSplitFormat && projectType !== 'split') {
+          console.warn('Project type mismatch detected. git_url indicates split but project_type is', projectType);
+          projectType = 'split';
+        } else if (!hasSplitFormat && projectType === 'split' && gitUrl) {
+          console.warn('Project type mismatch detected. git_url indicates single but project_type is split');
+          projectType = 'single';
+        }
+        
+        if (currentProject) {
+          // Always hide dropdown when viewing an existing project (no type selection needed)
           if (deployTypeGroup) deployTypeGroup.style.display = 'none';
-          if (singleGroup) singleGroup.style.display = 'none';
-          if (splitGroup) splitGroup.style.display = 'none';
-          if (splitLayout) splitLayout.style.display = 'block';
-          if (feInput) feInput.value = currentProject.frontend_url || '';
-          if (beInput) beInput.value = currentProject.backend_url || '';
-          if (gitUrlInput) gitUrlInput.removeAttribute('required');
-          // Wire up the structured layout buttons
-          const deployFrontendBtn = document.getElementById('deploy-frontend-btn');
-          const deployBackendBtn = document.getElementById('deploy-backend-btn');
-          const deployBothBtn = document.getElementById('deploy-both-btn');
-          if (deployFrontendBtn) deployFrontendBtn.onclick = async () => {
+          
+          if (projectType === 'split') {
+            // Split repo: show split layout with frontend/backend inputs and Deploy All button
+            if (singleGroup) singleGroup.style.display = 'none';
+            if (splitGroup) splitGroup.style.display = 'none';
+            if (splitLayout) splitLayout.style.display = 'block';
+            if (feInput) feInput.value = currentProject.frontend_url || '';
+            if (beInput) beInput.value = currentProject.backend_url || '';
+            if (gitUrlInput) gitUrlInput.removeAttribute('required');
+            if (submitBtn) submitBtn.style.display = 'none'; // Hide default submit, use Deploy All button
+            
+            // Wire up the structured layout buttons
+            const deployFrontendBtn = document.getElementById('deploy-frontend-btn');
+            const deployBackendBtn = document.getElementById('deploy-backend-btn');
+            const deployBothBtn = document.getElementById('deploy-both-btn');
+            
+            if (deployFrontendBtn) deployFrontendBtn.onclick = async () => {
             const url = feInput?.value?.trim();
             if (!url || !url.startsWith('http')) return showToast('Enter a valid frontend URL', 'error');
-            await deploySingle(url);
+            const dialog = showDeploymentProgressDialog(false);
+            document.getElementById('step-frontend').style.display = 'flex';
+            dialog.updateFrontendStatus('deploying', 'Deploying your frontend now...');
+            const result = await deploySingle(url, 'frontend', dialog, true);
+            // Show URL and close button after success
+            if (result && result.success && result.deployed_url) {
+              dialog.showUrls(result.deployed_url, null);
+              document.getElementById('close-deployment-dialog').onclick = () => {
+                dialog.close();
+                loadAndDisplayProjectComponents();
+                loadDashboard();
+              };
+            } else if (result && !result.success) {
+              setTimeout(() => dialog.close(), 3000);
+            }
           };
           if (deployBackendBtn) deployBackendBtn.onclick = async () => {
             const url = beInput?.value?.trim();
             if (!url || !url.startsWith('http')) return showToast('Enter a valid backend URL', 'error');
-            await deploySingle(url);
+            const dialog = showDeploymentProgressDialog(false);
+            document.getElementById('step-backend').style.display = 'flex';
+            dialog.updateBackendStatus('deploying', 'Deploying your backend now...');
+            const result = await deploySingle(url, 'backend', dialog, true);
+            // Show URL and close button after success
+            if (result && result.success && result.deployed_url) {
+              dialog.showUrls(null, result.deployed_url);
+              document.getElementById('close-deployment-dialog').onclick = () => {
+                dialog.close();
+                loadAndDisplayProjectComponents();
+                loadDashboard();
+              };
+            } else if (result && !result.success) {
+              setTimeout(() => dialog.close(), 3000);
+            }
           };
           if (deployBothBtn) deployBothBtn.onclick = async () => {
-            // Simulate form submit for split deploy
-            const deployStatus = document.getElementById('deploy-status');
-            const deploySuccess = document.getElementById('deploy-success');
-            deploySuccess.style.display = 'none';
-            deployStatus.textContent = '';
             const frontendUrl = feInput?.value?.trim();
             const backendUrl = beInput?.value?.trim();
             if (!frontendUrl || !frontendUrl.startsWith('http') || !backendUrl || !backendUrl.startsWith('http')) {
-              deployStatus.textContent = 'Please enter valid Frontend and Backend repository URLs';
-              deployStatus.style.color = 'var(--error)';
+              showToast('Please enter valid Frontend and Backend repository URLs', 'error');
               return;
             }
+            
+            // Show progress dialog (with both steps)
+            const dialog = showDeploymentProgressDialog(true);
+            
             try {
-              const formData = new FormData();
-              formData.append('deploy_type', 'split');
-              formData.append('frontend_url', frontendUrl);
-              formData.append('backend_url', backendUrl);
-              if (typeof currentProject === 'object' && currentProject && currentProject.id) {
-                formData.append('project_id', String(currentProject.id));
+              // Step 1: Deploy Backend
+              dialog.updateBackendStatus('deploying', 'Deploying your backend now...');
+              const backendResult = await deploySingle(backendUrl, 'backend', dialog, true);
+              
+              if (!backendResult || !backendResult.success) {
+                dialog.updateBackendStatus('failed', backendResult?.error || 'Backend deployment failed');
+                setTimeout(() => dialog.close(), 3000);
+                return;
               }
-              const response = await fetch('/deploy', { method: 'POST', headers: getAuthHeaders(), body: formData });
-              const result = await response.json();
-              if (response.ok) {
-                deployStatus.textContent = '✅ Deployment successful!';
-                deployStatus.style.color = 'var(--success)';
-                if (result.deployed_url) {
-                  document.getElementById('deploy-success').style.display = 'block';
-                  document.getElementById('openAppBtn').href = result.deployed_url;
-                  document.getElementById('openAppBtn').textContent = `Open ${result.deployed_url}`;
-                }
-                setTimeout(() => { loadDashboard(); router.navigate('/applications'); }, 2000);
-              } else {
-                deployStatus.textContent = `❌ Error: ${result.detail || 'Deployment failed'}`;
-                deployStatus.style.color = 'var(--error)';
+              
+              dialog.updateBackendStatus('success', 'Backend complete! ✅');
+              
+              // Step 2: Deploy Frontend (after backend succeeds)
+              await new Promise(resolve => setTimeout(resolve, 500)); // Small delay
+              dialog.updateFrontendStatus('deploying', 'Deploying your frontend...');
+              
+              const frontendResult = await deploySingle(frontendUrl, 'frontend', dialog, true);
+              
+              if (!frontendResult || !frontendResult.success) {
+                dialog.updateFrontendStatus('failed', frontendResult?.error || 'Frontend deployment failed');
+                setTimeout(() => dialog.close(), 3000);
+                return;
               }
+              
+              dialog.updateFrontendStatus('success', 'Frontend complete! ✅');
+              
+              // Show URLs
+              dialog.showUrls(frontendResult.deployed_url, backendResult.deployed_url);
+              
+              // Setup close button
+              document.getElementById('close-deployment-dialog').onclick = () => {
+                dialog.close();
+                loadAndDisplayProjectComponents();
+                loadDashboard();
+              };
+              
             } catch (err) {
-              deployStatus.textContent = '❌ Network error. Please try again.';
-              deployStatus.style.color = 'var(--error)';
+              dialog.updateBackendStatus('failed', 'Network error');
+              dialog.updateFrontendStatus('failed', 'Network error');
+              setTimeout(() => dialog.close(), 3000);
             }
           };
           if (submitBtn) submitBtn.style.display = 'none';
+          // Load project components after deployment (for split repos)
+          loadAndDisplayProjectComponents();
+          } else if (projectType === 'single') {
+            // Single repo: show single input with deploy button (no dropdown)
+            if (singleGroup) singleGroup.style.display = 'block';
+            if (splitGroup) splitGroup.style.display = 'none';
+            if (splitLayout) splitLayout.style.display = 'none';
+            if (gitUrlInput && currentProject && currentProject.repository_url) {
+              gitUrlInput.value = currentProject.repository_url;
+            }
+            if (submitBtn) { 
+              submitBtn.textContent = '🚀 Deploy'; 
+              submitBtn.style.display = ''; 
+            }
+          }
         } else {
-          // Default behaviour (new deploy or single import): show dropdown and single input by default
+          // New deploy (no project selected): show dropdown and allow type selection
           if (deployTypeGroup) deployTypeGroup.style.display = '';
           if (splitGroup) splitGroup.style.display = 'none';
           if (splitLayout) splitLayout.style.display = 'none';
           if (singleGroup) singleGroup.style.display = 'block';
-          if (gitUrlInput && currentProject && currentProject.repository_url) {
-            gitUrlInput.value = currentProject.repository_url;
+          if (gitUrlInput) gitUrlInput.value = '';
+          if (submitBtn) { 
+            submitBtn.textContent = '🚀 Deploy'; 
+            submitBtn.style.display = ''; 
           }
-          if (submitBtn) { submitBtn.textContent = '🚀 Deploy'; submitBtn.style.display = ''; }
         }
       }
       document.getElementById('pageTitle').textContent = 'Deploy';
@@ -1280,7 +1479,7 @@ function displayProjectLogs(logData) {
       <span class="status-badge status-${logData.is_running ? 'running' : 'stopped'}">
         ${logData.is_running ? 'RUNNING' : 'STOPPED'}
               </span>
-      <span class="logs-timestamp">Last updated: ${new Date().toLocaleTimeString()}</span>
+      <span class="logs-timestamp">Last updated: ${new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kathmandu' })}</span>
     </div>
     <div class="logs-content">
       <pre>${escapeHtml(logData.logs)}</pre>
@@ -1338,9 +1537,9 @@ async function showProjectConfiguration() {
             <div class="config-subtext">Also known as Site ID</div>
           </div>
           <div class="config-row">
-            <div class="config-label">Created:</div>
+            <div class="config-label">Imported:</div>
             <div class="config-value-container">
-              <span class="config-value-text" id="projectConfigCreated">${currentProject?.createdAt ? getRelativeTime(new Date(currentProject.createdAt)) : 'Unknown'}</span>
+              <span class="config-value-text" id="projectConfigCreated">${currentProject?.createdAt ? formatDateTime(currentProject.createdAt) : 'Unknown'}</span>
             </div>
           </div>
           <div class="config-row">
@@ -1352,7 +1551,7 @@ async function showProjectConfiguration() {
           <div class="config-row">
             <div class="config-label">Container Ports:</div>
             <div class="config-value-container">
-              <span class="config-value-text" id="projectConfigPorts">${currentProject?.containerPorts || 'No ports'}</span>
+              <span class="config-value-text" id="projectConfigPorts">${currentProject?.containerPorts ? formatPorts(currentProject.containerPorts) : 'No ports'}</span>
             </div>
           </div>
           <div class="config-row">
@@ -1376,13 +1575,12 @@ async function showProjectConfiguration() {
     document.getElementById('pageContent').appendChild(configPage);
   }
   
-  // Check if this is a split project and show components
-  if (currentProject && currentProject.isSplit) {
-    await loadAndDisplayProjectComponents();
-  } else {
-    // Hide components section if not split
-    const componentsSection = document.getElementById('project-components-section');
-    if (componentsSection) componentsSection.style.display = 'none';
+  // Configuration page should NOT show components section
+  // Components section is ONLY shown on deploy page
+  // Hide components section if it exists
+  const componentsSection = document.getElementById('project-components-section');
+  if (componentsSection) {
+    componentsSection.style.display = 'none';
   }
   
   // Update the configuration values with current project data
@@ -1413,29 +1611,51 @@ async function loadAndDisplayProjectComponents() {
     const data = await response.json();
     const components = data.components || [];
     
-    // Find or create components section
-    let componentsSection = document.getElementById('project-components-section');
-    if (!componentsSection) {
-      const configPage = document.getElementById('page-project-config');
-      if (!configPage) return;
-      
-      componentsSection = document.createElement('div');
-      componentsSection.id = 'project-components-section';
-      componentsSection.className = 'card';
-      componentsSection.style.marginTop = '1.5rem';
-      configPage.appendChild(componentsSection);
-    }
-    
-    componentsSection.style.display = 'block';
-    
     // Group components by type
     const frontend = components.find(c => c.component_type === 'frontend');
     const backend = components.find(c => c.component_type === 'backend');
     
-    const frontendStatus = frontend ? (frontend.status === 'running' ? 'RUNNING' : frontend.status.toUpperCase()) : 'NOT DEPLOYED';
-    const backendStatus = backend ? (backend.status === 'running' ? 'RUNNING' : backend.status.toUpperCase()) : 'NOT DEPLOYED';
-    const frontendStatusClass = frontend?.status === 'running' ? 'status-success' : frontend?.status === 'failed' ? 'status-error' : 'status-info';
-    const backendStatusClass = backend?.status === 'running' ? 'status-success' : backend?.status === 'failed' ? 'status-error' : 'status-info';
+    // Only show components if BOTH frontend AND backend have been deployed (not just imported)
+    const frontendDeployed = frontend && frontend.status && frontend.status !== 'imported' && frontend.status !== 'imported_split';
+    const backendDeployed = backend && backend.status && backend.status !== 'imported' && backend.status !== 'imported_split';
+    const bothDeployed = frontendDeployed && backendDeployed;
+    
+    // Find or create components section on deploy page ONLY
+    // Always place components on deploy page, not config page
+    let componentsSection = document.getElementById('project-components-section');
+    const deployPage = document.getElementById('page-deploy');
+    
+    // Remove components section from config page if it exists there (should never happen, but cleanup just in case)
+    const configPage = document.getElementById('page-project-config');
+    const oldConfigSection = configPage?.querySelector('#project-components-section');
+    if (oldConfigSection) {
+      oldConfigSection.remove();
+    }
+    
+    // Only show components section if deploy page is visible (not config page)
+    // This ensures components are always shown on deploy page, never config page
+    if (bothDeployed && deployPage && deployPage.style.display !== 'none') {
+      // Create components section if it doesn't exist
+      if (!componentsSection) {
+        componentsSection = document.createElement('div');
+        componentsSection.id = 'project-components-section';
+        componentsSection.className = 'card project-components-card';
+        
+        // Insert before the "Deploy New Application" card
+        const firstCard = deployPage.querySelector('.card');
+        if (firstCard) {
+          deployPage.insertBefore(componentsSection, firstCard);
+        } else {
+          deployPage.appendChild(componentsSection);
+        }
+      }
+      
+      componentsSection.style.display = 'block';
+      
+      const frontendStatus = frontend ? (frontend.status === 'running' ? 'RUNNING' : frontend.status.toUpperCase()) : 'NOT DEPLOYED';
+      const backendStatus = backend ? (backend.status === 'running' ? 'RUNNING' : backend.status.toUpperCase()) : 'NOT DEPLOYED';
+      const frontendStatusClass = frontend?.status === 'running' ? 'status-success' : frontend?.status === 'failed' ? 'status-error' : 'status-info';
+      const backendStatusClass = backend?.status === 'running' ? 'status-success' : backend?.status === 'failed' ? 'status-error' : 'status-info';
     
     componentsSection.innerHTML = `
       <h2 style="margin-bottom: 1.5rem;">Project Components</h2>
@@ -1507,6 +1727,26 @@ async function loadAndDisplayProjectComponents() {
         </div>
       </div>
     `;
+      
+      // Animate the deploy card sliding down
+      requestAnimationFrame(() => {
+        componentsSection.classList.add('components-visible');
+        const deployAppCard = deployPage.querySelector('.card:not(#project-components-section)');
+        if (deployAppCard) {
+          deployAppCard.classList.add('deploy-card-slide-down');
+        }
+      });
+    } else {
+      // Hide components section if not both deployed
+      if (componentsSection) {
+        componentsSection.style.display = 'none';
+        componentsSection.classList.remove('components-visible');
+        const deployAppCard = deployPage?.querySelector('.card:not(#project-components-section)');
+        if (deployAppCard) {
+          deployAppCard.classList.remove('deploy-card-slide-down');
+        }
+      }
+    }
   } catch (error) {
     console.error('Error loading project components:', error);
   }
@@ -1514,6 +1754,141 @@ async function loadAndDisplayProjectComponents() {
 
 function openSite(url) {
   if (url) window.open(url, '_blank');
+}
+
+// Deployment Progress Dialog
+function showDeploymentProgressDialog(showBothSteps = true) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay deployment-progress-overlay';
+  overlay.id = 'deploymentProgressOverlay';
+  
+  const modal = document.createElement('div');
+  modal.className = 'deployment-progress-modal';
+  
+  modal.innerHTML = `
+    <div class="deployment-progress-header">
+      <h3>🚀 Deployment in Progress</h3>
+    </div>
+    <div class="deployment-progress-body">
+      <div class="progress-steps">
+        <div class="progress-step" id="step-backend" ${showBothSteps ? '' : 'style="display: none;"'}>
+          <div class="step-icon">⏳</div>
+          <div class="step-content">
+            <div class="step-title">Backend</div>
+            <div class="step-message" id="backend-message">Waiting...</div>
+          </div>
+          <div class="step-status" id="backend-status"></div>
+        </div>
+        <div class="progress-step" id="step-frontend" ${showBothSteps ? '' : 'style="display: none;"'}>
+          <div class="step-icon">⏳</div>
+          <div class="step-content">
+            <div class="step-title">Frontend</div>
+            <div class="step-message" id="frontend-message">Waiting...</div>
+          </div>
+          <div class="step-status" id="frontend-status"></div>
+        </div>
+      </div>
+      <div class="deployment-urls" id="deployment-urls" style="display: none;">
+        <div class="url-item">
+          <span class="url-label">Visit your site:</span>
+          <a href="#" id="frontend-url-link" target="_blank" class="url-link"></a>
+        </div>
+        <div class="url-item">
+          <span class="url-label">Check your backend:</span>
+          <a href="#" id="backend-url-link" target="_blank" class="url-link"></a>
+        </div>
+      </div>
+    </div>
+    <div class="deployment-progress-footer">
+      <button class="btn-primary" id="close-deployment-dialog" style="display: none;">Done</button>
+    </div>
+  `;
+  
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  
+  return {
+    overlay,
+    updateBackendStatus: (status, message) => {
+      const step = document.getElementById('step-backend');
+      const icon = step.querySelector('.step-icon');
+      const statusEl = document.getElementById('backend-status');
+      const messageEl = document.getElementById('backend-message');
+      
+      messageEl.textContent = message;
+      if (status === 'deploying') {
+        icon.textContent = '⏳';
+        statusEl.textContent = '';
+        step.classList.remove('completed', 'failed');
+        step.classList.add('active');
+      } else if (status === 'success') {
+        icon.textContent = '✅';
+        statusEl.textContent = '✓';
+        step.classList.remove('active', 'failed');
+        step.classList.add('completed');
+      } else if (status === 'failed') {
+        icon.textContent = '❌';
+        statusEl.textContent = '✗';
+        step.classList.remove('active', 'completed');
+        step.classList.add('failed');
+      }
+    },
+    updateFrontendStatus: (status, message) => {
+      const step = document.getElementById('step-frontend');
+      const icon = step.querySelector('.step-icon');
+      const statusEl = document.getElementById('frontend-status');
+      const messageEl = document.getElementById('frontend-message');
+      
+      messageEl.textContent = message;
+      if (status === 'deploying') {
+        icon.textContent = '⏳';
+        statusEl.textContent = '';
+        step.classList.remove('completed', 'failed');
+        step.classList.add('active');
+      } else if (status === 'success') {
+        icon.textContent = '✅';
+        statusEl.textContent = '✓';
+        step.classList.remove('active', 'failed');
+        step.classList.add('completed');
+      } else if (status === 'failed') {
+        icon.textContent = '❌';
+        statusEl.textContent = '✗';
+        step.classList.remove('active', 'completed');
+        step.classList.add('failed');
+      }
+    },
+    showUrls: (frontendUrl, backendUrl) => {
+      const urlsDiv = document.getElementById('deployment-urls');
+      const frontendLink = document.getElementById('frontend-url-link');
+      const backendLink = document.getElementById('backend-url-link');
+      const closeBtn = document.getElementById('close-deployment-dialog');
+      
+      if (frontendUrl) {
+        frontendLink.href = frontendUrl;
+        frontendLink.textContent = frontendUrl;
+        frontendLink.closest('.url-item').style.display = 'flex';
+      } else {
+        frontendLink.closest('.url-item').style.display = 'none';
+      }
+      
+      if (backendUrl) {
+        backendLink.href = backendUrl;
+        backendLink.textContent = backendUrl;
+        backendLink.closest('.url-item').style.display = 'flex';
+      } else {
+        backendLink.closest('.url-item').style.display = 'none';
+      }
+      
+      urlsDiv.style.display = 'block';
+      closeBtn.style.display = 'block';
+    },
+    close: () => {
+      const overlay = document.getElementById('deploymentProgressOverlay');
+      if (overlay) {
+        document.body.removeChild(overlay);
+      }
+    }
+  };
 }
 
 function openProjectNameModal() {
@@ -1672,9 +2047,9 @@ function updateProjectConfigValues() {
     ownerEl.textContent = displayName || username || 'Unknown User';
   }
   if (idEl) idEl.textContent = currentProject.id || '-';
-  if (createdEl) createdEl.textContent = currentProject.createdAt ? getRelativeTime(new Date(currentProject.createdAt)) : 'Unknown';
+  if (createdEl) createdEl.textContent = currentProject.createdAt ? formatDateTime(currentProject.createdAt) : 'Unknown';
   if (updatedEl) updatedEl.textContent = currentProject.updatedAt ? getRelativeTime(new Date(currentProject.updatedAt)) : 'Unknown';
-  if (portsEl) portsEl.textContent = currentProject.containerPorts || 'No ports';
+  if (portsEl) portsEl.textContent = currentProject.containerPorts ? formatPorts(currentProject.containerPorts) : 'No ports';
   if (imageEl) imageEl.textContent = currentProject.containerImage || 'Unknown';
   if (statusEl) statusEl.textContent = currentProject.containerStatus || 'Unknown';
 }
@@ -1819,6 +2194,47 @@ function getRelativeTime(timestamp) {
   });
 }
 
+function formatDateTime(timestamp) {
+  if (!timestamp) return 'Unknown';
+  const date = new Date(timestamp);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kathmandu'
+  });
+}
+
+function formatPorts(portsString) {
+  if (!portsString || portsString === 'No ports') return 'No ports';
+  
+  // Parse Docker port format: "0.0.0.0:8080->8080/tcp" or "0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp"
+  // Extract host:container port mappings
+  const portMappings = new Set();
+  
+  // Match pattern like "8080->8080" or extract host port before the arrow
+  const parts = portsString.split(',');
+  
+  parts.forEach(part => {
+    // Extract port mapping using regex
+    // Match patterns like: "0.0.0.0:8080->8080/tcp" or just "8080->8080"
+    const match = part.match(/(\d+)->(\d+)/);
+    if (match) {
+      const hostPort = match[1];
+      const containerPort = match[2];
+      portMappings.add(`${hostPort}:${containerPort}`);
+    }
+  });
+  
+  if (portMappings.size === 0) return portsString; // Return original if can't parse
+  
+  // Return formatted ports, sorted and joined
+  return Array.from(portMappings).sort().join(', ');
+}
+
 // Legacy loadDashboard for compatibility
 async function loadDashboard() {
   await loadProjects();
@@ -1837,14 +2253,17 @@ async function loadDashboard() {
       // Recent activity
       const recentActivity = document.getElementById('recentActivity');
       if (deployments.length > 0) {
-        recentActivity.innerHTML = deployments.slice(0, 5).map(dep => `
+        recentActivity.innerHTML = deployments.slice(0, 5).map(dep => {
+          const projectName = dep.app_name || dep.container_name || 'Untitled Project';
+          return `
           <div style="padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
-            <div style="font-weight: 500; color: var(--text-primary); margin-bottom: 0.25rem;">${dep.container_name}</div>
+            <div style="font-weight: 500; color: var(--text-primary); margin-bottom: 0.25rem;">${escapeHtml(projectName)}</div>
             <div style="font-size: 0.875rem; color: var(--text-secondary);">
-              ${new Date(dep.created_at).toLocaleString()}
+              ${new Date(dep.created_at).toLocaleString('en-US', { timeZone: 'Asia/Kathmandu' })}
             </div>
           </div>
-        `).join('');
+        `;
+        }).join('');
   } else {
         recentActivity.innerHTML = '<p class="recent-activity-empty">No recent activity</p>';
       }
@@ -1930,11 +2349,18 @@ async function handleDeploy(e) {
       // Clear form
       form.reset();
       
-      // Refresh dashboard
-      setTimeout(() => {
-        loadDashboard();
-        router.navigate('/applications');
-      }, 2000);
+      // For split repos, refresh components and stay on deploy page
+      if (currentProject && currentProject.isSplit) {
+        setTimeout(() => {
+          loadAndDisplayProjectComponents();
+          loadDashboard();
+        }, 1500);
+      } else {
+        setTimeout(() => {
+          loadDashboard();
+          router.navigate('/applications');
+        }, 2000);
+      }
       } else {
       deployStatus.textContent = `❌ Error: ${result.detail || 'Deployment failed'}`;
       deployStatus.style.color = 'var(--error)';
@@ -1946,17 +2372,25 @@ async function handleDeploy(e) {
 }
 
 // Helper to deploy a single repository (used by split projects' individual buttons)
-async function deploySingle(repoUrl) {
+async function deploySingle(repoUrl, componentType = null, progressDialog = null, returnResult = false) {
   const deployStatus = document.getElementById('deploy-status');
   const deploySuccess = document.getElementById('deploy-success');
   if (!authToken) {
     showToast('Please login to deploy applications', 'error');
     window.location.href = '/login';
+    if (returnResult) return { success: false, error: 'Not authenticated' };
     return;
   }
-  deploySuccess.style.display = 'none';
-  deployStatus.textContent = '';
-  deployStatus.style.color = 'var(--primary)';
+  
+  // Only update status elements if not using progress dialog
+  if (!progressDialog) {
+    if (deploySuccess) deploySuccess.style.display = 'none';
+    if (deployStatus) {
+      deployStatus.textContent = '';
+      deployStatus.style.color = 'var(--primary)';
+    }
+  }
+  
   try {
     const formData = new FormData();
     formData.append('deploy_type', 'single');
@@ -1964,31 +2398,106 @@ async function deploySingle(repoUrl) {
     if (typeof currentProject === 'object' && currentProject && currentProject.id) {
       formData.append('project_id', String(currentProject.id));
     }
+    
     const response = await fetch('/deploy', {
       method: 'POST',
       headers: getAuthHeaders(),
       body: formData
     });
+    
     const result = await response.json();
+    
     if (response.ok) {
-      deployStatus.textContent = '✅ Deployment successful!';
-      deployStatus.style.color = 'var(--success)';
-      if (result.deployed_url) {
-        document.getElementById('deploy-success').style.display = 'block';
-        document.getElementById('openAppBtn').href = result.deployed_url;
-        document.getElementById('openAppBtn').textContent = `Open ${result.deployed_url}`;
+      // Update progress dialog if provided
+      if (progressDialog) {
+        const status = 'success';
+        const message = componentType === 'backend' 
+          ? 'Backend complete! ✅' 
+          : 'Frontend complete! ✅';
+        
+        if (componentType === 'backend') {
+          progressDialog.updateBackendStatus(status, message);
+        } else if (componentType === 'frontend') {
+          progressDialog.updateFrontendStatus(status, message);
+        }
+      } else {
+        // Update status elements if no dialog
+        if (deployStatus) {
+          deployStatus.textContent = '✅ Deployment successful!';
+          deployStatus.style.color = 'var(--success)';
+        }
+        if (result.deployed_url && deploySuccess) {
+          deploySuccess.style.display = 'block';
+          const openBtn = document.getElementById('openAppBtn');
+          if (openBtn) {
+            openBtn.href = result.deployed_url;
+            openBtn.textContent = `Open ${result.deployed_url}`;
+          }
+        }
       }
-      setTimeout(() => {
-        loadDashboard();
-        router.navigate('/applications');
-      }, 2000);
+      
+      // If returning result for sequential deployment
+      if (returnResult) {
+        return { success: true, deployed_url: result.deployed_url };
+      }
+      
+      // For split repos, refresh components and stay on deploy page
+      if (currentProject && currentProject.isSplit) {
+        setTimeout(() => {
+          loadAndDisplayProjectComponents();
+          loadDashboard();
+        }, 1500);
+      } else {
+        setTimeout(() => {
+          loadDashboard();
+          router.navigate('/applications');
+        }, 2000);
+      }
+      
+      return { success: true, deployed_url: result.deployed_url };
     } else {
-      deployStatus.textContent = `❌ Error: ${result.detail || 'Deployment failed'}`;
-      deployStatus.style.color = 'var(--error)';
+      const errorMsg = result.detail || 'Deployment failed';
+      
+      if (progressDialog) {
+        const status = 'failed';
+        const message = `Error: ${errorMsg}`;
+        if (componentType === 'backend') {
+          progressDialog.updateBackendStatus(status, message);
+        } else if (componentType === 'frontend') {
+          progressDialog.updateFrontendStatus(status, message);
+        }
+      } else {
+        if (deployStatus) {
+          deployStatus.textContent = `❌ Error: ${errorMsg}`;
+          deployStatus.style.color = 'var(--error)';
+        }
+      }
+      
+      if (returnResult) {
+        return { success: false, error: errorMsg };
+      }
     }
-  } catch (err) {
-    deployStatus.textContent = '❌ Network error. Please try again.';
-    deployStatus.style.color = 'var(--error)';
+  } catch (error) {
+    const errorMsg = 'Network error. Please try again.';
+    
+    if (progressDialog) {
+      const status = 'failed';
+      const message = errorMsg;
+      if (componentType === 'backend') {
+        progressDialog.updateBackendStatus(status, message);
+      } else if (componentType === 'frontend') {
+        progressDialog.updateFrontendStatus(status, message);
+      }
+    } else {
+      if (deployStatus) {
+        deployStatus.textContent = `❌ ${errorMsg}`;
+        deployStatus.style.color = 'var(--error)';
+      }
+    }
+    
+    if (returnResult) {
+      return { success: false, error: errorMsg };
+    }
   }
 }
 
@@ -2021,9 +2530,11 @@ async function loadApplications() {
           </div>
         `;
       } else {
-        grid.innerHTML = deployments.map(dep => `
+        grid.innerHTML = deployments.map(dep => {
+          const projectName = dep.app_name || dep.container_name || 'Untitled Project';
+          return `
           <div class="application-card" onclick="window.open('${dep.deployed_url || '#'}', '_blank')">
-            <h3>${dep.container_name}</h3>
+            <h3>${escapeHtml(projectName)}</h3>
             <p style="color: var(--text-secondary); margin: 0.5rem 0;">
               ${dep.git_url}
             </p>
@@ -2041,7 +2552,8 @@ async function loadApplications() {
               </div>
             ` : ''}
           </div>
-        `).join('');
+        `;
+        }).join('');
       }
     }
   } catch (error) {
@@ -2054,7 +2566,7 @@ async function loadHistory() {
   if (!authToken) {
     document.getElementById('historyTableBody').innerHTML = `
       <tr>
-        <td colspan="5" class="empty-state">Please login to view deployment history</td>
+        <td colspan="4" class="empty-state">Please login to view deployment history</td>
       </tr>
     `;
       return;
@@ -2072,13 +2584,16 @@ async function loadHistory() {
     if (deployments.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="5" class="empty-state">No deployment history</td>
+            <td colspan="4" class="empty-state">No deployment history</td>
           </tr>
         `;
       } else {
-        tbody.innerHTML = deployments.map(dep => `
+        tbody.innerHTML = deployments.map(dep => {
+          // Use app_name (project name) if available, otherwise fall back to container_name
+          const projectName = dep.app_name || dep.container_name || 'Untitled Project';
+          return `
           <tr>
-            <td><strong>${dep.container_name}</strong></td>
+            <td><strong>${escapeHtml(projectName)}</strong></td>
             <td>
               <span class="status-badge ${dep.status}">
                 ${dep.status === 'success' ? '✅' : dep.status === 'failed' ? '❌' : '🔄'} 
@@ -2091,15 +2606,10 @@ async function loadHistory() {
                 'N/A'
               }
             </td>
-            <td>${new Date(dep.created_at).toLocaleString()}</td>
-            <td>
-              ${dep.status === 'success' ? 
-                `<button class="btn-secondary" onclick="destroyDeployment('${dep.container_name}')">Destroy</button>` : 
-                '-'
-              }
-            </td>
+            <td>${new Date(dep.created_at).toLocaleString('en-US', { timeZone: 'Asia/Kathmandu' })}</td>
           </tr>
-        `).join('');
+        `;
+        }).join('');
       }
     }
   } catch (error) {
@@ -3172,7 +3682,7 @@ function appendLog(message, type = 'info') {
   const logsContent = document.getElementById('logsContent');
   if (!logsContent) return;
   
-  const timestamp = new Date().toLocaleTimeString();
+  const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kathmandu' });
   const logEntry = document.createElement('div');
   logEntry.className = `log-entry ${type}`;
   

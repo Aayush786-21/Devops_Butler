@@ -17,20 +17,24 @@ Initial Setup (one-time)
 3) Ensure the Docker network exists:
    docker network create devops-butler-net || true
 
-4) (Optional) Install frontend dependencies for development/build:
+4) Install and build the frontend:
    cd frontend
    npm install
+   npm run build
+   cd ..
 
 Run - Production Mode (serves built frontend on :8000)
-1) Build the frontend (outputs to static/):
-   cd frontend
-   npm run build
+1) Activate the virtual environment:
+   source venv/bin/activate
 
-2) Start the backend (from project root with venv active):
+2) Start the backend:
    python orchestrator.py
 
 3) Open the app:
    http://localhost:8000
+
+Note: If you modify frontend code, rebuild it:
+   cd frontend && npm run build && cd ..
 
 Run - Development Mode (hot reload)
 Terminal A (backend):

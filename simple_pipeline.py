@@ -8,6 +8,7 @@ import re
 import socket
 import yaml
 import json
+import datetime
 from urllib.parse import urlparse
 from typing import Optional, Tuple, Dict, Any
 from pathlib import Path
@@ -775,7 +776,7 @@ async def handle_ai_dockerfile_deployment(repo_dir: str, repo_name: str, contain
         return None
 
 
-async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, env_dir: Optional[str] = None, existing_deployment_id: Optional[int] = None) -> Optional[Tuple[str, str]]:
+async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, env_dir: Optional[str] = None, existing_deployment_id: Optional[int] = None, parent_project_id: Optional[int] = None, component_type: Optional[str] = None) -> Optional[Tuple[str, str]]:
     """
     Main deployment pipeline that handles the entire deployment process.
     
@@ -832,7 +833,9 @@ async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, e
                 container_name=new_container_name,
                 git_url=git_url,
                 status="starting",
-                user_id=user_id
+                user_id=user_id,
+                parent_project_id=parent_project_id,
+                component_type=component_type
             )
             session.add(db_deployment)
             session.commit()
@@ -1091,7 +1094,7 @@ Thumbs.db
             print(f"⚠️ Error creating .dockerignore: {e}")
 
 
-async def run_split_deployment(frontend_url: str, backend_url: str, user_id: Optional[int] = None, env_dir: Optional[str] = None) -> Optional[Tuple[str, str]]:
+async def run_split_deployment(frontend_url: str, backend_url: str, user_id: Optional[int] = None, env_dir: Optional[str] = None, parent_project_id: Optional[int] = None) -> Optional[Tuple[str, str]]:
     """
     Deploy split frontend and backend repositories.
     
@@ -1108,9 +1111,34 @@ async def run_split_deployment(frontend_url: str, backend_url: str, user_id: Opt
     await manager.broadcast(f"📦 Frontend: {frontend_url}")
     await manager.broadcast(f"📦 Backend: {backend_url}")
     
+    # If no parent_project_id provided, create a parent deployment record first
+    if parent_project_id is None:
+        fe_name = extract_repo_name(frontend_url)
+        be_name = extract_repo_name(backend_url)
+        parent_name = f"{fe_name}-{be_name}"
+        combined_git_url = f"split::{frontend_url}|{backend_url}"
+        
+        with Session(engine) as session:
+            parent_deployment = Deployment(
+                user_id=user_id,
+                git_url=combined_git_url,
+                status='starting',
+                deployed_url=None,
+                container_name=f"{parent_name.lower().replace(' ', '-')}-{str(uuid.uuid4())[:8]}",
+                app_name=parent_name,
+                created_at=datetime.datetime.utcnow(),
+                parent_project_id=None,
+                component_type=None
+            )
+            session.add(parent_deployment)
+            session.commit()
+            session.refresh(parent_deployment)
+            parent_project_id = parent_deployment.id
+            await manager.broadcast(f"📋 Created parent project: {parent_name} (ID: {parent_project_id})")
+    
     # Deploy backend first
     await manager.broadcast("🔧 Deploying backend repository...")
-    backend_result = await run_deployment_pipeline(backend_url, user_id=user_id, env_dir=env_dir)
+    backend_result = await run_deployment_pipeline(backend_url, user_id=user_id, env_dir=env_dir, parent_project_id=parent_project_id, component_type='backend')
     
     if not backend_result:
         await manager.broadcast("❌ Backend deployment failed")
@@ -1130,7 +1158,7 @@ async def run_split_deployment(frontend_url: str, backend_url: str, user_id: Opt
             f.write(f"\n# Backend API URL\nREACT_APP_API_URL={backend_api_url}\nNEXT_PUBLIC_API_URL={backend_api_url}\nVITE_API_URL={backend_api_url}\nAPI_URL={backend_api_url}\n")
         await manager.broadcast(f"🔗 Added backend URL to frontend env vars: {backend_api_url}")
     
-    frontend_result = await run_deployment_pipeline(frontend_url, user_id=user_id, env_dir=env_dir)
+    frontend_result = await run_deployment_pipeline(frontend_url, user_id=user_id, env_dir=env_dir, parent_project_id=parent_project_id, component_type='frontend')
     
     if not frontend_result:
         await manager.broadcast("❌ Frontend deployment failed")
@@ -1141,6 +1169,16 @@ async def run_split_deployment(frontend_url: str, backend_url: str, user_id: Opt
     await manager.broadcast(f"🎉 Split deployment complete!")
     await manager.broadcast(f"   Frontend: {frontend_url_deployed}")
     await manager.broadcast(f"   Backend: {backend_url_deployed}")
+    
+    # Update parent project status to success
+    with Session(engine) as session:
+        parent = session.get(Deployment, parent_project_id)
+        if parent:
+            parent.status = "success"
+            parent.deployed_url = frontend_url_deployed  # Use frontend as primary URL
+            parent.updated_at = datetime.datetime.utcnow()
+            session.add(parent)
+            session.commit()
     
     # Return frontend URL as primary (user-facing)
     return (frontend_container, frontend_url_deployed)

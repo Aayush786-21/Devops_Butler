@@ -31,6 +31,12 @@ def create_db_and_tables():
             # Ensure 'user_id' column exists for ownership
             if 'user_id' not in existing_cols:
                 conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN user_id INTEGER NULL"))
+            # Add parent_project_id for split repositories
+            if 'parent_project_id' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN parent_project_id INTEGER NULL"))
+            # Add component_type to identify frontend/backend components
+            if 'component_type' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN component_type TEXT NULL"))
     except Exception:
         # Never block startup on a migration error; logs will capture details elsewhere
         pass

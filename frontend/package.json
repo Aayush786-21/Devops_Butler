@@ -6,16 +6,16 @@
     "dev": "vite",
     "prebuild": "rm -f ../../static/index*.html ../../static/login*.html ../../static/applications*.html ../../static/repository-tree*.html || true",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "vite": "^5.0.0"
   },
   "dependencies": {
     "aos": "^2.3.4"
   }
 }
-
-
-
-
