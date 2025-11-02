@@ -1,5 +1,5 @@
 # DevOps Butler - Codebase Location Guide
-# Last Updated: 2025-10-29
+# Last Updated: 2025-11-02
 
 ## Frontend Files
 
@@ -27,15 +27,25 @@
   - **Detection Logic**: Checks `git_url.startsWith('split::')` as most reliable method (works before and after deployment)
   - **Project Type**: Sets `project_type: 'split'` or `'single'` explicitly in project object
   - **Fallback**: Also checks status `'imported_split'` and parent_project_id for compatibility
+  - **URL Parsing**: Extracts `frontend_url` and `backend_url` from `split::{frontend}|{backend}` format
 - **Deploy Page Logic**: `frontend/src/js/app.js` - `showProjectContent('deploy')` at line ~1190
   - **Key Fix**: Always shows deploy page when clicking project (not configuration or components page)
   - **Project Type Detection**: Double-checks `git_url` format even if `project_type` is set
   - **Split Repos**: Shows split layout (frontend/backend inputs) when `project_type === 'split'`
   - **Single Repos**: Shows single URL input when `project_type === 'single'`
   - **New Deploy**: Shows dropdown only when `currentProject` is null (from "+ New Deploy" button)
+  - **Critical Fix**: Navigation between pages now reloads fresh project data to prevent stale state
 - **Project Selection**: `frontend/src/js/app.js` - `selectProject(projectId)` at line ~1035
   - **Behavior**: Reloads projects before showing sidebar to ensure fresh data
   - **Initial Page**: Always calls `showProjectContent('deploy')` to show deploy page first
+- **Navigation Fix**: `frontend/src/js/app.js` - Project sidebar navigation at line ~1145
+  - **Critical Fix**: Project navigation now async reloads fresh data before showing page content
+  - **Prevents**: Stale project data causing wrong deploy layout after deployment
+  - **Flow**: await loadProjects() → update currentProject → showProjectContent(page)
+- **Split Deploy Button**: `frontend/src/js/app.js` - "Deploy All" button handler at line ~1348
+  - **Critical Fix**: Changed from sequential `deploySingle()` calls to proper `/deploy` with `deploy_type='split'`
+  - **Why**: Ensures proper parent/child relationship and uses `run_split_deployment()`
+  - **Previous Bug**: Deployed as separate projects instead of linked components
 
 ### Frontend UI Components
 - **Delete Button CSS**: `frontend/src/css/styles.css` - `.btn-delete` at line ~2109
@@ -54,18 +64,37 @@
 ### API Endpoints (orchestrator.py)
 - **Health Check**: `GET /health` - Line ~252
 - **Deploy**: `POST /deploy` - Line ~574 (handles single & split deployments)
-- **List Deployments**: `GET /deployments` - Line ~908 (filters out child components)
-- **Get Project Components**: `GET /projects/{project_id}/components` - Line ~969 (frontend/backend)
+  - **Parameters**: `deploy_type` ('single' or 'split'), `git_url` or `frontend_url`+`backend_url`, optional `project_id`, optional `component_type`
+  - **Split Flow**: Line 642-647 - Uses `project_id` as `parent_id` if provided, calls `run_split_deployment()`
+  - **Single Flow**: Line 648-680 - Reuses existing deployment if `project_id` provided without `component_type`, or deploys as child component if `component_type` provided
+  - **Component Deployment**: Line 667-668 - When `component_type` provided, uses `project_id` as `parent_id` for child deployment
+  - **Environment**: Loads user env vars into temp directory as `frontend.env` and `backend.env` (lines 622-636)
+- **List Deployments**: `GET /deployments` - Line ~908 (filters out child components with `parent_project_id IS NULL`)
+- **Get Project Components**: `GET /projects/{project_id}/components` - Line ~969 (returns frontend/backend children)
 - **Delete Project**: `DELETE /projects/{project_id}` - Line ~1116
-- **Import Repository**: `POST /api/import` - Line ~745 (single repo)
-- **Import Split Repository**: `POST /api/import-split` - Line ~800 (frontend + backend)
+- **Import Repository**: `POST /api/import` - Line ~745 (single repo, creates parent with git_url)
+- **Import Split Repository**: `POST /api/import-split` - Line ~800 (frontend + backend, creates parent with `split::` git_url)
+  - **Key Format**: Line 821 - Creates git_url as `split::{frontend_url}|{backend_url}`
+  - **Status**: Sets status to `'imported_split'` (line 827)
+  - **Naming**: Auto-generates app_name as `{fe_name}-{be_name}` (lines 816-819)
 - **Authentication**: `POST /api/auth/login` - Line ~276
 - **Authentication**: `POST /api/auth/register` - Line ~314
 
 ### Deployment Logic (simple_pipeline.py)
 - **Main Pipeline**: `run_deployment_pipeline()` - Line ~778 (handles single deployments)
 - **Split Deployment**: `run_split_deployment()` - Line ~1096 (deploys frontend + backend)
-- **Parent Project Creation**: Inside `run_split_deployment()` - Line ~1114 (creates parent if needed)
+- **Parent Project Creation**: Inside `run_split_deployment()` - Line ~1114 (creates parent if `parent_project_id` is None)
+  - **Naming**: Uses `{fe_name}-{be_name}` from extracted repo names
+  - **Git URL**: Creates `split::{frontend_url}|{backend_url}` format (line 1119)
+  - **Database Fields**: Sets `parent_project_id=None`, `component_type=None` (line 1131)
+  - **Commit**: Immediately commits and refreshes to get parent ID (lines 1133-1136)
+- **Child Deployment**: Calls `run_deployment_pipeline()` with `parent_project_id` and `component_type` (lines 1141, 1148)
+- **Child Lookup/Update**: Inside `run_deployment_pipeline()` - Lines 831-861
+  - **When `parent_project_id` + `component_type` provided**: Searches for existing child by parent + type
+  - **If found**: Reuses existing child deployment, updates git_url and status
+  - **If not found**: Creates new child deployment linked to parent
+  - **Key Fix**: Allows individual Frontend/Backend redeployment without losing parent relationship
+- **Deployment Order**: Backend first (line 1141), then frontend (line 1148)
 - **URL Validation**: `validate_git_url()` - Line ~27
 - **Repo Name Extraction**: `extract_repo_name()` - Line ~63
 
@@ -86,10 +115,19 @@
 - **Backend Component**: Deployment with `parent_project_id = parent_id`, `component_type = 'backend'`
 
 ### How Split Repos Work
-1. **Import**: User imports via `/api/import-split` - creates parent with status 'imported_split'
-2. **Deploy**: User clicks "Deploy Both" - `run_split_deployment()` creates/uses parent, then deploys backend then frontend as children
-3. **Display**: Dashboard shows only parent projects (`parent_project_id IS NULL` filter)
-4. **Details**: Configuration page shows components via `/projects/{id}/components` endpoint
+1. **Import**: User imports via `/api/import-split` - creates parent with status 'imported_split' and git_url='split::{frontend}|{backend}'
+2. **Deploy**: User clicks "Deploy Both" - uses `/deploy` with `deploy_type='split'` which calls `run_split_deployment()`
+3. **Deploy Process**: `run_split_deployment()` creates/uses parent, then deploys backend then frontend as children
+4. **Display**: Dashboard shows only parent projects (`parent_project_id IS NULL` filter)
+5. **Details**: Configuration page shows components via `/projects/{id}/components` endpoint
+
+### Split Repo Detection (Critical)
+- **Most Reliable**: `git_url.startsWith('split::')` - works before AND after deployment
+- **Status Fallback**: `status === 'imported_split'` - only before deployment
+- **Database Integrity**: Parent MUST have `parent_project_id = NULL` and `component_type = NULL`
+- **Children**: Must have `parent_project_id = parent.id` and `component_type = 'frontend'|'backend'`
+- **Import Format**: `/api/import-split` creates git_url = `split::{frontend_url}|{backend_url}` (line 821)
+- **Deploy Format**: `run_split_deployment()` uses same format when creating parent (line 1119)
 
 ### Deploy Page Behavior
 - **New Deploy** (from "+ New Deploy" button): Shows dropdown to choose single/split, `currentProject` is null
@@ -97,6 +135,9 @@
 - **Existing Single Project**: Shows single URL input without dropdown
 - **Key Fix**: Deploy page is ALWAYS shown when clicking on a project (not configuration or components page)
 - **Components Section**: Only shown on deploy page, above "Deploy New Application" card, when both frontend and backend are deployed
+- **Critical Bug Fixed**: Split repo showing single-repo form after deployment
+  - **Root Cause**: Stale `currentProject` object after deployment, missing parent project in database
+  - **Solution**: Navigation reloads fresh data, ensure parent has `git_url` in `split::` format
 
 ## CSS Class Reference
 
@@ -206,4 +247,32 @@ Devops_Butler/
 - Backend logs: Terminal running `orchestrator.py`
 - Frontend console: Browser DevTools
 - Database: `deployments.db` SQLite file
+
+### Split Repository Flow (Complete)
+1. **User imports split repo** → `/api/import-split` creates parent with:
+   - `git_url = "split::{frontend_url}|{backend_url}"` (line 821)
+   - `status = 'imported_split'` (line 827)
+   - `parent_project_id = None`, `component_type = None`
+   - Returns project_id
+2. **User clicks "Deploy All"** → Frontend sends to `/deploy`:
+   - `deploy_type = 'split'`, `frontend_url`, `backend_url`, `project_id`
+   - Backend receives `project_id` as `parent_id` (line 646)
+   - Calls `run_split_deployment(parent_project_id=parent_id)`
+3. **Backend deployment** → `run_split_deployment()` at line 1096:
+   - Checks if `parent_project_id` is None → creates parent if needed (line 1115)
+   - Creates parent with `split::` format git_url (line 1119)
+   - Deploys backend first as child (line 1141) with `component_type='backend'`
+   - Deploys frontend second as child (line 1148) with `component_type='frontend'`
+   - Children link to parent via `parent_project_id`
+4. **Individual Frontend/Backend deployment** → User clicks "Deploy Frontend" or "Deploy Backend":
+   - Frontend sends to `/deploy`: `deploy_type='single'`, `component_type='frontend'|'backend'`, `project_id=parent`
+   - Backend receives `project_id` as parent and `component_type` (line 667-668)
+   - Calls `run_deployment_pipeline()` with `parent_project_id` and `component_type` (lines 673-680)
+   - Pipeline finds existing child by `parent_project_id + component_type` or creates new child (lines 831-861)
+   - Updates existing child if found, otherwise creates new child linked to parent
+5. **Frontend displays** → Dashboard loads:
+   - `/deployments` returns only parents (`parent_project_id IS NULL`)
+   - Split repos detected by `git_url.startsWith('split::')`
+   - Deploy page shows split form with pre-filled URLs
+   - Config page shows components section with frontend/backend cards
 

@@ -828,6 +828,37 @@ async def run_deployment_pipeline(git_url: str, user_id: Optional[int] = None, e
             session.add(db_deployment)
             session.commit()
             session.refresh(db_deployment)
+        elif parent_project_id is not None and component_type is not None:
+            # Check if there's already a child component for this parent
+            existing_child = session.exec(
+                select(Deployment).where(
+                    Deployment.parent_project_id == parent_project_id,
+                    Deployment.component_type == component_type
+                )
+            ).first()
+            if existing_child:
+                # Reuse existing child deployment
+                if existing_child.container_name:
+                    new_container_name = existing_child.container_name
+                existing_child.git_url = git_url
+                existing_child.status = "starting"
+                session.add(existing_child)
+                session.commit()
+                session.refresh(existing_child)
+                db_deployment = existing_child
+            else:
+                # Create new child deployment
+                db_deployment = Deployment(
+                    container_name=new_container_name,
+                    git_url=git_url,
+                    status="starting",
+                    user_id=user_id,
+                    parent_project_id=parent_project_id,
+                    component_type=component_type
+                )
+                session.add(db_deployment)
+                session.commit()
+                session.refresh(db_deployment)
         else:
             db_deployment = Deployment(
                 container_name=new_container_name,

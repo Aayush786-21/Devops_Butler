@@ -580,6 +580,7 @@ async def deploy(
     frontend_url: Optional[str] = Form(None),
     backend_url: Optional[str] = Form(None),
     project_id: Optional[int] = Form(None),
+    component_type: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user)
 ):
     """Deploy a Git repository (single or split frontend/backend)"""
@@ -646,8 +647,10 @@ async def deploy(
                 parent_id = project_id if project_id is not None else None
                 result = await run_split_deployment(frontend_url, backend_url, user_id=current_user.id, env_dir=repo_dir, parent_project_id=parent_id)
             else:
-                # If a project_id is provided, reuse/update that deployment record
+                # Handle single deployment - either standalone or as a component of split repo
                 existing_id: Optional[int] = None
+                parent_id: Optional[int] = None
+                
                 if project_id is not None:
                     with Session(engine) as session:
                         existing = session.exec(
@@ -658,8 +661,23 @@ async def deploy(
                         ).first()
                         if not existing:
                             raise HTTPException(status_code=404, detail="Project not found")
-                        existing_id = existing.id
-                result = await run_deployment_pipeline(git_url, user_id=current_user.id, env_dir=repo_dir, existing_deployment_id=existing_id)
+                        
+                        # If component_type is provided, this is deploying a component (frontend/backend)
+                        # of a split repo. Use project_id as parent_id instead of existing_id
+                        if component_type:
+                            parent_id = existing.id
+                        else:
+                            # Regular redeployment - reuse existing deployment record
+                            existing_id = existing.id
+                
+                result = await run_deployment_pipeline(
+                    git_url, 
+                    user_id=current_user.id, 
+                    env_dir=repo_dir, 
+                    existing_deployment_id=existing_id,
+                    parent_project_id=parent_id,
+                    component_type=component_type
+                )
             
             # Check if deployment was successful
             if result is not None:

@@ -1082,6 +1082,16 @@ function showProjectSidebar(project) {
     projectId.textContent = project.id;
   }
   
+  // Show Status navigation item only for split repos
+  const statusNavItem = projectSidebar.querySelector('a[data-project-page="status"]');
+  if (statusNavItem) {
+    if (project.project_type === 'split') {
+      statusNavItem.style.display = 'flex';
+    } else {
+      statusNavItem.style.display = 'none';
+    }
+  }
+  
   projectSidebar.style.display = 'block';
   
   // Update page title
@@ -1117,6 +1127,10 @@ function createProjectSidebar() {
         <span class="nav-icon">🚀</span>
         <span class="nav-label">Deploy</span>
       </a>
+      <a href="#" class="nav-item project-nav-item" data-project-page="status" style="display: none;">
+        <span class="nav-icon">⚡️</span>
+        <span class="nav-label">Status</span>
+      </a>
       <a href="#" class="nav-item project-nav-item" data-project-page="configuration">
         <span class="nav-icon">⚙️</span>
         <span class="nav-label">Configuration</span>
@@ -1144,9 +1158,21 @@ function createProjectSidebar() {
   
   // Add click handlers for project navigation
   sidebar.querySelectorAll('.project-nav-item').forEach(item => {
-    item.addEventListener('click', (e) => {
+    item.addEventListener('click', async (e) => {
       e.preventDefault();
       const page = item.getAttribute('data-project-page');
+      
+      // Reload projects to ensure we have latest data (especially after deployments)
+      await loadProjects();
+      
+      // Update currentProject with fresh data
+      if (currentProject) {
+        const freshProject = allProjects.find(p => p.id === currentProject.id);
+        if (freshProject) {
+          currentProject = freshProject;
+        }
+      }
+      
       showProjectContent(page);
       
       // Update active nav
@@ -1215,14 +1241,9 @@ function showProjectContent(page) {
           const projectType = currentProject?.project_type || 
                             (currentProject?.isSplit ? 'split' : 'single');
           
-          if (projectType === 'split') {
-            // For split repos, try to load components (will show if both deployed)
-            loadAndDisplayProjectComponents();
-          } else {
-            // Hide components section for single repos
-            if (componentsSection) {
-              componentsSection.style.display = 'none';
-            }
+          // Hide components section on deploy page (components now on Status page)
+          if (componentsSection) {
+            componentsSection.style.display = 'none';
           }
         } else {
           // Show deploy form when no project is selected (from + New Deploy button)
@@ -1341,55 +1362,65 @@ function showProjectContent(page) {
               return;
             }
             
-            // Show progress dialog (with both steps)
+            // Show progress dialog with both steps
             const dialog = showDeploymentProgressDialog(true);
+            document.getElementById('step-backend').style.display = 'flex';
+            document.getElementById('step-frontend').style.display = 'flex';
             
+            // Update backend status first
+            dialog.updateBackendStatus('deploying', 'Deploying your backend now...');
+            
+            // Use proper split deployment endpoint for correct parent/child linking
             try {
-              // Step 1: Deploy Backend
-              dialog.updateBackendStatus('deploying', 'Deploying your backend now...');
-              const backendResult = await deploySingle(backendUrl, 'backend', dialog, true);
-              
-              if (!backendResult || !backendResult.success) {
-                dialog.updateBackendStatus('failed', backendResult?.error || 'Backend deployment failed');
-                setTimeout(() => dialog.close(), 3000);
-                return;
+              const formData = new FormData();
+              formData.append('deploy_type', 'split');
+              formData.append('frontend_url', frontendUrl);
+              formData.append('backend_url', backendUrl);
+              // Include project_id if available (for imported split projects)
+              if (currentProject && currentProject.id) {
+                formData.append('project_id', String(currentProject.id));
               }
               
-              dialog.updateBackendStatus('success', 'Backend complete! ✅');
+              const response = await fetch('/deploy', {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: formData
+              });
               
-              // Step 2: Deploy Frontend (after backend succeeds)
-              await new Promise(resolve => setTimeout(resolve, 500)); // Small delay
-              dialog.updateFrontendStatus('deploying', 'Deploying your frontend...');
+              const result = await response.json();
               
-              const frontendResult = await deploySingle(frontendUrl, 'frontend', dialog, true);
-              
-              if (!frontendResult || !frontendResult.success) {
-                dialog.updateFrontendStatus('failed', frontendResult?.error || 'Frontend deployment failed');
+              if (response.ok && result.deployed_url) {
+                // Parse the split response to show URLs for both frontend and backend
+                // Note: The backend returns frontend_url as primary, we need to extract both
+                dialog.updateBackendStatus('success', 'Backend deployed! ✅');
+                dialog.updateFrontendStatus('success', 'Frontend deployed! ✅');
+                
+                // For split deployment, we only get one URL back but both are deployed
+                // The backend returns frontend URL as primary
+                dialog.showUrls(result.deployed_url, null); // Only frontend URL for now
+                
+                document.getElementById('close-deployment-dialog').onclick = () => {
+                  dialog.close();
+                  loadProjects();
+                  loadAndDisplayProjectComponents();
+                  loadDashboard();
+                };
+                
+                showToast('Split deployment successful!', 'success');
+              } else {
+                dialog.updateBackendStatus('failed', result.detail || 'Deployment failed');
+                dialog.updateFrontendStatus('failed', 'Could not deploy');
+                showToast(result.detail || 'Deployment failed', 'error');
                 setTimeout(() => dialog.close(), 3000);
-                return;
               }
-              
-              dialog.updateFrontendStatus('success', 'Frontend complete! ✅');
-              
-              // Show URLs
-              dialog.showUrls(frontendResult.deployed_url, backendResult.deployed_url);
-              
-              // Setup close button
-              document.getElementById('close-deployment-dialog').onclick = () => {
-                dialog.close();
-                loadAndDisplayProjectComponents();
-                loadDashboard();
-              };
-              
-            } catch (err) {
+            } catch (error) {
               dialog.updateBackendStatus('failed', 'Network error');
               dialog.updateFrontendStatus('failed', 'Network error');
+              showToast('Network error during deployment', 'error');
               setTimeout(() => dialog.close(), 3000);
             }
           };
           if (submitBtn) submitBtn.style.display = 'none';
-          // Load project components after deployment (for split repos)
-          loadAndDisplayProjectComponents();
           } else if (projectType === 'single') {
             // Single repo: show single input with deploy button (no dropdown)
             if (singleGroup) singleGroup.style.display = 'block';
@@ -1417,6 +1448,9 @@ function showProjectContent(page) {
         }
       }
       document.getElementById('pageTitle').textContent = 'Deploy';
+      break;
+    case 'status':
+      showProjectStatus();
       break;
     case 'configuration':
       showProjectConfiguration();
@@ -1593,6 +1627,129 @@ async function showProjectConfiguration() {
   }
   
   configPage.style.display = 'block';
+}
+
+async function showProjectStatus() {
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+  
+  // Find or create status page
+  let statusPage = document.getElementById('page-status');
+  if (!statusPage) {
+    statusPage = document.createElement('div');
+    statusPage.id = 'page-status';
+    statusPage.className = 'page';
+    document.getElementById('pageContent').appendChild(statusPage);
+  }
+  
+  // Clear previous content
+  statusPage.innerHTML = '';
+  
+  // Load and display project components on status page
+  if (currentProject && currentProject.id) {
+    try {
+      const response = await fetch(`/projects/${currentProject.id}/components`, {
+        headers: getAuthHeaders()
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const components = data.components || [];
+        
+        // Group components by type
+        const frontend = components.find(c => c.component_type === 'frontend');
+        const backend = components.find(c => c.component_type === 'backend');
+        
+        const frontendStatus = frontend ? (frontend.status === 'running' ? 'RUNNING' : frontend.status.toUpperCase()) : 'NOT DEPLOYED';
+        const backendStatus = backend ? (backend.status === 'running' ? 'RUNNING' : backend.status.toUpperCase()) : 'NOT DEPLOYED';
+        const frontendStatusClass = frontend?.status === 'running' ? 'status-success' : frontend?.status === 'failed' ? 'status-error' : 'status-info';
+        const backendStatusClass = backend?.status === 'running' ? 'status-success' : backend?.status === 'failed' ? 'status-error' : 'status-info';
+        
+        statusPage.innerHTML = `
+          <div class="card">
+            <h2 style="margin-bottom: 1.5rem;">Project Components</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+              <!-- Frontend Card -->
+              <div class="project-card" style="margin: 0;">
+                <div class="project-header">
+                  <div class="project-icon">🌐</div>
+                  <div class="project-status ${frontendStatusClass}">${frontendStatus}</div>
+                </div>
+                <div class="project-info">
+                  <h3 class="project-name">Frontend</h3>
+                  <div class="project-meta">
+                    ${frontend ? `
+                      <svg class="icon-clock" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12,6 12,12 16,14"></polyline>
+                      </svg>
+                      <span>Updated ${frontend.updated_at ? getRelativeTime(new Date(frontend.updated_at)) : 'Recently'}</span>
+                    ` : '<span>Not deployed yet</span>'}
+                  </div>
+                  ${frontend && frontend.status === 'running' ? `
+                    <div class="project-metrics">
+                      <div class="metric">
+                        <span class="metric-label">Uptime</span>
+                        <span class="metric-value">${frontend.container_uptime || 'Unknown'}</span>
+                      </div>
+                    </div>
+                  ` : ''}
+                </div>
+                ${frontend && frontend.deployed_url ? `
+                  <div class="project-footer">
+                    <button class="btn-dark btn-block btn-open-site" onclick="openSite('${frontend.deployed_url}')">Open Frontend</button>
+                  </div>
+                ` : ''}
+              </div>
+              
+              <!-- Backend Card -->
+              <div class="project-card" style="margin: 0;">
+                <div class="project-header">
+                  <div class="project-icon">💻</div>
+                  <div class="project-status ${backendStatusClass}">${backendStatus}</div>
+                </div>
+                <div class="project-info">
+                  <h3 class="project-name">Backend</h3>
+                  <div class="project-meta">
+                    ${backend ? `
+                      <svg class="icon-clock" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12,6 12,12 16,14"></polyline>
+                      </svg>
+                      <span>Updated ${backend.updated_at ? getRelativeTime(new Date(backend.updated_at)) : 'Recently'}</span>
+                    ` : '<span>Not deployed yet</span>'}
+                  </div>
+                  ${backend && backend.status === 'running' ? `
+                    <div class="project-metrics">
+                      <div class="metric">
+                        <span class="metric-label">Uptime</span>
+                        <span class="metric-value">${backend.container_uptime || 'Unknown'}</span>
+                      </div>
+                    </div>
+                  ` : ''}
+                </div>
+                ${backend && backend.deployed_url ? `
+                  <div class="project-footer">
+                    <button class="btn-dark btn-block btn-open-site" onclick="openSite('${backend.deployed_url}')">Open Backend</button>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+    } catch (error) {
+      console.error('Error loading project components:', error);
+      statusPage.innerHTML = `
+        <div class="card">
+          <p>Unable to load project components. Please try again later.</p>
+        </div>
+      `;
+    }
+  }
+  
+  statusPage.style.display = 'block';
+  document.getElementById('pageTitle').textContent = 'Status';
 }
 
 async function loadAndDisplayProjectComponents() {
@@ -2397,6 +2554,10 @@ async function deploySingle(repoUrl, componentType = null, progressDialog = null
     formData.append('git_url', repoUrl);
     if (typeof currentProject === 'object' && currentProject && currentProject.id) {
       formData.append('project_id', String(currentProject.id));
+    }
+    // If deploying a component of a split repo, include the component_type
+    if (componentType && typeof currentProject === 'object' && currentProject && currentProject.project_type === 'split') {
+      formData.append('component_type', componentType);
     }
     
     const response = await fetch('/deploy', {
@@ -3588,6 +3749,7 @@ window.deleteProject = deleteProject;
 window.toggleRepositorySelection = toggleRepositorySelection;
 window.confirmSplitImport = confirmSplitImport;
 window.openProjectNameModal = openProjectNameModal;
+window.openSite = openSite;
 
 function updateTeamAndOwnerInfo(userName) {
   // Update team name in sidebar
