@@ -199,8 +199,8 @@ async def preflight_checks() -> dict:
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
-# Create avatars directory if it doesn't exist
-avatars_dir = os.path.join(static_dir, "avatars")
+# Create avatars directory if it doesn't exist (outside static/ so builds don't delete it)
+avatars_dir = os.path.join(os.path.dirname(__file__), "uploads", "avatars")
 os.makedirs(avatars_dir, exist_ok=True)
 app.mount("/avatars", StaticFiles(directory=avatars_dir), name="avatars")
 app.mount("/icons", StaticFiles(directory="icons"), name="icons")
@@ -512,8 +512,8 @@ async def update_user_profile(
             
             # Handle avatar upload
             if avatar:
-                # Create avatars directory if it doesn't exist
-                avatars_dir = os.path.join(os.path.dirname(__file__), "static", "avatars")
+                # Create avatars directory outside static/ so it doesn't get deleted on frontend rebuild
+                avatars_dir = os.path.join(os.path.dirname(__file__), "uploads", "avatars")
                 os.makedirs(avatars_dir, exist_ok=True)
                 
                 # Save avatar file
@@ -531,7 +531,7 @@ async def update_user_profile(
             if remove_avatar == "true":
                 if user.avatar_url:
                     # Delete old avatar file
-                    old_avatar_path = os.path.join(os.path.dirname(__file__), "static", user.avatar_url.lstrip("/"))
+                    old_avatar_path = os.path.join(os.path.dirname(__file__), "uploads", user.avatar_url.lstrip("/"))
                     if os.path.exists(old_avatar_path):
                         try:
                             os.remove(old_avatar_path)

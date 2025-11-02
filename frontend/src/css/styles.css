@@ -111,6 +111,13 @@ body {
   color: white;
   border-radius: 6px;
   font-weight: 700;
+  object-fit: contain;
+}
+
+/* When logo-icon is an image, don't apply text styling */
+.logo-icon[src] {
+  background: none;
+  color: transparent;
 }
 
 .logo-text {

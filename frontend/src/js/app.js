@@ -1124,7 +1124,7 @@ function createProjectSidebar() {
   sidebar.innerHTML = `
     <div class="sidebar-header">
       <div class="logo">
-        <span class="logo-icon">DB</span>
+        <img src="/icons/devops.png" alt="DevOps Butler" class="logo-icon" style="width: 32px; height: 32px; border-radius: 6px;" />
         <span class="logo-text">DevOps Butler</span>
       </div>
       <button class="btn-back" onclick="hideProjectSidebar()">← Back to Projects</button>
@@ -3750,14 +3750,6 @@ function setupSettingsListeners() {
   // Update password handler
   if (updatePasswordBtn) {
     updatePasswordBtn.addEventListener('click', handlePasswordUpdate);
-  }
-  
-  // Enable 2FA handler
-  const enable2FABtn = document.getElementById('enable2FABtn');
-  if (enable2FABtn) {
-    enable2FABtn.addEventListener('click', () => {
-      showToast('2FA feature coming soon!', 'info');
-    });
   }
   
   // Cancel profile changes
