@@ -76,6 +76,19 @@ class Router {
     const targetPage = document.getElementById(`page-${pageId}`);
     if (targetPage) {
       targetPage.style.display = 'block';
+      
+      // Clear any previous error/success messages on deploy page
+      if (pageId === 'deploy') {
+        const deployStatus = document.getElementById('deploy-status');
+        const deploySuccess = document.getElementById('deploy-success');
+        if (deployStatus) {
+          deployStatus.textContent = '';
+          deployStatus.style.color = '';
+        }
+        if (deploySuccess) {
+          deploySuccess.style.display = 'none';
+        }
+      }
   } else {
       // Fallback: show dashboard if page not found
       const dashboard = document.getElementById('page-dashboard');
@@ -1226,6 +1239,17 @@ function showProjectContent(page) {
       const deployPage = document.getElementById('page-deploy');
       if (deployPage) {
         deployPage.style.display = 'block';
+        
+        // Clear any previous error/success messages
+        const deployStatus = document.getElementById('deploy-status');
+        const deploySuccess = document.getElementById('deploy-success');
+        if (deployStatus) {
+          deployStatus.textContent = '';
+          deployStatus.style.color = '';
+        }
+        if (deploySuccess) {
+          deploySuccess.style.display = 'none';
+        }
         
         // Hide "Deploy New Application" card if viewing an existing project
         const deployNewAppCard = deployPage.querySelector('.card h2')?.closest('.card');
