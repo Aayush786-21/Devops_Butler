@@ -2980,9 +2980,9 @@ function showSplitImportDialog() {
       <div class="split-import-icon-wrapper">
         📦
       </div>
-      <h2 class="split-import-modal-title">Import as Split Repository?</h2>
+      <h2 class="split-import-modal-title">Import as Multi-Repository?</h2>
       <p class="split-import-modal-text">
-        This will create a split project with frontend and backend components.
+        This will create a multi-repository project with frontend and backend components.
       </p>
     </div>
     
@@ -3004,7 +3004,7 @@ function showSplitImportDialog() {
     
     <div class="split-import-actions">
       <button class="cancel-btn">Cancel</button>
-      <button class="confirm-btn">Import Split Repository</button>
+      <button class="confirm-btn">Import Multi-Repository</button>
     </div>
   `;
   
@@ -3076,10 +3076,10 @@ function confirmSplitImport() {
   
   // Show confirmation dialog
   const confirmed = confirm(
-    `Import as Split Repository?\n\n` +
+    `Import as Multi-Repository?\n\n` +
     `Frontend: ${frontend.name}\n` +
     `Backend: ${backend.name}\n\n` +
-    `Click OK to import these repositories as a split project.`
+    `Click OK to import these repositories as a multi-repository project.`
   );
   
   if (confirmed) {
@@ -3095,7 +3095,7 @@ async function importSplitRepositories(frontendUrl, backendUrl, projectName) {
     }
     
   try {
-    showToast('Importing split repositories...', 'info');
+    showToast('Importing multi-repositories...', 'info');
     
     const response = await fetch('/api/import-split', {
       method: 'POST',
@@ -3113,7 +3113,7 @@ async function importSplitRepositories(frontendUrl, backendUrl, projectName) {
     const data = await response.json();
     
     if (response.ok) {
-      showToast('Split repository imported successfully! Navigate to Projects to see it.', 'success');
+      showToast('Multi-repository imported successfully! Navigate to Projects to see it.', 'success');
       selectedRepositories = []; // Clear selection
       
       // Reload projects if on projects page
@@ -3128,11 +3128,11 @@ async function importSplitRepositories(frontendUrl, backendUrl, projectName) {
         searchRepositories();
       }
     } else {
-      showToast(data.detail || 'Failed to import split repository', 'error');
+      showToast(data.detail || 'Failed to import multi-repository', 'error');
     }
   } catch (error) {
-    console.error('Error importing split repositories:', error);
-    showToast('Failed to import split repository: ' + error.message, 'error');
+    console.error('Error importing multi-repositories:', error);
+    showToast('Failed to import multi-repository: ' + error.message, 'error');
   }
 }
 

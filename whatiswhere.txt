@@ -1,6 +1,24 @@
 # DevOps Butler - Codebase Location Guide
 # Last Updated: 2025-11-02
 
+## Recent Updates (Latest Session)
+
+### UI/UX Improvements
+- **Settings Page Redesign**: Modern layout with profile picture, password modal, toast notifications
+- **Avatar Storage**: Moved from `static/avatars/` to `uploads/avatars/` to prevent deletion on frontend rebuild
+- **Logo Update**: Replaced "DB" text with devops.png image in all sidebars
+- **Terminology Update**: All user-facing "split repository" → "multi-repository" (internal code unchanged for compatibility)
+
+### Bug Fixes
+- **Split Repo Deletion**: Fixed cascade deletion of child components when deleting parent
+- **Avatar Disappearance**: Fixed avatars being deleted when running npm build (moved to uploads/)
+- **2FA Removal**: Removed non-functional 2FA section from Settings page
+
+### New Features
+- **Password Modal**: Added change password modal with real-time strength indicator
+- **Toast Notifications**: Added success/error/info toast system for user feedback
+- **Avatar Management**: Profile picture upload, display, removal with persistent storage
+
 ## Frontend Files
 
 ### Main Application
@@ -12,7 +30,9 @@
 ### Key Frontend Functions
 - **Delete Project**: `frontend/src/js/app.js` - `deleteProject(projectId)` function at line ~128
 - **Delete Confirmation Dialog**: `frontend/src/js/app.js` - `showDeleteConfirmation(projectName)` at line ~182 (simple minimal dialog)
-- **Split Import Dialog**: `frontend/src/js/app.js` - `showSplitImportDialog()` at line ~2239 (fixed: removed buggy style removal)
+- **Multi-Repository Import Dialog**: `frontend/src/js/app.js` - `showSplitImportDialog()` at line ~2967
+  - **User-Facing Text**: "Import as Multi-Repository?"
+  - **Internal**: Still uses split-* CSS classes and split API calls
 - **Project Name Modal**: `frontend/src/js/app.js` - `openProjectNameModal()` at line ~1519
 - **Project Logs Modal**: `frontend/src/js/app.js` - `showProjectLogsModal()` at line ~889
 - **Project Components Display**: `frontend/src/js/app.js` - `loadAndDisplayProjectComponents()` at line ~1599
@@ -20,10 +40,14 @@
   - **Visibility**: Only shown when BOTH frontend AND backend are deployed (not just imported) AND deploy page is visible
   - **Animation**: Slides in with fade, pushes deploy card down smoothly
   - **CSS**: `.project-components-card` with `.components-visible` class (line ~2480)
-  - **Auto-refresh**: Refreshes after successful deployment for split repos
+  - **Auto-refresh**: Refreshes after successful deployment for multi-repos
   - **Key Fix**: Function checks `deployPage.style.display !== 'none'` before showing components section
   - **Configuration Page**: Explicitly hides components section (line ~1581-1584)
-- **Split Repository Detection**: `frontend/src/js/app.js` - In `loadProjects()` function at line ~759
+- **Settings Management**: `frontend/src/js/app.js` - `loadSettings()`, `setupSettingsListeners()`, `handleProfileUpdate()`, `handlePasswordUpdate()`
+  - **Password Modal**: Change password with real-time strength indicator (red/orange/green)
+  - **Avatar Upload/Remove**: Profile picture management in `uploads/avatars/`
+  - **Toast Notifications**: Success/error/info messages for actions
+- **Multi-Repository Detection**: `frontend/src/js/app.js` - In `loadProjects()` function at line ~759
   - **Detection Logic**: Checks `git_url.startsWith('split::')` as most reliable method (works before and after deployment)
   - **Project Type**: Sets `project_type: 'split'` or `'single'` explicitly in project object
   - **Fallback**: Also checks status `'imported_split'` and parent_project_id for compatibility
@@ -31,7 +55,7 @@
 - **Deploy Page Logic**: `frontend/src/js/app.js` - `showProjectContent('deploy')` at line ~1190
   - **Key Fix**: Always shows deploy page when clicking project (not configuration or components page)
   - **Project Type Detection**: Double-checks `git_url` format even if `project_type` is set
-  - **Split Repos**: Shows split layout (frontend/backend inputs) when `project_type === 'split'`
+  - **Multi-Repos**: Shows multi layout (frontend/backend inputs) when `project_type === 'split'`
   - **Single Repos**: Shows single URL input when `project_type === 'single'`
   - **New Deploy**: Shows dropdown only when `currentProject` is null (from "+ New Deploy" button)
   - **Critical Fix**: Navigation between pages now reloads fresh project data to prevent stale state
@@ -42,7 +66,7 @@
   - **Critical Fix**: Project navigation now async reloads fresh data before showing page content
   - **Prevents**: Stale project data causing wrong deploy layout after deployment
   - **Flow**: await loadProjects() → update currentProject → showProjectContent(page)
-- **Split Deploy Button**: `frontend/src/js/app.js` - "Deploy All" button handler at line ~1348
+- **Multi-Repository Deploy Button**: `frontend/src/js/app.js` - "Deploy All" button handler at line ~1348
   - **Critical Fix**: Changed from sequential `deploySingle()` calls to proper `/deploy` with `deploy_type='split'`
   - **Why**: Ensures proper parent/child relationship and uses `run_split_deployment()`
   - **Previous Bug**: Deployed as separate projects instead of linked components
@@ -71,14 +95,21 @@
   - **Environment**: Loads user env vars into temp directory as `frontend.env` and `backend.env` (lines 622-636)
 - **List Deployments**: `GET /deployments` - Line ~908 (filters out child components with `parent_project_id IS NULL`)
 - **Get Project Components**: `GET /projects/{project_id}/components` - Line ~969 (returns frontend/backend children)
-- **Delete Project**: `DELETE /projects/{project_id}` - Line ~1116
+- **Delete Project**: `DELETE /projects/{project_id}` - Line ~1204
+  - **Cascade Deletion**: Now deletes all child components (containers, images, env vars, DB records)
+  - **Split Repo Support**: Stops/removes all frontend/backend containers when deleting parent
 - **Import Repository**: `POST /api/import` - Line ~745 (single repo, creates parent with git_url)
-- **Import Split Repository**: `POST /api/import-split` - Line ~800 (frontend + backend, creates parent with `split::` git_url)
+- **Import Multi-Repository**: `POST /api/import-split` - Line ~822 (frontend + backend, creates parent with `split::` git_url)
   - **Key Format**: Line 821 - Creates git_url as `split::{frontend_url}|{backend_url}`
   - **Status**: Sets status to `'imported_split'` (line 827)
   - **Naming**: Auto-generates app_name as `{fe_name}-{be_name}` (lines 816-819)
 - **Authentication**: `POST /api/auth/login` - Line ~276
 - **Authentication**: `POST /api/auth/register` - Line ~314
+- **User Profile**: `GET /api/user/profile` - Line ~462 (returns user data including avatar_url)
+- **Update Profile**: `PUT /api/user/profile` - Line ~473 (handles avatar upload, password change, profile updates)
+  - **Avatar Storage**: Saves to `uploads/avatars/` (NOT `static/avatars/` to prevent deletion on build)
+  - **Avatar URL**: Returns `/avatars/{user_id}_{random}.{ext}` format
+  - **Avatar Serving**: FastAPI mounts `/avatars` from `uploads/avatars/` directory
 
 ### Deployment Logic (simple_pipeline.py)
 - **Main Pipeline**: `run_deployment_pipeline()` - Line ~778 (handles single deployments)
@@ -114,14 +145,17 @@
 - **Frontend Component**: Deployment with `parent_project_id = parent_id`, `component_type = 'frontend'`
 - **Backend Component**: Deployment with `parent_project_id = parent_id`, `component_type = 'backend'`
 
-### How Split Repos Work
+### How Multi-Repositories Work (formerly "Split Repos")
+- **User-Facing Name**: "Multi-Repository (Frontend + Backend)"
+- **Internal Code**: Still uses "split" for API compatibility (deploy_type='split', split:: format, etc.)
 1. **Import**: User imports via `/api/import-split` - creates parent with status 'imported_split' and git_url='split::{frontend}|{backend}'
-2. **Deploy**: User clicks "Deploy Both" - uses `/deploy` with `deploy_type='split'` which calls `run_split_deployment()`
+2. **Deploy**: User clicks "Deploy All" - uses `/deploy` with `deploy_type='split'` which calls `run_split_deployment()`
 3. **Deploy Process**: `run_split_deployment()` creates/uses parent, then deploys backend then frontend as children
 4. **Display**: Dashboard shows only parent projects (`parent_project_id IS NULL` filter)
 5. **Details**: Configuration page shows components via `/projects/{id}/components` endpoint
+6. **Deletion**: Deleting parent now cascades to all children (containers, images, env vars, DB records)
 
-### Split Repo Detection (Critical)
+### Multi-Repository Detection (Critical)
 - **Most Reliable**: `git_url.startsWith('split::')` - works before AND after deployment
 - **Status Fallback**: `status === 'imported_split'` - only before deployment
 - **Database Integrity**: Parent MUST have `parent_project_id = NULL` and `component_type = NULL`
@@ -130,12 +164,12 @@
 - **Deploy Format**: `run_split_deployment()` uses same format when creating parent (line 1119)
 
 ### Deploy Page Behavior
-- **New Deploy** (from "+ New Deploy" button): Shows dropdown to choose single/split, `currentProject` is null
-- **Existing Split Project**: Shows split layout (frontend/backend inputs + "Deploy All") without dropdown, shows components section if both deployed
+- **New Deploy** (from "+ New Deploy" button): Shows dropdown to choose single/multi, `currentProject` is null
+- **Existing Multi-Repository Project**: Shows multi layout (frontend/backend inputs + "Deploy All") without dropdown, shows components section if both deployed
 - **Existing Single Project**: Shows single URL input without dropdown
 - **Key Fix**: Deploy page is ALWAYS shown when clicking on a project (not configuration or components page)
 - **Components Section**: Only shown on deploy page, above "Deploy New Application" card, when both frontend and backend are deployed
-- **Critical Bug Fixed**: Split repo showing single-repo form after deployment
+- **Critical Bug Fixed**: Multi-repo showing single-repo form after deployment
   - **Root Cause**: Stale `currentProject` object after deployment, missing parent project in database
   - **Solution**: Navigation reloads fresh data, ensure parent has `git_url` in `split::` format
 
@@ -204,7 +238,10 @@ Devops_Butler/
 │   │   └── css/
 │   │       └── styles.css   # All styles
 │   └── package.json
-└── static/                  # Built frontend (served by FastAPI)
+├── static/                  # Built frontend (served by FastAPI)
+├── uploads/
+│   └── avatars/             # User profile pictures (not deleted on build)
+└── icons/                   # Application icons (logo.png, devops.png)
 ```
 
 ## Key Concepts
@@ -248,8 +285,8 @@ Devops_Butler/
 - Frontend console: Browser DevTools
 - Database: `deployments.db` SQLite file
 
-### Split Repository Flow (Complete)
-1. **User imports split repo** → `/api/import-split` creates parent with:
+### Multi-Repository Flow (Complete) - User-facing name for what was "Split Repository"
+1. **User imports multi-repo** → `/api/import-split` creates parent with:
    - `git_url = "split::{frontend_url}|{backend_url}"` (line 821)
    - `status = 'imported_split'` (line 827)
    - `parent_project_id = None`, `component_type = None`
@@ -272,7 +309,14 @@ Devops_Butler/
    - Updates existing child if found, otherwise creates new child linked to parent
 5. **Frontend displays** → Dashboard loads:
    - `/deployments` returns only parents (`parent_project_id IS NULL`)
-   - Split repos detected by `git_url.startsWith('split::')`
-   - Deploy page shows split form with pre-filled URLs
+   - Multi-repos detected by `git_url.startsWith('split::')`
+   - Deploy page shows multi form with pre-filled URLs
    - Config page shows components section with frontend/backend cards
+6. **User deletes multi-repo** → `DELETE /projects/{parent_id}`:
+   - Finds all children where `parent_project_id = parent_id`
+   - Stops and removes all child containers
+   - Deletes all child images
+   - Deletes all child env vars
+   - Deletes all child DB records
+   - Then deletes parent
 
