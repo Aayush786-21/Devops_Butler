@@ -1,7 +1,17 @@
 # DevOps Butler - Codebase Location Guide
-# Last Updated: 2025-11-02
+# Last Updated: 2025-11-03
 
 ## Recent Updates (Latest Session)
+
+### New Features - Environment Variable Detection
+- **Smart Detection**: Automatically detects env vars from repository code before deployment
+- **Detection Dialog**: Shows detected vars with 3 options: Import All, Add Manually, No Skip
+- **Pattern Matching**: Detects vars from process.env, os.getenv, os.environ, etc.
+- **Built-in Filter**: Ignores common system vars (NODE_ENV, PATH, HOME, etc.)
+- **Auto-Import**: One-click import of all detected vars with empty values
+- **Multi-Repo Support**: Scans both frontend and backend repos for vars
+- **Config File Priority**: Prioritizes vars found in next.config, .env.example, etc.
+- **Node.js Deployment Fix**: Deployment now warns about missing env vars instead of failing
 
 ### UI/UX Improvements
 - **Settings Page Redesign**: Modern layout with profile picture, password modal, toast notifications
@@ -13,11 +23,18 @@
 - **Split Repo Deletion**: Fixed cascade deletion of child components when deleting parent
 - **Avatar Disappearance**: Fixed avatars being deleted when running npm build (moved to uploads/)
 - **2FA Removal**: Removed non-functional 2FA section from Settings page
+- **Node.js Deployment**: Fixed deployment failing when env vars are missing (now continues with warning)
 
-### New Features
+### Other New Features
 - **Password Modal**: Added change password modal with real-time strength indicator
 - **Toast Notifications**: Added success/error/info toast system for user feedback
 - **Avatar Management**: Profile picture upload, display, removal with persistent storage
+
+### Environment Variables Simplification
+- **Removed Project Selector**: No more dropdown to switch between projects
+- **Current Project Only**: Env vars page only shows/manages vars for currently selected project
+- **No Global Variables**: Removed "All Projects (Global)" option - all vars are project-specific
+- **Clearer UX**: Users must select a project from Projects page to manage its env vars
 
 ## Frontend Files
 
@@ -47,6 +64,17 @@
   - **Password Modal**: Change password with real-time strength indicator (red/orange/green)
   - **Avatar Upload/Remove**: Profile picture management in `uploads/avatars/`
   - **Toast Notifications**: Success/error/info messages for actions
+- **Environment Variables Management**: `frontend/src/js/app.js` - `loadEnvVars()`, `saveEnvVars()`, `setupEnvVarsListeners()`
+  - **No Project Selector**: Removed dropdown - uses `currentProject.id` exclusively
+  - **Current Project Only**: Shows/manages vars for currently selected project only
+  - **Import/Export**: Import from .env file, add/edit/delete variables
+  - **Location**: Accessible via project sidebar → Environment Variables
+- **Environment Variable Detection**: `frontend/src/js/app.js` - `showEnvVarsDetectionDialog()` at line ~1973
+  - **Pre-Deploy Detection**: Automatically detects env vars from code when clicking "Deploy All"
+  - **Detection Dialog**: Shows 3 options: Import All (auto-saves), Add Manually (navigates to env vars page), No Skip (proceeds)
+  - **Auto-Import**: Merges detected vars with existing ones, saves to current project
+  - **Integration**: Called in "Deploy All" button handler at line ~1389-1403
+  - **API**: Uses `/api/env-vars/detect` endpoint with frontend_url & backend_url params
 - **Multi-Repository Detection**: `frontend/src/js/app.js` - In `loadProjects()` function at line ~759
   - **Detection Logic**: Checks `git_url.startsWith('split::')` as most reliable method (works before and after deployment)
   - **Project Type**: Sets `project_type: 'split'` or `'single'` explicitly in project object
@@ -103,17 +131,50 @@
   - **Key Format**: Line 821 - Creates git_url as `split::{frontend_url}|{backend_url}`
   - **Status**: Sets status to `'imported_split'` (line 827)
   - **Naming**: Auto-generates app_name as `{fe_name}-{be_name}` (lines 816-819)
-- **Authentication**: `POST /api/auth/login` - Line ~276
-- **Authentication**: `POST /api/auth/register` - Line ~314
+- **Authentication - Login**: `POST /api/auth/login` - Line ~278
+  - **Request Format**: JSON body with Pydantic model `UserLogin` (username, password)
+  - **NOT form data**: Endpoint expects `Content-Type: application/json`
+  - **Request Body**: `{"username": "string", "password": "string"}`
+  - **Response**: Returns `{"access_token": "...", "token_type": "bearer", "username": "..."}`
+  - **Token Expiry**: 30 minutes (line 299)
+  - **Auth**: No authentication required (public endpoint)
+- **Authentication - Register**: `POST /api/auth/register` - Line ~316
+  - **Request Format**: JSON body with Pydantic model `UserRegister` (username, email, password)
+  - **Request Body**: `{"username": "string", "email": "string", "password": "string"}`
+  - **Response**: Returns `{"message": "User created successfully"}`
+  - **Auth**: No authentication required (public endpoint)
 - **User Profile**: `GET /api/user/profile` - Line ~462 (returns user data including avatar_url)
 - **Update Profile**: `PUT /api/user/profile` - Line ~473 (handles avatar upload, password change, profile updates)
   - **Avatar Storage**: Saves to `uploads/avatars/` (NOT `static/avatars/` to prevent deletion on build)
   - **Avatar URL**: Returns `/avatars/{user_id}_{random}.{ext}` format
   - **Avatar Serving**: FastAPI mounts `/avatars` from `uploads/avatars/` directory
+- **Environment Variables API**: `GET /api/env-vars` - Line ~383 (get vars for current project)
+- **Environment Variables API**: `POST /api/env-vars` - Line ~409 (save vars for current project)
+- **Environment Variable Detection**: `GET /api/env-vars/detect` - Line ~461
+  - **Path**: `/api/env-vars/detect` (full path, no routing conflicts)
+  - **Request**: Query parameters (`?frontend_url=...&backend_url=...` or `?git_url=...`)
+  - **Parameters**: `frontend_url`, `backend_url`, or `git_url` (for single repo)
+  - **Authentication**: Requires Bearer token (`current_user: User = Depends(get_current_user)`)
+  - **Functionality**: Clones repos to temp directory, scans code for env var patterns, returns suggestions
+  - **Timeout**: 60 seconds per git clone operation
+  - **Helper Function**: `_detect_env_from_repo()` - Line ~523
+    - **Patterns**: process.env, os.getenv, os.environ, ${VAR}, env()
+    - **Config Files**: next.config, .env.example, package.json, settings.py, etc.
+    - **Filter**: Ignores common vars (NODE_ENV, PATH, HOME, etc.)
+    - **Priority**: Vars from config files get higher priority (10 vs 5)
+  - **Response**: `{"suggestions": {"VAR_NAME": {"detected_from": "file", "source": "process.env", "component": "frontend", "priority": 10}}}`
+  - **Error Handling**: Returns empty suggestions dict on error (doesn't fail deployment)
 
 ### Deployment Logic (simple_pipeline.py)
 - **Main Pipeline**: `run_deployment_pipeline()` - Line ~778 (handles single deployments)
 - **Split Deployment**: `run_split_deployment()` - Line ~1096 (deploys frontend + backend)
+- **Node.js Deployment**: `handle_node_project_deployment()` - Line ~609 (auto-generates Dockerfile for Node/Next.js)
+  - **Detection**: Checks for package.json, detects framework (Next.js vs generic Node)
+  - **Env Var Validation**: Lines 667-683 - Collects vars from next.config, warns if missing but doesn't fail
+  - **Dockerfile Generation**: Creates multi-stage Dockerfile for Next.js or single-stage for generic Node
+  - **Build Strategy**: Uses npm run build or npx next build
+  - **Start Command**: Uses npm run start or npx next start
+  - **Key Fix**: No longer fails when env vars are missing - warns and continues (line 683)
 - **Parent Project Creation**: Inside `run_split_deployment()` - Line ~1114 (creates parent if `parent_project_id` is None)
   - **Naming**: Uses `{fe_name}-{be_name}` from extracted repo names
   - **Git URL**: Creates `split::{frontend_url}|{backend_url}` format (line 1119)
@@ -280,10 +341,23 @@ Devops_Butler/
 2. Add migration in `database.py` `create_db_and_tables()` function
 3. Server auto-applies on restart
 
+### API Authentication & Request Formats
+- **Login/Register**: Expect JSON body (`Content-Type: application/json`), NOT form data
+  - Login: `POST /api/auth/login` with `{"username": "...", "password": "..."}`
+  - Register: `POST /api/auth/register` with `{"username": "...", "email": "...", "password": "..."}`
+- **Authenticated Endpoints**: Most API endpoints require Bearer token in `Authorization` header
+  - Format: `Authorization: Bearer {access_token}`
+  - Token obtained from login endpoint, valid for 30 minutes
+- **Query Parameters**: Some endpoints use query params (e.g., `/api/env-vars/detect?frontend_url=...`)
+- **Form Data**: Deployment endpoint (`/deploy`) uses `Form` data, not JSON
+
 ### Debugging
 - Backend logs: Terminal running `orchestrator.py`
 - Frontend console: Browser DevTools
 - Database: `deployments.db` SQLite file
+- **API Testing**: Use curl with proper Content-Type headers:
+  - JSON: `curl -X POST -H "Content-Type: application/json" -d '{"username":"..."}' ...`
+  - Auth: `curl -H "Authorization: Bearer {token}" ...`
 
 ### Multi-Repository Flow (Complete) - User-facing name for what was "Split Repository"
 1. **User imports multi-repo** → `/api/import-split` creates parent with:

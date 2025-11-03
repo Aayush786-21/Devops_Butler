@@ -458,6 +458,139 @@ async def save_env_vars(
         session.commit()
         return {"message": "Environment variables saved successfully"}
 
+@app.get("/api/env-vars/detect")
+async def detect_env_vars(
+    frontend_url: Optional[str] = None,
+    backend_url: Optional[str] = None,
+    git_url: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Detect required environment variables from repository code"""
+    try:
+        suggestions = {}
+        temp_dir = None
+        
+        try:
+            # Clone repository to temp directory
+            temp_dir = tempfile.mkdtemp(prefix="butler-env-detect-")
+            
+            if frontend_url or backend_url:
+                # Multi-repo deployment - detect from both repos
+                if frontend_url:
+                    repo_dir = os.path.join(temp_dir, "frontend")
+                    proc = await asyncio.to_thread(subprocess.run, 
+                        ["git", "clone", "--depth", "1", frontend_url, repo_dir],
+                        capture_output=True, text=True, timeout=60,
+                        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+                    )
+                    if proc.returncode == 0:
+                        fe_suggestions = _detect_env_from_repo(repo_dir, "frontend")
+                        suggestions.update(fe_suggestions)
+                
+                if backend_url:
+                    repo_dir = os.path.join(temp_dir, "backend")
+                    proc = await asyncio.to_thread(subprocess.run,
+                        ["git", "clone", "--depth", "1", backend_url, repo_dir],
+                        capture_output=True, text=True, timeout=60,
+                        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+                    )
+                    if proc.returncode == 0:
+                        be_suggestions = _detect_env_from_repo(repo_dir, "backend")
+                        suggestions.update(be_suggestions)
+            elif git_url:
+                # Single repo deployment
+                repo_dir = os.path.join(temp_dir, "repo")
+                proc = await asyncio.to_thread(subprocess.run,
+                    ["git", "clone", "--depth", "1", git_url, repo_dir],
+                    capture_output=True, text=True, timeout=60,
+                    env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+                )
+                if proc.returncode == 0:
+                    suggestions = _detect_env_from_repo(repo_dir, "app")
+            
+            return {"suggestions": suggestions}
+            
+        finally:
+            # Cleanup
+            if temp_dir and os.path.exists(temp_dir):
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                
+    except Exception as e:
+        global_logger.log_error(f"Error detecting env vars: {str(e)}")
+        return {"suggestions": {}}
+
+def _detect_env_from_repo(repo_dir: str, component: str) -> dict:
+    """Detect environment variables from repository code"""
+    suggestions = {}
+    
+    # Common patterns to detect env vars
+    patterns = {
+        r'process\.env\.([A-Z0-9_]+)': 'process.env',  # Node.js
+        r'os\.getenv\([\'"]([A-Z0-9_]+)[\'"]\)': 'os.getenv',  # Python
+        r'os\.environ\[[\'"]([A-Z0-9_]+)[\'"]\]': 'os.environ',  # Python
+        r'\$\{([A-Z0-9_]+)\}': 'shell variable',  # Shell/Bash
+        r'env\([\'"]([A-Z0-9_]+)[\'"]\)': 'env()',  # Laravel/PHP
+    }
+    
+    # Common built-in environment variables to ignore
+    common_vars = {
+        'NODE_ENV', 'PATH', 'HOME', 'USER', 'PWD', 'LANG', 'SHELL',
+        'TMPDIR', 'HOSTNAME', 'PORT', 'HOST', 'HOSTNAME',
+        'PYTHONPATH', 'VIRTUAL_ENV', 'PIP_REQUIRE_VIRTUALENV',
+        'NEXT_TELEMETRY_DISABLED', 'NPM_CONFIG', 'CI', 'DEBUG'
+    }
+    
+    # Check common config files
+    config_files = [
+        'next.config.js', 'next.config.mjs', 'next.config.ts', 'next.config.cjs',
+        '.env.example', '.env.sample', '.env.template',
+        'package.json', 'composer.json',
+        'config.js', 'config.ts', 'config.py',
+        'settings.py', 'settings.js', 'environment.js',
+        'webpack.config.js', 'vite.config.js', 'vite.config.ts',
+    ]
+    
+    # Scan repository
+    for root, dirs, files in os.walk(repo_dir):
+        # Skip node_modules, .git, etc.
+        dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', 'venv', 'env', '__pycache__'}]
+        
+        for file in files:
+            # Only check relevant files
+            if not any(file.endswith(ext) for ext in ['.js', '.jsx', '.ts', '.tsx', '.py', '.env', '.json', '.sh', '.yml', '.yaml']):
+                continue
+            
+            # Prioritize config files
+            is_config = file in config_files
+            
+            file_path = os.path.join(root, file)
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    
+                    # Check all patterns
+                    for pattern, source in patterns.items():
+                        matches = re.findall(pattern, content, re.IGNORECASE)
+                        for match in matches:
+                            # Clean up the match
+                            var_name = match.strip().upper()
+                            # Filter out common built-in vars
+                            if len(var_name) > 1 and var_name not in suggestions and var_name not in common_vars:
+                                suggestions[var_name] = {
+                                    "detected_from": file,
+                                    "source": source,
+                                    "component": component,
+                                    "priority": 10 if is_config else 5
+                                }
+            except Exception:
+                continue
+    
+    # Sort by priority
+    suggestions = dict(sorted(suggestions.items(), key=lambda x: x[1]['priority'], reverse=True))
+    
+    return suggestions
+
 # User Profile API endpoints
 @app.get("/api/user/profile")
 async def get_user_profile(current_user: User = Depends(get_current_user)):

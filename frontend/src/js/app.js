@@ -1386,62 +1386,193 @@ function showProjectContent(page) {
               return;
             }
             
-            // Show progress dialog with both steps
-            const dialog = showDeploymentProgressDialog(true);
-            document.getElementById('step-backend').style.display = 'flex';
-            document.getElementById('step-frontend').style.display = 'flex';
+            // First check if project already has env vars saved
+            let hasExistingEnvVars = false;
+            let detectedEnvVars = {};
             
-            // Update backend status first
-            dialog.updateBackendStatus('deploying', 'Deploying your backend now...');
-            
-            // Use proper split deployment endpoint for correct parent/child linking
-            try {
-              const formData = new FormData();
-              formData.append('deploy_type', 'split');
-              formData.append('frontend_url', frontendUrl);
-              formData.append('backend_url', backendUrl);
-              // Include project_id if available (for imported split projects)
-              if (currentProject && currentProject.id) {
-                formData.append('project_id', String(currentProject.id));
+            if (currentProject && currentProject.id) {
+              try {
+                const existingResponse = await fetch(`/api/env-vars?project_id=${currentProject.id}`, {
+                  headers: getAuthHeaders()
+                });
+                
+                if (existingResponse.ok) {
+                  const existingData = await existingResponse.json();
+                  const existingVars = existingData.variables || {};
+                  hasExistingEnvVars = Object.keys(existingVars).length > 0;
+                  console.log('Existing env vars check:', { hasExistingEnvVars, count: Object.keys(existingVars).length });
+                }
+              } catch (error) {
+                console.warn('Failed to check existing env vars:', error);
               }
-              
-              const response = await fetch('/deploy', {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: formData
+            }
+            
+            // If env vars already exist, proceed directly to deployment
+            if (hasExistingEnvVars) {
+              await proceedWithDeployment();
+              return;
+            }
+            
+            // No existing env vars - detect from code and show suggestions
+            try {
+              const detectionResponse = await fetch(`/api/env-vars/detect?frontend_url=${encodeURIComponent(frontendUrl)}&backend_url=${encodeURIComponent(backendUrl)}`, {
+                headers: getAuthHeaders()
               });
               
-              const result = await response.json();
-              
-              if (response.ok && result.deployed_url) {
-                // Parse the split response to show URLs for both frontend and backend
-                // Note: The backend returns frontend_url as primary, we need to extract both
-                dialog.updateBackendStatus('success', 'Backend deployed! ✅');
-                dialog.updateFrontendStatus('success', 'Frontend deployed! ✅');
+              if (detectionResponse.ok) {
+                const detectionResult = await detectionResponse.json();
+                detectedEnvVars = detectionResult.suggestions || {};
                 
-                // For split deployment, we only get one URL back but both are deployed
-                // The backend returns frontend URL as primary
-                dialog.showUrls(result.deployed_url, null); // Only frontend URL for now
-                
-                document.getElementById('close-deployment-dialog').onclick = () => {
-                  dialog.close();
-                  loadProjects();
-                  loadAndDisplayProjectComponents();
-                  loadDashboard();
-                };
-                
-                showToast('Split deployment successful!', 'success');
+                console.log('Env var detection result:', { count: Object.keys(detectedEnvVars).length, vars: detectedEnvVars });
               } else {
-                dialog.updateBackendStatus('failed', result.detail || 'Deployment failed');
-                dialog.updateFrontendStatus('failed', 'Could not deploy');
-                showToast(result.detail || 'Deployment failed', 'error');
-                setTimeout(() => dialog.close(), 3000);
+                console.warn('Env var detection API returned:', detectionResponse.status);
               }
             } catch (error) {
-              dialog.updateBackendStatus('failed', 'Network error');
-              dialog.updateFrontendStatus('failed', 'Network error');
-              showToast('Network error during deployment', 'error');
-              setTimeout(() => dialog.close(), 3000);
+              console.warn('Env var detection failed:', error);
+            }
+            
+            // No existing env vars - show dialog with detected vars (if any)
+            // Show env vars detection dialog (even if empty - user can still add manually or skip)
+            showEnvVarsDetectionDialog(
+              detectedEnvVars,
+              // onImport - import all suggested env vars
+              async () => {
+                if (Object.keys(detectedEnvVars).length === 0) {
+                  // No vars to import - navigate to manual add
+                  if (currentProject && currentProject.id) {
+                    router.navigate('/env-vars');
+                  } else {
+                    showToast('No env vars detected. Add them manually after deployment', 'info');
+                    await proceedWithDeployment();
+                  }
+                  return;
+                }
+                
+                showToast('Importing environment variables...', 'info');
+                
+                // Only import if we have a current project
+                if (currentProject && currentProject.id) {
+                  // Create env vars object from detected vars (with empty values for now)
+                  const importedVars = {};
+                  Object.keys(detectedEnvVars).forEach(key => {
+                    importedVars[key] = ''; // Empty values, user will fill them
+                  });
+                  
+                  // Merge with existing env vars (should be empty, but check anyway)
+                  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+                  const existingResponse = await fetch(`/api/env-vars?project_id=${currentProject.id}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                  });
+                  
+                  if (existingResponse.ok) {
+                    const existingData = await existingResponse.json();
+                    const existingVars = existingData.variables || {};
+                    // Merge: imported vars take precedence
+                    const mergedVars = { ...existingVars, ...importedVars };
+                    
+                    // Save merged vars
+                    const saveResponse = await fetch('/api/env-vars', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                      },
+                      body: JSON.stringify({
+                        variables: mergedVars,
+                        project_id: currentProject.id
+                      })
+                    });
+                    
+                    if (saveResponse.ok) {
+                      showToast('Environment variables imported successfully!', 'success');
+                      // Small delay before proceeding to show success message
+                      setTimeout(() => proceedWithDeployment(), 500);
+                    } else {
+                      showToast('Failed to import environment variables', 'error');
+                      await proceedWithDeployment();
+                    }
+                  } else {
+                    showToast('Failed to load existing environment variables', 'error');
+                    await proceedWithDeployment();
+                  }
+                } else {
+                  // No current project - just proceed with deployment
+                  showToast('Save detected env vars after deployment', 'info');
+                  await proceedWithDeployment();
+                }
+              },
+              // onAddManual - navigate to env vars page
+              () => {
+                if (currentProject && currentProject.id) {
+                  router.navigate('/env-vars');
+                } else {
+                  showToast('Please add environment variables after deployment', 'info');
+                }
+              },
+              // onSkip - proceed without env vars
+              async () => {
+                await proceedWithDeployment();
+              }
+            );
+            
+            async function proceedWithDeployment() {
+              // Show progress dialog with both steps
+              const dialog = showDeploymentProgressDialog(true);
+              document.getElementById('step-backend').style.display = 'flex';
+              document.getElementById('step-frontend').style.display = 'flex';
+              
+              // Update backend status first
+              dialog.updateBackendStatus('deploying', 'Deploying your backend now...');
+              
+              // Use proper split deployment endpoint for correct parent/child linking
+              try {
+                const formData = new FormData();
+                formData.append('deploy_type', 'split');
+                formData.append('frontend_url', frontendUrl);
+                formData.append('backend_url', backendUrl);
+                // Include project_id if available (for imported split projects)
+                if (currentProject && currentProject.id) {
+                  formData.append('project_id', String(currentProject.id));
+                }
+                
+                const response = await fetch('/deploy', {
+                  method: 'POST',
+                  headers: getAuthHeaders(),
+                  body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.deployed_url) {
+                  // Parse the split response to show URLs for both frontend and backend
+                  // Note: The backend returns frontend_url as primary, we need to extract both
+                  dialog.updateBackendStatus('success', 'Backend deployed! ✅');
+                  dialog.updateFrontendStatus('success', 'Frontend deployed! ✅');
+                  
+                  // For split deployment, we only get one URL back but both are deployed
+                  // The backend returns frontend URL as primary
+                  dialog.showUrls(result.deployed_url, null); // Only frontend URL for now
+                  
+                  document.getElementById('close-deployment-dialog').onclick = () => {
+                    dialog.close();
+                    loadProjects();
+                    loadAndDisplayProjectComponents();
+                    loadDashboard();
+                  };
+                  
+                  showToast('Split deployment successful!', 'success');
+                } else {
+                  dialog.updateBackendStatus('failed', result.detail || 'Deployment failed');
+                  dialog.updateFrontendStatus('failed', 'Could not deploy');
+                  showToast(result.detail || 'Deployment failed', 'error');
+                  setTimeout(() => dialog.close(), 3000);
+                }
+              } catch (error) {
+                dialog.updateBackendStatus('failed', 'Network error');
+                dialog.updateFrontendStatus('failed', 'Network error');
+                showToast('Network error during deployment', 'error');
+                setTimeout(() => dialog.close(), 3000);
+              }
             }
           };
           if (submitBtn) submitBtn.style.display = 'none';
@@ -1968,6 +2099,80 @@ async function loadAndDisplayProjectComponents() {
 
 function openSite(url) {
   if (url) window.open(url, '_blank');
+}
+
+// Environment Variables Detection Dialog
+function showEnvVarsDetectionDialog(suggestions, onImport, onAddManual, onSkip) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'envVarsDetectionOverlay';
+  
+  const modal = document.createElement('div');
+  modal.className = 'modal-content enhanced';
+  modal.style.maxWidth = '600px';
+  
+  const hasSuggestions = Object.keys(suggestions).length > 0;
+  
+  const envVarsList = hasSuggestions 
+    ? Object.entries(suggestions).map(([key, info]) => `
+      <div class="env-var-suggestion" style="padding: 0.75rem; margin-bottom: 0.5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
+        <div style="font-weight: 600; color: #111827; margin-bottom: 0.25rem;">${key}</div>
+        <div style="font-size: 0.875rem; color: #6b7280;">
+          Detected from: ${info.detected_from} (${info.source})
+          ${info.component ? ` | Component: ${info.component}` : ''}
+        </div>
+      </div>
+    `).join('')
+    : `
+      <div style="padding: 2rem; text-align: center; color: #6b7280;">
+        <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
+        <p style="font-size: 1rem; margin-bottom: 0.5rem;">No environment variables detected in your code.</p>
+        <p style="font-size: 0.875rem;">You can add them manually or proceed without them.</p>
+      </div>
+    `;
+  
+  modal.innerHTML = `
+    <div style="padding: 1.5rem; border-bottom: 1px solid #e5e7eb;">
+      <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem;">🔍 Environment Variables</h2>
+      <p style="color: #6b7280; font-size: 0.875rem;">
+        ${hasSuggestions 
+          ? `We found ${Object.keys(suggestions).length} environment variables in your code. Choose how to proceed:`
+          : `No environment variables were detected. You can add them manually or proceed without them.`}
+      </p>
+    </div>
+    <div style="padding: 1.5rem; max-height: 400px; overflow-y: auto;">
+      ${envVarsList}
+    </div>
+    <div style="padding: 1.5rem; border-top: 1px solid #e5e7eb; display: flex; gap: 0.75rem; justify-content: flex-end;">
+      <button class="btn-secondary skip-env-btn" style="padding: 0.75rem 1.5rem;">No, Skip</button>
+      <button class="btn-secondary add-manual-env-btn" style="padding: 0.75rem 1.5rem;">Add Manually</button>
+      ${hasSuggestions ? '<button class="btn-primary import-env-btn" style="padding: 0.75rem 1.5rem;">✅ Import All</button>' : ''}
+    </div>
+  `;
+  
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  
+  // Add event listeners
+  document.querySelector('.skip-env-btn').onclick = () => {
+    overlay.remove();
+    if (onSkip) onSkip();
+  };
+  
+  document.querySelector('.add-manual-env-btn').onclick = () => {
+    overlay.remove();
+    if (onAddManual) onAddManual();
+  };
+  
+  const importBtn = document.querySelector('.import-env-btn');
+  if (importBtn) {
+    importBtn.onclick = async () => {
+      overlay.remove();
+      if (onImport) await onImport();
+    };
+  }
+  
+  return overlay;
 }
 
 // Deployment Progress Dialog
@@ -3208,42 +3413,8 @@ function showToast(message, type = 'info') {
 // Environment Variables Management
 let envVars = {};
 let envVarsList = [];
-let selectedProjectId = null;
-
-async function loadProjectsForSelector() {
-  const projectSelector = document.getElementById('projectSelector');
-  if (!projectSelector) return;
-  
-  try {
-    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
-    const response = await fetch('/deployments', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
-    
-    if (response.ok) {
-      const deployments = await response.json();
-      
-      // Clear existing options except "All Projects"
-      projectSelector.innerHTML = '<option value="">All Projects (Global)</option>';
-      
-      // Add project options
-      deployments.forEach(deployment => {
-        const option = document.createElement('option');
-        option.value = deployment.id;
-        option.textContent = deployment.app_name || deployment.repository_url?.split('/').pop() || `Project ${deployment.id}`;
-        projectSelector.appendChild(option);
-      });
-        }
-    } catch (error) {
-    console.error('Error loading projects:', error);
-  }
-}
 
 async function loadEnvVars() {
-  // Load projects first to populate selector
-  await loadProjectsForSelector();
   try {
     const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
     if (!token) {
@@ -3261,11 +3432,21 @@ async function loadEnvVars() {
         return;
     }
     
-    const url = selectedProjectId 
-      ? `/api/env-vars?project_id=${selectedProjectId}`
-      : '/api/env-vars';
+    // Require current project (no switching allowed)
+    if (!currentProject || !currentProject.id) {
+      const container = document.getElementById('envVarsList');
+      if (container) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <p>Please select a project from the Projects page to manage environment variables</p>
+          </div>
+        `;
+      }
+      setupEnvVarsListeners();
+      return;
+    }
     
-    const response = await fetch(url, {
+    const response = await fetch(`/api/env-vars?project_id=${currentProject.id}`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -3307,15 +3488,6 @@ function setupEnvVarsListeners() {
   const importCard = document.getElementById('importEnvCard');
   const cancelImportBtn = document.getElementById('cancelImportBtn');
   const importForm = document.getElementById('importEnvForm');
-  const projectSelector = document.getElementById('projectSelector');
-  
-  // Project selector handler
-  if (projectSelector) {
-    projectSelector.addEventListener('change', async (e) => {
-      selectedProjectId = e.target.value ? parseInt(e.target.value) : null;
-      await loadEnvVars();
-    });
-  }
   
   if (importBtn) {
     importBtn.onclick = () => {
@@ -3517,6 +3689,13 @@ function toggleEnvVarVisibility(index) {
 async function saveEnvVars() {
   try {
     const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    
+    // Require current project
+    if (!currentProject || !currentProject.id) {
+      showToast('No project selected', 'error');
+      return;
+    }
+    
     const response = await fetch('/api/env-vars', {
       method: 'POST',
       headers: {
@@ -3525,7 +3704,7 @@ async function saveEnvVars() {
       },
       body: JSON.stringify({ 
         variables: envVars,
-        project_id: selectedProjectId  // Use selected project or null for global
+        project_id: currentProject.id
       })
     });
     

@@ -664,7 +664,7 @@ async def handle_node_project_deployment(repo_dir: str, repo_name: str, containe
                         continue
             return env_map
 
-        # Only run validation for Next.js projects
+        # Only run validation for Next.js projects (warn but don't fail)
         if has_next:
             referenced = _collect_env_from_next_config()
             local_envs = _load_local_env_files()
@@ -675,12 +675,12 @@ async def handle_node_project_deployment(repo_dir: str, repo_name: str, containe
                     missing.append(var)
             if missing:
                 await manager.broadcast(
-                    "❌ Next.js configuration references undefined environment variables: " + ", ".join(missing)
+                    "⚠️ Next.js configuration references undefined environment variables: " + ", ".join(missing)
                 )
                 await manager.broadcast(
-                    "💡 Provide them via 'frontend.env' upload or include a .env(.local/.production) in your repo."
+                    "💡 Deploying anyway - add missing variables via 'frontend.env' upload if needed."
                 )
-                return None
+                # Don't return None - continue with deployment
 
         # Decide commands
         # Build command
