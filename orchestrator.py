@@ -1262,6 +1262,73 @@ async def delete_project(
             for ev in env_vars:
                 session.delete(ev)
 
+            # Delete child deployments if this is a parent project
+            child_deployments = session.exec(
+                select(Deployment).where(
+                    Deployment.parent_project_id == project_id,
+                    Deployment.user_id == current_user.id
+                )
+            ).all()
+            
+            for child in child_deployments:
+                child_container_name = child.container_name
+                
+                # Stop and remove child container
+                try:
+                    subprocess.run(["docker", "stop", child_container_name], capture_output=True, text=True, timeout=20)
+                except Exception:
+                    pass
+                
+                try:
+                    subprocess.run(["docker", "rm", "-f", child_container_name], capture_output=True, text=True, timeout=20)
+                except Exception:
+                    pass
+                
+                # Get child image for deletion
+                child_image_name = None
+                try:
+                    proc = subprocess.run(
+                        ["docker", "ps", "-a", "--filter", f"name={child_container_name}", "--format", "{{.Image}}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if proc.returncode == 0 and proc.stdout.strip():
+                        child_image_name = proc.stdout.strip().splitlines()[0].strip()
+                except Exception:
+                    pass
+                
+                # Remove child image
+                if child_image_name:
+                    try:
+                        subprocess.run(["docker", "rmi", "-f", child_image_name], capture_output=True, text=True, timeout=30)
+                    except Exception:
+                        pass
+                
+                # Delete child's environment variables
+                child_env_vars = session.exec(
+                    select(EnvironmentVariable).where(
+                        EnvironmentVariable.user_id == current_user.id,
+                        EnvironmentVariable.project_id == child.id
+                    )
+                ).all()
+                for ev in child_env_vars:
+                    session.delete(ev)
+                
+                # Delete child deployment record
+                session.delete(child)
+                
+                global_logger.log_user_action(
+                    user_id=str(current_user.id),
+                    action="child_project_deleted",
+                    details={
+                        "parent_id": project_id,
+                        "child_id": child.id,
+                        "component_type": child.component_type,
+                        "container_name": child_container_name
+                    }
+                )
+
             # Delete deployment record
             session.delete(deployment)
             session.commit()
