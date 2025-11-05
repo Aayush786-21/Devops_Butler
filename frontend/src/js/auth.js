@@ -113,7 +113,22 @@ function setupFormListeners() {
                     body: JSON.stringify({ username, password }),
                 });
                 
-                const data = await response.json();
+                // Get response text first to handle non-JSON responses
+                const responseText = await response.text();
+                let data;
+                
+                try {
+                    // Try to parse as JSON
+                    data = JSON.parse(responseText);
+                } catch (parseError) {
+                    // If response is not JSON, it might be an HTML error page
+                    console.error('Failed to parse response as JSON:', responseText.substring(0, 100));
+                    if (errorDiv) {
+                        errorDiv.textContent = 'Server error. Please try again or check if the server is running.';
+                        errorDiv.style.display = 'block';
+                    }
+                    return;
+                }
                 
                 if (response.ok) {
                     // Store the token with consistent naming
@@ -197,7 +212,22 @@ function setupFormListeners() {
                     body: JSON.stringify({ username, email, password }),
                 });
                 
-                const data = await response.json();
+                // Get response text first to handle non-JSON responses
+                const responseText = await response.text();
+                let data;
+                
+                try {
+                    // Try to parse as JSON
+                    data = JSON.parse(responseText);
+                } catch (parseError) {
+                    // If response is not JSON, it might be an HTML error page
+                    console.error('Failed to parse response as JSON:', responseText.substring(0, 100));
+                    if (errorDiv) {
+                        errorDiv.textContent = 'Server error. Please try again or check if the server is running.';
+                        errorDiv.style.display = 'block';
+                    }
+                    return;
+                }
                 
                 if (response.ok) {
                     if (successDiv) {

@@ -25,25 +25,81 @@ pwd_context = None
 def get_pwd_context():
     global pwd_context
     if pwd_context is None:
-        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        try:
+            # Initialize bcrypt context
+            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        except Exception as e:
+            # If initialization fails, log and re-raise
+            import logging
+            logging.error(f"Failed to initialize bcrypt context: {str(e)}")
+            raise
     return pwd_context
+
+def _hash_with_bcrypt_direct(password_bytes: bytes) -> str:
+    """Fallback: Hash password directly with bcrypt library"""
+    import bcrypt
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    return hashed.decode('utf-8')
+
+def _verify_with_bcrypt_direct(password_bytes: bytes, hashed: str) -> bool:
+    """Fallback: Verify password directly with bcrypt library"""
+    import bcrypt
+    try:
+        return bcrypt.checkpw(password_bytes, hashed.encode('utf-8'))
+    except Exception:
+        return False
 
 # JWT token security
 security = HTTPBearer()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
-    # Truncate password to 72 bytes to avoid bcrypt limitation
-    if len(plain_password.encode('utf-8')) > 72:
-        plain_password = plain_password[:72]
-    return get_pwd_context().verify(plain_password, hashed_password)
+    # Truncate password to 72 bytes
+    password_bytes = plain_password.encode('utf-8')
+    if len(password_bytes) > 72:
+        password_bytes = password_bytes[:72]
+    
+    # Try using passlib first
+    try:
+        password_str = password_bytes.decode('utf-8', errors='ignore')
+        return get_pwd_context().verify(password_str, hashed_password)
+    except Exception as e:
+        # If passlib fails, fall back to direct bcrypt
+        error_msg = str(e)
+        if "password cannot be longer than 72 bytes" in error_msg or "bcrypt" in error_msg.lower():
+            import logging
+            logging.warning(f"Passlib verification failed, using direct bcrypt: {error_msg[:100]}")
+            return _verify_with_bcrypt_direct(password_bytes, hashed_password)
+        # Log other errors but return False (don't expose to user)
+        import logging
+        logging.error(f"Password verification error: {error_msg}")
+        return False
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    # Truncate password to 72 bytes to avoid bcrypt limitation
-    if len(password.encode('utf-8')) > 72:
-        password = password[:72]
-    return get_pwd_context().hash(password)
+    # Truncate password to 72 bytes BEFORE any bcrypt operations
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        password_bytes = password_bytes[:72]
+    
+    # Try using passlib first
+    try:
+        password_str = password_bytes.decode('utf-8', errors='ignore')
+        context = get_pwd_context()
+        return context.hash(password_str)
+    except (ValueError, Exception) as e:
+        # If passlib fails (often due to bug detection during initialization),
+        # fall back to direct bcrypt usage
+        error_msg = str(e)
+        if "password cannot be longer than 72 bytes" in error_msg or "bcrypt" in error_msg.lower():
+            import logging
+            logging.warning(f"Passlib bcrypt failed, using direct bcrypt: {error_msg[:100]}")
+            return _hash_with_bcrypt_direct(password_bytes)
+        # For other errors, log and re-raise
+        import logging
+        logging.error(f"Password hashing error: {error_msg}")
+        raise
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create a JWT access token."""
@@ -91,14 +147,20 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 def authenticate_user(username: str, password: str) -> Optional[User]:
     """Authenticate a user with username and password."""
-    with Session(engine) as session:
-        statement = select(User).where(User.username == username)
-        user = session.exec(statement).first()
-        if not user:
-            return None
-        if not verify_password(password, user.hashed_password):
-            return None
-        return user
+    try:
+        with Session(engine) as session:
+            statement = select(User).where(User.username == username)
+            user = session.exec(statement).first()
+            if not user:
+                return None
+            if not verify_password(password, user.hashed_password):
+                return None
+            return user
+    except Exception as e:
+        # Log the error but don't expose it
+        import logging
+        logging.error(f"Authentication error for user {username}: {str(e)}")
+        return None
 
 def create_user(username: str, email: str, password: str) -> Optional[User]:
     """Create a new user."""

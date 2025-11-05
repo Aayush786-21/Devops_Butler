@@ -165,6 +165,33 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Global exception handler to ensure all errors return JSON
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Handle all unhandled exceptions and return JSON responses"""
+    # HTTPException is already handled by FastAPI and returns JSON
+    if isinstance(exc, HTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail}
+        )
+    
+    # Handle all other exceptions
+    import traceback
+    error_trace = traceback.format_exc()
+    global_logger.log_error(f"Unhandled exception: {str(exc)}")
+    global_logger.log_error(f"Traceback: {error_trace}")
+    
+    # Return JSON error response
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error. Please try again later.",
+            "error_type": type(exc).__name__
+        }
+    )
+
 # Preflight checks for external dependencies
 async def preflight_checks() -> dict:
     """Check Docker and Git availability and Docker daemon connectivity."""
@@ -316,26 +343,35 @@ async def login(user_credentials: UserLogin):
 @app.post("/api/auth/register")
 async def register(user_data: UserRegister):
     """User registration endpoint"""
-    global_logger.log_user_action(
-        user_id=user_data.username,
-        action="registration_attempt",
-        details={"username": user_data.username, "email": user_data.email}
-    )
-    
-    user = create_user(user_data.username, user_data.email, user_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=400,
-            detail="Username or email already exists"
+    try:
+        global_logger.log_user_action(
+            user_id=user_data.username,
+            action="registration_attempt",
+            details={"username": user_data.username, "email": user_data.email}
         )
-    
-    global_logger.log_user_action(
-        user_id=str(user.id),
-        action="registration_success",
-        details={"username": user.username, "email": user.email}
-    )
-    
-    return {"message": "User created successfully"}
+        
+        user = create_user(user_data.username, user_data.email, user_data.password)
+        if not user:
+            raise HTTPException(
+                status_code=400,
+                detail="Username or email already exists"
+            )
+        
+        global_logger.log_user_action(
+            user_id=str(user.id),
+            action="registration_success",
+            details={"username": user.username, "email": user.email}
+        )
+        
+        return {"message": "User created successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        global_logger.log_error(f"Registration error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create user. Please try again."
+        )
 
 
 # Applications API endpoint
@@ -1683,6 +1719,38 @@ async def serve_spa(path: str):
 
 if __name__ == "__main__":
     import uvicorn
+    import subprocess
+    import time
+    
+    # Check if port 8000 is already in use and kill the process
+    def free_port_8000():
+        """Kill any process using port 8000 to prevent 'Address already in use' errors"""
+        try:
+            # Find processes using port 8000
+            result = subprocess.run(
+                ["lsof", "-ti", ":8000"],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                print(f"⚠️  Found {len(pids)} process(es) using port 8000. Cleaning up...")
+                for pid in pids:
+                    try:
+                        subprocess.run(["kill", "-9", pid], check=True)
+                        print(f"   Killed process {pid}")
+                    except subprocess.CalledProcessError:
+                        pass
+                # Give it a moment to free the port
+                time.sleep(0.5)
+        except FileNotFoundError:
+            # lsof not available (unlikely on macOS, but handle gracefully)
+            pass
+        except Exception as e:
+            print(f"⚠️  Warning: Could not check port 8000: {e}")
+    
+    # Free port 8000 before starting
+    free_port_8000()
     
     global_logger.log_structured(
         level=LogLevel.INFO,

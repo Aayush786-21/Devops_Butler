@@ -8,6 +8,7 @@ import logging
 import time
 import traceback
 import functools
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from enum import Enum
 from dataclasses import dataclass, field
@@ -122,11 +123,16 @@ class RobustErrorHandler:
     
     def setup_logging(self):
         """Setup structured logging"""
+        # Ensure logs directory exists (relative to project root)
+        project_root = Path(__file__).parent
+        log_dir = project_root / 'logs'
+        log_dir.mkdir(exist_ok=True)
+        
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler('/Users/aayush/Documents/Devops_Butler/logs/error_handler.log'),
+                logging.FileHandler(log_dir / 'error_handler.log'),
                 logging.StreamHandler()
             ]
         )

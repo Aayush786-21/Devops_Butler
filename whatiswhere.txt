@@ -3,6 +3,30 @@
 
 ## Recent Updates (Latest Session)
 
+### Bug Fixes - Port Conflict Resolution
+- **Auto Port Cleanup**: `orchestrator.py` now automatically kills processes on port 8000 before starting
+- **Problem**: "Address already in use" error occurred when orphaned uvicorn processes weren't cleaned up
+- **Solution**: Added `free_port_8000()` function that runs before server startup to check and kill any processes using port 8000
+- **Location**: Lines 1689-1718 in `orchestrator.py`
+
+### Bug Fixes - JSON Parsing Error on Login & 500 Error Handling
+- **Fixed JSON Parse Error**: `frontend/src/js/auth.js` now handles non-JSON responses gracefully
+- **Problem**: "JSON.parse: unexpected character" error when server returned HTML error pages or invalid responses
+- **Solution**: Changed from `response.json()` to `response.text()` first, then try parsing JSON with proper error handling
+- **Location**: Login function (lines 116-131) and Register function (lines 215-230) in `auth.js`
+- **Note**: Frontend must be rebuilt after this change (`npm run build` in frontend directory)
+
+### Bug Fixes - Global Exception Handler & Bcrypt Error Handling
+- **Global Exception Handler**: Added `@app.exception_handler(Exception)` in `orchestrator.py` to ensure all errors return JSON
+- **Problem**: Unhandled exceptions returned plain text "Internal Server Error" instead of JSON
+- **Solution**: Global handler catches all exceptions and returns proper JSON error responses
+- **Location**: Lines 169-193 in `orchestrator.py`
+- **Bcrypt Error Handling**: Added try-catch blocks in `auth.py` for password verification to handle bcrypt compatibility issues
+- **Location**: `verify_password()` and `authenticate_user()` functions in `auth.py`
+
+### Environment Configuration
+- **Google AI API Key**: Added `GOOGLE_AI_API_KEY` to `.env` file for Google AI integration
+
 ### New Features - Environment Variable Detection
 - **Smart Detection**: Automatically detects env vars from repository code before deployment
 - **Detection Dialog**: Shows detected vars with 3 options: Import All, Add Manually, No Skip

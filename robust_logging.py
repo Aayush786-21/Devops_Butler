@@ -110,7 +110,9 @@ class RobustLogger:
     """Comprehensive logging system"""
     
     def __init__(self):
-        self.log_dir = Path("/Users/aayush/Documents/Devops_Butler/logs")
+        # Use relative path from project root (where this file is located)
+        project_root = Path(__file__).parent
+        self.log_dir = project_root / 'logs'
         self.log_dir.mkdir(exist_ok=True)
         
         self.deployment_traces: Dict[str, DeploymentTrace] = {}
