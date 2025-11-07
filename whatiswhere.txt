@@ -42,6 +42,9 @@
 - **Avatar Storage**: Moved from `static/avatars/` to `uploads/avatars/` to prevent deletion on frontend rebuild
 - **Logo Update**: Replaced "DB" text with devops.png image in all sidebars
 - **Terminology Update**: All user-facing "split repository" → "multi-repository" (internal code unchanged for compatibility)
+- **Env Var Drag & Drop**: Environment Variables page now has a drag-and-drop `.env` upload drop zone that automatically imports dropped files (`frontend/src/index.html`, `frontend/src/js/app.js`, `frontend/src/css/styles.css`)
+- **Log Stream Parsing**: WebSocket log clients now auto-detect plain-text messages, avoiding JSON parse errors during deployments (`frontend/src/js/app.js`)
+- **Env Var Timestamp Display**: Environment Variables list now shows precise timestamps formatted in Kathmandu time, and log timestamps follow the same zone (`frontend/src/js/app.js`)
 
 ### Bug Fixes
 - **Split Repo Deletion**: Fixed cascade deletion of child components when deleting parent

@@ -1164,6 +1164,59 @@ body {
   border-collapse: collapse;
 }
 
+.env-drop-zone {
+  margin-top: 0.75rem;
+  border: 2px dashed var(--border-color);
+  border-radius: 10px;
+  padding: 1.5rem;
+  background: var(--bg-secondary);
+  transition: border-color 0.2s ease, background 0.2s ease;
+  cursor: pointer;
+}
+
+.env-drop-zone.is-dragover {
+  border-color: var(--primary);
+  background: rgba(46, 213, 115, 0.1);
+}
+
+.env-drop-zone-content {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.env-drop-zone-icon {
+  font-size: 2rem;
+}
+
+.env-drop-zone-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.env-drop-zone-subtitle {
+  margin: 0.25rem 0 0 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.env-drop-zone-browse {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.env-drop-zone-browse:hover {
+  text-decoration: none;
+}
+
+.env-drop-zone-file-name {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
 .env-vars-table thead {
   background: var(--bg-secondary);
   border-bottom: 2px solid var(--border-color);

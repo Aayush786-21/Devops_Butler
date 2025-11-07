@@ -3488,6 +3488,10 @@ function setupEnvVarsListeners() {
   const importCard = document.getElementById('importEnvCard');
   const cancelImportBtn = document.getElementById('cancelImportBtn');
   const importForm = document.getElementById('importEnvForm');
+  const dropZone = document.getElementById('envDropZone');
+  const fileInput = document.getElementById('envFileInput');
+  const browseLink = document.getElementById('envDropZoneBrowse');
+  const fileNameLabel = document.getElementById('envDropZoneFileName');
   
   if (importBtn) {
     importBtn.onclick = () => {
@@ -3498,7 +3502,13 @@ function setupEnvVarsListeners() {
   if (cancelImportBtn) {
     cancelImportBtn.onclick = () => {
       importCard.style.display = 'none';
-      document.getElementById('envFileInput').value = '';
+      if (fileInput) {
+        fileInput.value = '';
+      }
+      if (fileNameLabel) {
+        fileNameLabel.textContent = '';
+        fileNameLabel.style.display = 'none';
+      }
     };
   }
   
@@ -3508,11 +3518,99 @@ function setupEnvVarsListeners() {
     };
   }
   
+  if (fileInput) {
+    fileInput.onchange = (event) => {
+      const file = event.target.files?.[0];
+      if (fileNameLabel) {
+        if (file) {
+          fileNameLabel.textContent = file.name;
+          fileNameLabel.style.display = 'block';
+        } else {
+          fileNameLabel.textContent = '';
+          fileNameLabel.style.display = 'none';
+        }
+      }
+    };
+  }
+
+  if (dropZone && fileInput && !dropZone.dataset.bound) {
+    dropZone.dataset.bound = 'true';
+
+    const preventDefaults = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (event) => {
+        preventDefaults(event);
+        dropZone.classList.add('is-dragover');
+      });
+    });
+
+    ['dragleave', 'dragend'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (event) => {
+        preventDefaults(event);
+        dropZone.classList.remove('is-dragover');
+      });
+    });
+
+    dropZone.addEventListener('dragover', (event) => {
+      preventDefaults(event);
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'copy';
+      }
+      dropZone.classList.add('is-dragover');
+    });
+
+    dropZone.addEventListener('drop', async (event) => {
+      preventDefaults(event);
+      dropZone.classList.remove('is-dragover');
+      const files = event.dataTransfer?.files;
+      if (!files || !files.length) {
+        return;
+      }
+
+      const [file] = files;
+      if (fileNameLabel) {
+        fileNameLabel.textContent = file.name;
+        fileNameLabel.style.display = 'block';
+      }
+
+       // Mirror the dropped file into the hidden input so manual import flow stays in sync
+      if (fileInput) {
+        try {
+          const dataTransfer = new DataTransfer();
+          dataTransfer.items.add(file);
+          fileInput.files = dataTransfer.files;
+        } catch (error) {
+          console.warn('Unable to sync dropped file with input element:', error);
+        }
+      }
+
+      try {
+        await importEnvFile(file);
+      } catch (error) {
+        console.error('Error importing dropped .env file:', error);
+      }
+    });
+
+    dropZone.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    if (browseLink) {
+      browseLink.addEventListener('click', (event) => {
+        event.preventDefault();
+        fileInput.click();
+      });
+    }
+  }
+
   if (importForm) {
     importForm.onsubmit = async (e) => {
       e.preventDefault();
-      const fileInput = document.getElementById('envFileInput');
-      const file = fileInput.files[0];
+      const file = fileInput?.files?.[0];
       if (file) {
         await importEnvFile(file);
       }
@@ -3522,6 +3620,13 @@ function setupEnvVarsListeners() {
 
 async function importEnvFile(file) {
   try {
+    if (!file) {
+      showToast('No file detected for import', 'error');
+      return;
+    }
+
+    showToast(`Importing ${file.name || '.env'}...`, 'info');
+
     const text = await file.text();
     const lines = text.split('\n');
     const imported = {};
@@ -3542,6 +3647,11 @@ async function importEnvFile(file) {
     await saveEnvVars();
     document.getElementById('importEnvCard').style.display = 'none';
     document.getElementById('envFileInput').value = '';
+    const fileNameLabel = document.getElementById('envDropZoneFileName');
+    if (fileNameLabel) {
+      fileNameLabel.textContent = '';
+      fileNameLabel.style.display = 'none';
+    }
     showToast('Environment variables imported successfully!', 'success');
     } catch (error) {
     console.error('Error importing .env file:', error);
@@ -3577,9 +3687,13 @@ function renderEnvVars() {
       </thead>
       <tbody>
         ${envVarsList.map((item, index) => {
-          const lastUpdated = item.updated_at 
-            ? getRelativeTime(new Date(item.updated_at))
-            : 'never';
+        const lastUpdated = item.updated_at
+          ? new Date(item.updated_at).toLocaleString('en-US', {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+              timeZone: 'Asia/Kathmandu'
+            })
+          : 'Never updated';
           const projectBadge = item.project_id 
             ? `<span style="font-size: 0.75rem; background: var(--primary); color: white; padding: 0.125rem 0.5rem; border-radius: 4px; margin-left: 0.5rem;">Project</span>`
             : `<span style="font-size: 0.75rem; background: var(--bg-tertiary); color: var(--text-secondary); padding: 0.125rem 0.5rem; border-radius: 4px; margin-left: 0.5rem;">Global</span>`;
@@ -4169,6 +4283,34 @@ let logsWebSocket = null;
 let logsPaused = false;
 let logsBuffer = [];
 
+function parseLogPayload(rawMessage) {
+  if (rawMessage == null) {
+    return null;
+  }
+
+  if (typeof rawMessage !== 'string') {
+    return rawMessage;
+  }
+
+  const trimmed = rawMessage.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const firstBraceIndex = trimmed.indexOf('{');
+  if (firstBraceIndex === -1) {
+    return { message: trimmed };
+  }
+
+  const candidate = trimmed.slice(firstBraceIndex);
+
+  try {
+    return JSON.parse(candidate);
+  } catch (_) {
+    return { message: trimmed };
+  }
+}
+
 function loadLogs() {
   const logsContent = document.getElementById('logsContent');
   if (!logsContent) return;
@@ -4206,18 +4348,16 @@ function connectLogsWebSocket() {
   };
   
   logsWebSocket.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      
-      if (logsPaused) {
-        // Buffer logs when paused
-        logsBuffer.push({ message: data.message, type: data.type || 'info' });
-            } else {
-        appendLog(data.message, data.type || 'info');
-      }
-    } catch (error) {
-      console.error('Error parsing log message:', error);
-      appendLog(event.data, 'info');
+    const data = parseLogPayload(event.data);
+    if (!data || !data.message) {
+      return;
+    }
+
+    if (logsPaused) {
+      // Buffer logs when paused
+      logsBuffer.push({ message: data.message, type: data.type || 'info' });
+    } else {
+      appendLog(data.message, data.type || 'info');
     }
   };
   
@@ -4243,7 +4383,11 @@ function appendLog(message, type = 'info') {
   const logsContent = document.getElementById('logsContent');
   if (!logsContent) return;
   
-  const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kathmandu' });
+  const timestamp = new Date().toLocaleString('en-US', {
+    timeZone: 'Asia/Kathmandu',
+    timeStyle: 'medium',
+    dateStyle: 'short'
+  });
   const logEntry = document.createElement('div');
   logEntry.className = `log-entry ${type}`;
   
@@ -4326,18 +4470,16 @@ function connectProjectLogsWebSocket(projectId) {
   };
   
   projectLogsWebSocket.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      
-      if (projectLogsPaused) {
-        // Buffer logs when paused
-        projectLogsBuffer.push({ message: data.message, type: data.type || 'info' });
-      } else {
-        appendProjectLog(data.message, data.type || 'info');
-      }
-    } catch (error) {
-      console.error('Error parsing project log message:', error);
-      appendProjectLog(event.data, 'info');
+    const data = parseLogPayload(event.data);
+    if (!data || !data.message) {
+      return;
+    }
+
+    if (projectLogsPaused) {
+      // Buffer logs when paused
+      projectLogsBuffer.push({ message: data.message, type: data.type || 'info' });
+    } else {
+      appendProjectLog(data.message, data.type || 'info');
     }
   };
   
@@ -4364,7 +4506,11 @@ function appendProjectLog(message, type = 'info') {
   const logsContent = document.getElementById('projectLogsContent');
   if (!logsContent) return;
   
-  const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kathmandu' });
+  const timestamp = new Date().toLocaleString('en-US', {
+    timeZone: 'Asia/Kathmandu',
+    timeStyle: 'medium',
+    dateStyle: 'short'
+  });
   const logEntry = document.createElement('div');
   logEntry.className = `log-entry ${type}`;
   

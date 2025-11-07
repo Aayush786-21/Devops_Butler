@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>DevOps Butler</title>
   <link rel="icon" type="image/png" href="/icons/logo.png"/>
-  <script type="module" crossorigin src="/assets/main-BFQBXyZv.js"></script>
+  <script type="module" crossorigin src="/assets/main-D5PPN94G.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/styles-BhRADeYO.css">
+  <link rel="stylesheet" crossorigin href="/assets/styles-D9gkcyl0.css">
 </head>
 <body>
   <div class="app-container">
@@ -252,8 +252,18 @@
             <h3>Import from .env file</h3>
             <form id="importEnvForm">
               <div class="form-group">
-                <label>Select .env file</label>
-                <input type="file" id="envFileInput" accept=".env" />
+                <label for="envFileInput">Select .env file</label>
+                <div id="envDropZone" class="env-drop-zone">
+                  <div class="env-drop-zone-content">
+                    <div class="env-drop-zone-icon">📄</div>
+                    <div class="env-drop-zone-text">
+                      <p class="env-drop-zone-title">Drag & drop your .env file</p>
+                      <p class="env-drop-zone-subtitle">or <span id="envDropZoneBrowse" class="env-drop-zone-browse">browse</span> to choose a file</p>
+                      <p id="envDropZoneFileName" class="env-drop-zone-file-name" style="display: none;"></p>
+                    </div>
+                  </div>
+                  <input type="file" id="envFileInput" accept=".env" style="display: none;" />
+                </div>
               </div>
               <div style="display: flex; gap: 0.75rem;">
                 <button type="submit" class="btn-primary">Import</button>
