@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>DevOps Butler</title>
   <link rel="icon" type="image/png" href="/icons/logo.png"/>
-  <script type="module" crossorigin src="/assets/main-D5PPN94G.js"></script>
+  <script type="module" crossorigin src="/assets/main-C3GvJk7t.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/styles-D9gkcyl0.css">
+  <link rel="stylesheet" crossorigin href="/assets/styles-xA1hOqwH.css">
 </head>
 <body>
   <div class="app-container">
@@ -232,6 +232,19 @@
           <div class="repositories-grid" id="repositoriesGrid">
             <div class="empty-state">
               <p>Search for a GitHub username to see their repositories</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Domain Warning Modal -->
+        <div id="domainWarningModal" class="modal" style="display: none;">
+          <div class="modal-content" style="max-width: 520px;">
+            <h3>Domain Required</h3>
+            <p style="margin-bottom: 1rem;">This project does not have a custom domain configured. Deployments without a domain will only be reachable from your own network, and end users will not be able to access the app.</p>
+            <p style="margin-bottom: 1.5rem;">Please configure a domain first by visiting the Domain Configuration section.</p>
+            <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
+              <button class="btn-secondary" id="domainModalCancelBtn">Close</button>
+              <button class="btn-primary" id="domainModalOpenConfigBtn">Open Domain Configuration</button>
             </div>
           </div>
         </div>

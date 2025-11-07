@@ -37,6 +37,12 @@ def create_db_and_tables():
             # Add component_type to identify frontend/backend components
             if 'component_type' not in existing_cols:
                 conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN component_type TEXT NULL"))
+            if 'custom_domain' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN custom_domain TEXT NULL"))
+            if 'domain_status' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN domain_status TEXT NULL"))
+            if 'last_domain_sync' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN last_domain_sync TIMESTAMP NULL"))
     except Exception:
         # Never block startup on a migration error; logs will capture details elsewhere
         pass

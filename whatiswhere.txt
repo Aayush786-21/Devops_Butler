@@ -45,6 +45,7 @@
 - **Env Var Drag & Drop**: Environment Variables page now has a drag-and-drop `.env` upload drop zone that automatically imports dropped files (`frontend/src/index.html`, `frontend/src/js/app.js`, `frontend/src/css/styles.css`)
 - **Log Stream Parsing**: WebSocket log clients now auto-detect plain-text messages, avoiding JSON parse errors during deployments (`frontend/src/js/app.js`)
 - **Env Var Timestamp Display**: Environment Variables list now shows precise timestamps formatted in Kathmandu time, and log timestamps follow the same zone (`frontend/src/js/app.js`)
+- **Per-Project Subdomains**: Projects can claim Cloudflare-hosted subdomains like `project-butler.example.com` (single label before base domain); backend syncs tunnel ingress/DNS, prevents cross-account reuse, and frontend manages status with a single save button & Open Site now prefers the custom host (`cloudflare_manager.py`, `orchestrator.py`, `frontend/src/js/app.js`, `frontend/src/css/styles.css`). Users can register a domain before the first deploy (status `pending`), and the deploy button now blocks only when no domain is configured, guiding them via a modal.
 
 ### Bug Fixes
 - **Split Repo Deletion**: Fixed cascade deletion of child components when deleting parent

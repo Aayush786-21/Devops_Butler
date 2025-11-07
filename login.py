@@ -36,6 +36,15 @@ class Deployment(SQLModel, table=True):
     # The pretty URL provided by Nginx (e.g., "http://proj-a1b2c3d4.localhost:8888").
     # It's 'Optional' because a deployment might fail before a URL is created.
     deployed_url: Optional[str] = None
+
+    # Optional custom domain (e.g., project.butler.example.com)
+    custom_domain: Optional[str] = Field(default=None, index=True)
+
+    # Domain sync status information (e.g., active, pending, error)
+    domain_status: Optional[str] = Field(default=None)
+
+    # Last time domain configuration was synced with Cloudflare
+    last_domain_sync: Optional[datetime.datetime] = Field(default=None)
     
     # Custom project name (optional - if not set, derived from git_url or container_name)
     app_name: Optional[str] = None

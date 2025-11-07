@@ -2407,6 +2407,73 @@ body {
   gap: 2rem;
 }
 
+.domain-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.domain-hint {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.domain-status {
+  margin-top: 1.25rem;
+}
+
+.domain-status-line {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.domain-status-line.status-success {
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.domain-status-line.status-error {
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.domain-status-line.status-warning {
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  background: rgba(234, 179, 8, 0.1);
+}
+
+.domain-status-line.status-info {
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.domain-status-domain {
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.domain-status-meta {
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.domain-status-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.status-muted {
+  color: var(--text-secondary);
+}
+
 .config-option {
   padding: 1.5rem;
   border: 1px solid var(--border-color);

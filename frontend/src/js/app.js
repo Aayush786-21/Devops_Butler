@@ -456,6 +456,9 @@ function setupEventListeners() {
   
   // Spotlight search
   setupSpotlightSearch();
+
+  // Domain warning modal
+  setupDomainWarningModal();
 }
 
 // Spotlight Search Functionality
@@ -533,6 +536,47 @@ function closeSpotlight() {
       </div>
     </div>
   `;
+}
+
+function setupDomainWarningModal() {
+  const modal = document.getElementById('domainWarningModal');
+  if (!modal || modal.dataset.bound === 'true') {
+    return;
+  }
+
+  modal.dataset.bound = 'true';
+
+  const cancelBtn = document.getElementById('domainModalCancelBtn');
+  const openConfigBtn = document.getElementById('domainModalOpenConfigBtn');
+
+  const closeModal = () => {
+    modal.style.display = 'none';
+  };
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', closeModal);
+  }
+
+  if (openConfigBtn) {
+    openConfigBtn.addEventListener('click', () => {
+      closeModal();
+      showProjectContent('domain-config');
+      showProjectDomainConfig();
+    });
+  }
+
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) {
+      closeModal();
+    }
+  });
+}
+
+function showDomainWarningModal() {
+  const modal = document.getElementById('domainWarningModal');
+  if (modal) {
+    modal.style.display = 'flex';
+  }
 }
 
 function handleSpotlightSearch(e) {
@@ -836,13 +880,18 @@ async function loadProjects() {
           }
         }
         
+        const hasActiveDomain = deployment.custom_domain && deployment.domain_status && deployment.domain_status.toLowerCase() === 'active';
+        const preferredUrl = hasActiveDomain
+          ? `https://${deployment.custom_domain}`
+          : (deployment.deployed_url || deployment.app_url || null);
+
         return {
-        id: deployment.id,
+          id: deployment.id,
           name: projectName,
           status: normalizedStatus,
-        url: deployment.deployed_url || deployment.app_url,
-        createdAt: deployment.created_at,
-        updatedAt: deployment.updated_at,
+          url: preferredUrl,
+          createdAt: deployment.created_at,
+          updatedAt: deployment.updated_at,
           repository: repoUrl,
           repository_url: repoUrl,  // Add this for deploy page compatibility
           git_url: gitUrl,  // Always use the git_url from backend
@@ -855,7 +904,10 @@ async function loadProjects() {
           containerPorts: deployment.container_ports || 'No ports',
           containerImage: deployment.container_image || 'Unknown',
           containerStatus: deployment.container_status || 'Unknown',
-          isRunning: deployment.is_running || false
+          isRunning: deployment.is_running || false,
+          custom_domain: deployment.custom_domain || null,
+          domain_status: deployment.domain_status || null,
+          last_domain_sync: deployment.last_domain_sync || null
         };
       });
       filteredProjects = [...allProjects];
@@ -948,13 +1000,15 @@ async function openProjectSite(projectId) {
         return;
       }
     
-    if (!project.url || project.url === '#') {
+    const normalizedUrl = normalizeProjectUrl(project.url);
+
+    if (!normalizedUrl) {
       showToast('Project URL not available. Make sure the project is deployed.', 'error');
       return;
     }
     
     // Open the project URL in a new tab
-    window.open(project.url, '_blank');
+    window.open(normalizedUrl, '_blank');
     showToast(`Opening ${project.name}...`, 'info');
     
   } catch (error) {
@@ -2097,8 +2151,24 @@ async function loadAndDisplayProjectComponents() {
   }
 }
 
+function normalizeProjectUrl(url) {
+  if (!url || url === '#') {
+    return null;
+  }
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return trimmed;
+}
+
 function openSite(url) {
-  if (url) window.open(url, '_blank');
+  const normalized = normalizeProjectUrl(url);
+  if (normalized) {
+    window.open(normalized, '_blank');
+  } else {
+    showToast('Site URL is unavailable', 'error');
+  }
 }
 
 // Environment Variables Detection Dialog
@@ -2504,14 +2574,13 @@ function showProjectDomainConfig() {
             <p>Configure a custom domain for this project</p>
             <div class="form-group">
               <label for="customDomain">Custom Domain</label>
-              <input type="text" id="customDomain" placeholder="example.com" />
-          </div>
-            <button class="btn-primary">Save Domain</button>
+              <input type="text" id="customDomain" placeholder="project-butler.example.com" />
+              <p class="domain-hint" id="domainSuggestion"></p>
             </div>
-          <div class="config-option">
-            <h3>🏠 Use Localhost</h3>
-            <p>Deploy to localhost with dynamic port</p>
-            <button class="btn-secondary">Use Localhost</button>
+            <div class="domain-actions">
+              <button class="btn-primary" id="saveDomainBtn">Save Domain</button>
+            </div>
+            <div class="domain-status" id="domainStatus"></div>
           </div>
         </div>
       </div>
@@ -2520,6 +2589,221 @@ function showProjectDomainConfig() {
   }
   
   domainPage.style.display = 'block';
+
+  setupDomainConfigListeners();
+  loadProjectDomainSettings();
+}
+
+function setupDomainConfigListeners() {
+  const saveBtn = document.getElementById('saveDomainBtn');
+
+  if (saveBtn && !saveBtn.dataset.bound) {
+    saveBtn.dataset.bound = 'true';
+    saveBtn.addEventListener('click', saveProjectDomain);
+  }
+}
+
+function renderDomainStatus(statusEl, data) {
+  if (!statusEl) return;
+
+  if (!data || !data.custom_domain) {
+    statusEl.innerHTML = '<span class="status-muted">No custom domain configured yet.</span>';
+    return;
+  }
+
+  const status = (data.domain_status || 'unknown').toLowerCase();
+  const lastSync = data.last_domain_sync ? formatDateTime(data.last_domain_sync) : 'Never';
+  let statusLabel = 'Unknown';
+  let statusClass = 'status-info';
+  let statusNote = '';
+
+  if (status === 'active') {
+    statusLabel = 'Active';
+    statusClass = 'status-success';
+  } else if (status === 'error') {
+    statusLabel = 'Error';
+    statusClass = 'status-error';
+    statusNote = 'Resolve the issue and save the domain again.';
+  } else if (status === 'pending') {
+    statusLabel = 'Pending';
+    statusClass = 'status-warning';
+    statusNote = 'Domain will be activated automatically after the next successful deployment.';
+  }
+
+  statusEl.innerHTML = `
+    <div class="domain-status-line ${statusClass}">
+      <div class="domain-status-domain">
+        <strong>${escapeHtml(data.custom_domain)}</strong>
+      </div>
+      <div class="domain-status-meta">
+        <span>${statusLabel}</span>
+        <span>Last sync: ${escapeHtml(lastSync)}</span>
+      </div>
+      ${statusNote ? `<p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">${escapeHtml(statusNote)}</p>` : ''}
+    </div>
+  `;
+}
+
+async function loadProjectDomainSettings() {
+  const suggestionEl = document.getElementById('domainSuggestion');
+  const statusEl = document.getElementById('domainStatus');
+  const domainInput = document.getElementById('customDomain');
+
+  if (!currentProject || !currentProject.id) {
+    if (statusEl) {
+      statusEl.innerHTML = '<span class="status-muted">Select a project to configure its domain.</span>';
+    }
+    return;
+  }
+
+  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+  if (!token) {
+    if (statusEl) {
+      statusEl.innerHTML = '<span class="status-error">Please login to manage domains.</span>';
+    }
+    return;
+  }
+
+  if (suggestionEl) {
+    suggestionEl.textContent = 'Loading domain details...';
+  }
+
+  try {
+    const response = await fetch(`/projects/${currentProject.id}/domain`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to load domain info (${response.status})`);
+    }
+
+    const data = await response.json();
+
+    if (domainInput) {
+      domainInput.value = data.custom_domain || data.suggested_domain || '';
+      domainInput.placeholder = data.suggested_domain || `project-${data.butler_domain}`;
+    }
+
+    if (suggestionEl) {
+      suggestionEl.textContent = data.suggested_domain
+      ? `Suggested: ${data.suggested_domain} (single label before ${data.butler_domain}). Leave blank to remove. Domains become active after a successful deploy.`
+      : `Format: project-slug-${data.butler_domain}`;
+    }
+
+    renderDomainStatus(statusEl, data);
+
+    if (currentProject) {
+      currentProject.custom_domain = data.custom_domain;
+      currentProject.domain_status = data.domain_status;
+    }
+  } catch (error) {
+    console.error('Failed to load project domain info:', error);
+    if (statusEl) {
+      statusEl.innerHTML = '<span class="status-error">Could not load domain configuration.</span>';
+    }
+  }
+}
+
+async function saveProjectDomain() {
+  if (!currentProject || !currentProject.id) {
+    showToast('Select a project first', 'error');
+    return;
+  }
+
+  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+  if (!token) {
+    showToast('Please login to manage domains', 'error');
+    return;
+  }
+
+  const domainInput = document.getElementById('customDomain');
+  const enteredDomain = domainInput ? domainInput.value.trim() : '';
+
+  if (!enteredDomain) {
+    if (!currentProject.custom_domain) {
+      showToast('Enter a domain to save, or keep the suggested value.', 'info');
+      return;
+    }
+
+    const confirmed = confirm('Remove the custom domain and revert to the default internal URL?');
+    if (!confirmed) {
+      return;
+    }
+
+    await clearProjectDomain();
+    await loadProjectDomainSettings();
+    return;
+  }
+
+  const payload = {
+    custom_domain: enteredDomain,
+    auto_generate: false
+  };
+
+  try {
+    const response = await fetch(`/projects/${currentProject.id}/domain`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const message = errorData.detail || 'Failed to save domain';
+      throw new Error(message);
+    }
+
+    const data = await response.json();
+    showToast(`Domain saved: ${data.custom_domain}`, 'success');
+
+    await loadProjectDomainSettings();
+  } catch (error) {
+    console.error('Failed to save domain:', error);
+    showToast(error.message || 'Failed to save domain', 'error');
+  }
+}
+
+async function clearProjectDomain() {
+  if (!currentProject || !currentProject.id) {
+    showToast('Select a project first', 'error');
+    return;
+  }
+
+  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+  if (!token) {
+    showToast('Please login to manage domains', 'error');
+    return;
+  }
+
+  try {
+    const response = await fetch(`/projects/${currentProject.id}/domain`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const message = errorData.detail || 'Failed to reset domain';
+      throw new Error(message);
+    }
+
+    showToast('Domain removed. Project will use its internal URL.', 'success');
+    if (currentProject) {
+      currentProject.custom_domain = null;
+      currentProject.domain_status = null;
+    }
+    await loadProjectDomainSettings();
+  } catch (error) {
+    console.error('Failed to clear domain:', error);
+    showToast(error.message || 'Failed to clear domain', 'error');
+  }
 }
 
 function openProject(projectId) {
@@ -2713,6 +2997,23 @@ async function handleDeploy(e) {
   // Reset UI
   deploySuccess.style.display = 'none';
   deployStatus.textContent = '';
+
+  // Warn if no custom domain is configured
+  const customDomain = currentProject?.custom_domain;
+  const domainStatus = currentProject?.domain_status ? currentProject.domain_status.toLowerCase() : null;
+  const hasActiveDomain = customDomain && domainStatus === 'active';
+
+  if (!customDomain) {
+    showToast('No custom domain configured. Configure one so end-users can reach the deployment.', 'warning');
+    showDomainWarningModal();
+    deployStatus.textContent = 'Domain configuration required before deploy.';
+    deployStatus.style.color = 'var(--error)';
+    return;
+  }
+
+  if (customDomain && domainStatus !== 'active') {
+    showToast('Domain saved. It will activate after this deployment.', 'info');
+  }
 
   // Validate URLs based on deployment type
   if (deployType === 'split') {

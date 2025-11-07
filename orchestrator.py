@@ -15,8 +15,9 @@ import re
 import tempfile
 import uuid
 import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Import core modules
 from simple_pipeline import run_deployment_pipeline, extract_repo_name, validate_git_url, run_split_deployment
@@ -24,10 +25,17 @@ import subprocess
 from database import create_db_and_tables, get_session, engine
 from connection_manager import manager
 from sqlmodel import Session, select
+from sqlalchemy import func
 from login import Deployment, User, EnvironmentVariable
 from auth import authenticate_user, create_user, create_access_token, get_current_user
 from repository_tree_api import router as repository_tree_router, router_repos
 from datetime import timedelta
+
+from cloudflare_manager import (
+    ensure_project_hostname,
+    remove_project_hostname,
+    CloudflareError,
+)
 
 # Import robust features (simplified versions)
 from robust_error_handler import global_error_handler, with_error_handling, RetryConfig
@@ -119,6 +127,53 @@ class UserRegister(BaseModel):
 class EnvVarsRequest(BaseModel):
     variables: dict
     project_id: Optional[int] = None
+
+
+class DomainConfigRequest(BaseModel):
+    custom_domain: Optional[str] = None
+    auto_generate: bool = False
+
+
+def _get_butler_domain() -> str:
+    domain = os.getenv("BUTLER_DOMAIN")
+    if not domain:
+        raise HTTPException(status_code=500, detail="BUTLER_DOMAIN environment variable is not configured")
+    return domain.strip().lower()
+
+
+def _slugify_project_name(name: Optional[str], fallback: str) -> str:
+    base = name or fallback
+    slug = re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-")
+    return slug or fallback
+
+
+def _default_project_domain(deployment: Deployment) -> str:
+    base_domain = _get_butler_domain()
+    fallback = f"project-{deployment.id}" if deployment.id else "project"
+    slug = _slugify_project_name(deployment.app_name, fallback)
+    return f"{slug}-{base_domain}"
+
+
+def _derive_service_url(deployed_url: str) -> str:
+    parsed = urlparse(deployed_url)
+    if not parsed.scheme or not parsed.hostname:
+        raise ValueError("Invalid deployed URL for domain mapping")
+
+    port = parsed.port
+    if not port:
+        port = 443 if parsed.scheme == "https" else 80
+
+    return f"{parsed.scheme}://{parsed.hostname}:{port}"
+
+
+def _domain_response(deployment: Deployment) -> Dict[str, Optional[str]]:
+    return {
+        "custom_domain": deployment.custom_domain,
+        "domain_status": deployment.domain_status,
+        "last_domain_sync": deployment.last_domain_sync.isoformat() if deployment.last_domain_sync else None,
+        "suggested_domain": _default_project_domain(deployment),
+        "butler_domain": _get_butler_domain(),
+    }
 
 
 @asynccontextmanager
@@ -880,6 +935,15 @@ async def deploy(
                                     dep.status = "success"
                                     dep.deployed_url = deployed_url
                                     dep.container_name = container_name
+                                    if dep.custom_domain:
+                                        try:
+                                            service_url = _derive_service_url(deployed_url)
+                                            ensure_project_hostname(dep.custom_domain, service_url)
+                                            dep.domain_status = "active"
+                                            dep.last_domain_sync = datetime.datetime.utcnow()
+                                        except (CloudflareError, ValueError) as exc:
+                                            dep.domain_status = "error"
+                                            global_logger.log_error(f"Domain sync failed for project {dep.id}: {exc}")
                                     session.add(dep)
                                     session.commit()
                         return {
@@ -1140,6 +1204,9 @@ def list_deployments(
             "app_name": deployment.app_name,
             "status": real_status,
             "deployed_url": deployment.deployed_url,
+            "custom_domain": deployment.custom_domain,
+            "domain_status": deployment.domain_status,
+            "last_domain_sync": deployment.last_domain_sync,
             "created_at": deployment.created_at,
             "updated_at": deployment.updated_at,
             "user_id": deployment.user_id,
@@ -1214,6 +1281,177 @@ def get_project_components(
         })
     
     return {"components": component_list}
+
+
+@app.get("/projects/{project_id}/domain")
+def get_project_domain(
+    project_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    deployment = session.exec(
+        select(Deployment).where(
+            Deployment.id == project_id,
+            Deployment.user_id == current_user.id
+        )
+    ).first()
+
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if deployment.parent_project_id is not None:
+        raise HTTPException(status_code=400, detail="Domain configuration is only available for main projects")
+
+    return _domain_response(deployment)
+
+
+@app.post("/projects/{project_id}/domain")
+def configure_project_domain(
+    project_id: int,
+    payload: DomainConfigRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    deployment = session.exec(
+        select(Deployment).where(
+            Deployment.id == project_id,
+            Deployment.user_id == current_user.id
+        )
+    ).first()
+
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if deployment.parent_project_id is not None:
+        raise HTTPException(status_code=400, detail="Domain configuration is only available for main projects")
+
+    base_domain = _get_butler_domain()
+
+    desired = payload.custom_domain.strip().lower() if payload.custom_domain else ""
+    if payload.auto_generate or not desired:
+        desired = _default_project_domain(deployment)
+
+    desired = desired.rstrip('.').lower()
+
+    if not desired:
+        raise HTTPException(status_code=400, detail="Domain cannot be empty")
+
+    if not re.fullmatch(r"[a-z0-9.-]+", desired):
+        raise HTTPException(status_code=400, detail="Domain may only contain letters, numbers, hyphens, and dots")
+
+    if not desired.endswith(base_domain):
+        raise HTTPException(status_code=400, detail=f"Domain must end with {base_domain}")
+
+    if desired == base_domain:
+        raise HTTPException(status_code=400, detail="Please choose a subdomain instead of the platform root domain")
+
+    # Prevent multi-label prefixes (e.g., project.foo.base)
+    if desired.count('.') > base_domain.count('.'):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only a single label is allowed before the platform domain. "
+                f"Use a format like project-{base_domain}."
+            )
+        )
+
+    # Ensure domain is not already used by another deployment
+    existing_domain = session.exec(
+        select(Deployment).where(
+            Deployment.custom_domain.is_not(None),
+            func.lower(Deployment.custom_domain) == desired
+        )
+    ).first()
+
+    if existing_domain and existing_domain.id != deployment.id:
+        if existing_domain.user_id != current_user.id:
+            raise HTTPException(status_code=409, detail="This domain is already in use by another account")
+        else:
+            raise HTTPException(status_code=409, detail="This domain is already linked to another project. Remove it there first.")
+
+    # Determine if we can sync with Cloudflare now or after deployment
+    service_url: Optional[str] = None
+    if deployment.deployed_url:
+        try:
+            service_url = _derive_service_url(deployment.deployed_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    deployment.custom_domain = desired
+
+    if service_url:
+        try:
+            ensure_project_hostname(desired, service_url)
+            deployment.domain_status = "active"
+            deployment.last_domain_sync = datetime.datetime.utcnow()
+            action_name = "domain_configured"
+        except CloudflareError as exc:
+            global_logger.log_error(f"Cloudflare configuration failed: {exc}")
+            deployment.domain_status = "error"
+            session.add(deployment)
+            session.commit()
+            raise HTTPException(status_code=502, detail=f"Failed to configure Cloudflare: {exc}")
+    else:
+        deployment.domain_status = "pending"
+        deployment.last_domain_sync = None
+        action_name = "domain_pending"
+
+    session.add(deployment)
+    session.commit()
+
+    global_logger.log_user_action(
+        user_id=str(current_user.id),
+        action=action_name,
+        details={
+            "project_id": project_id,
+            "custom_domain": desired,
+            "service_url": service_url,
+        }
+    )
+
+    return _domain_response(deployment)
+
+
+@app.delete("/projects/{project_id}/domain")
+def clear_project_domain(
+    project_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    deployment = session.exec(
+        select(Deployment).where(
+            Deployment.id == project_id,
+            Deployment.user_id == current_user.id
+        )
+    ).first()
+
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if deployment.parent_project_id is not None:
+        raise HTTPException(status_code=400, detail="Domain configuration is only available for main projects")
+
+    if deployment.custom_domain:
+        try:
+            remove_project_hostname(deployment.custom_domain)
+        except CloudflareError as exc:
+            global_logger.log_error(f"Cloudflare domain removal failed: {exc}")
+            raise HTTPException(status_code=502, detail=f"Failed to remove Cloudflare domain: {exc}")
+
+    deployment.custom_domain = None
+    deployment.domain_status = None
+    deployment.last_domain_sync = None
+    session.add(deployment)
+    session.commit()
+
+    global_logger.log_user_action(
+        user_id=str(current_user.id),
+        action="domain_cleared",
+        details={"project_id": project_id}
+    )
+
+    return _domain_response(deployment)
+
 
 @app.delete("/deployments/clear")
 def clear_user_deployments(
