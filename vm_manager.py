@@ -55,6 +55,28 @@ class VMManager:
                 await self._start_vm(vm_name)
                 await self._wait_for_vm_ready(vm_name)
             
+            # Ensure VM is set up (install dependencies if not already installed)
+            # Check if git is installed, if not, run setup automatically
+            try:
+                git_check = await self.exec_in_vm(vm_name, "which git")
+                if git_check.returncode != 0 or not git_check.stdout.strip():
+                    logger.info(f"Git not found in VM {vm_name}, running automatic setup...")
+                    setup_success = await self._setup_vm(vm_name, vm_info)
+                    if setup_success:
+                        logger.info(f"VM setup completed successfully for {vm_name}")
+                    else:
+                        logger.warning(f"VM setup completed with warnings for {vm_name}")
+                else:
+                    logger.info(f"VM {vm_name} is already set up (dependencies installed)")
+            except Exception as e:
+                logger.warning(f"Failed to check git installation: {e}, running setup automatically...")
+                try:
+                    await self._setup_vm(vm_name, vm_info)
+                    logger.info(f"VM setup completed for {vm_name} after error recovery")
+                except Exception as setup_error:
+                    logger.error(f"Failed to run setup for {vm_name}: {setup_error}")
+                    # Continue anyway - setup will be retried on first deployment
+            
             return vm_info
         
         # Create new VM
@@ -286,9 +308,10 @@ class VMManager:
         """Check if VM is accessible via orbctl run"""
         try:
             # Try to execute a simple command via orbctl run
+            # Correct syntax: orbctl --machine <vm_name> run <command>
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["orbctl", "run", vm_name, "--", "echo", "test"],
+                ["orbctl", "--machine", vm_name, "run", "echo", "test"],
                 capture_output=True,
                 text=True,
                 timeout=5
@@ -309,9 +332,10 @@ class VMManager:
             # Only if VM is ready (don't call exec_in_vm if VM might not be ready)
             try:
                 # Simple command to get IP
+                # Correct syntax: orbctl --machine <vm_name> run <command>
                 result = await asyncio.to_thread(
                     subprocess.run,
-                    ["orbctl", "run", vm_name, "--", "hostname", "-I"],
+                    ["orbctl", "--machine", vm_name, "run", "hostname", "-I"],
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -341,46 +365,128 @@ class VMManager:
             }
     
     async def _setup_vm(self, vm_name: str, vm_info: Dict[str, str]) -> bool:
-        """Setup VM with necessary dependencies"""
+        """Setup VM with necessary dependencies automatically"""
         try:
-            logger.info(f"Setting up VM: {vm_name}")
+            logger.info(f"Starting automatic VM setup for: {vm_name}")
             
-            # Install basic dependencies
+            # Install basic dependencies (use sudo for all commands)
+            # These commands are run automatically when VM is created
             setup_commands = [
-                # Update package list
-                "apt-get update -y",
-                # Install essential tools
-                "apt-get install -y git curl wget python3 python3-pip nodejs npm build-essential",
-                # Install Node.js (if not installed or outdated)
-                "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs",
-                # Create projects directory
-                "mkdir -p /projects",
-                # Install process manager (PM2) for Node.js apps
-                "npm install -g pm2",
-                # Install Python package manager
-                "pip3 install --upgrade pip",
+                # Update package list (required first)
+                {
+                    "cmd": "sudo apt-get update -y",
+                    "name": "Update package list",
+                    "required": True
+                },
+                # Install essential tools (git, curl, wget, python3, etc.)
+                {
+                    "cmd": "sudo apt-get install -y git curl wget python3 python3-pip build-essential",
+                    "name": "Install essential tools",
+                    "required": True
+                },
+                # Install Node.js LTS version
+                {
+                    "cmd": "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - && sudo apt-get install -y nodejs",
+                    "name": "Install Node.js",
+                    "required": False  # Optional, can skip if fails
+                },
+                # Create projects directory in user's home directory with proper permissions
+                # Get username first, then create projects directory
+                {
+                    "cmd": "mkdir -p ~/projects && chmod 755 ~/projects",
+                    "name": "Create projects directory in home",
+                    "required": True
+                },
+                # Install process manager (PM2) for Node.js apps (globally)
+                {
+                    "cmd": "sudo npm install -g pm2",
+                    "name": "Install PM2",
+                    "required": False  # Optional, can skip if fails
+                },
+                # Install Python package manager (upgrade pip)
+                {
+                    "cmd": "sudo pip3 install --upgrade pip",
+                    "name": "Upgrade pip",
+                    "required": False  # Optional, can skip if fails
+                },
             ]
             
-            for cmd in setup_commands:
-                result = await self.exec_in_vm(vm_name, cmd)
-                if result.returncode != 0:
-                    logger.warning(f"Setup command failed: {cmd} - {result.stderr}")
-                    # Continue with other commands even if one fails
+            success_count = 0
+            failed_required = []
             
-            logger.info(f"VM setup completed: {vm_name}")
+            for setup_item in setup_commands:
+                cmd = setup_item["cmd"]
+                name = setup_item["name"]
+                required = setup_item.get("required", True)
+                
+                try:
+                    logger.info(f"Running setup step: {name}...")
+                    result = await self.exec_in_vm(vm_name, cmd)
+                    if result.returncode != 0:
+                        error_output = result.stderr or result.stdout or "Unknown error"
+                        if required:
+                            logger.error(f"Required setup step failed: {name} - {error_output}")
+                            failed_required.append(name)
+                        else:
+                            logger.warning(f"Optional setup step failed: {name} - {error_output}")
+                    else:
+                        logger.info(f"Setup step completed: {name}")
+                        success_count += 1
+                except Exception as e:
+                    if required:
+                        logger.error(f"Required setup step failed: {name} - {str(e)}")
+                        failed_required.append(name)
+                    else:
+                        logger.warning(f"Optional setup step failed: {name} - {str(e)}")
+            
+            # Verify critical dependencies are installed
+            logger.info(f"Verifying critical dependencies for {vm_name}...")
+            critical_deps = {
+                "git": "which git",
+                "python3": "which python3",
+                "curl": "which curl"
+            }
+            
+            missing_deps = []
+            for dep_name, check_cmd in critical_deps.items():
+                try:
+                    check_result = await self.exec_in_vm(vm_name, check_cmd)
+                    if check_result.returncode != 0 or not check_result.stdout.strip():
+                        missing_deps.append(dep_name)
+                        logger.warning(f"Critical dependency not found: {dep_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to check dependency {dep_name}: {e}")
+                    missing_deps.append(dep_name)
+            
+            if failed_required:
+                logger.error(f"VM setup failed for {vm_name}: Required steps failed - {', '.join(failed_required)}")
+                return False
+            
+            if missing_deps:
+                logger.warning(f"VM setup completed for {vm_name} but some dependencies are missing: {', '.join(missing_deps)}")
+                # Try to install missing dependencies
+                if "git" in missing_deps:
+                    logger.info(f"Retrying git installation for {vm_name}...")
+                    git_result = await self.exec_in_vm(vm_name, "sudo apt-get install -y git")
+                    if git_result.returncode == 0:
+                        logger.info(f"Git installed successfully for {vm_name}")
+                    else:
+                        logger.error(f"Failed to install git for {vm_name}")
+                        return False
+            
+            logger.info(f"VM setup completed successfully for {vm_name} ({success_count}/{len(setup_commands)} steps completed)")
             return True
             
         except Exception as e:
-            logger.error(f"Error setting up VM: {e}")
+            logger.error(f"Error setting up VM {vm_name}: {e}", exc_info=True)
             return False
     
     async def exec_in_vm(self, vm_name: str, command: str, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
         """Execute command in VM using orbctl run"""
         try:
-            # orbctl run <name> -- <command>
-            # Note: orbctl run runs on the default machine if name not specified
-            # We need to specify the machine name
-            exec_cmd = ["orbctl", "run", vm_name, "--"]
+            # Correct syntax: orbctl --machine <vm_name> run <command>
+            # Or: orbctl run -m <vm_name> <command>
+            # We use --machine flag to specify the VM name
             
             # Build the command with working directory and environment variables
             parts = []
@@ -409,8 +515,9 @@ class VMManager:
             else:
                 full_command = command
             
-            # Execute with sh -c
-            exec_cmd.extend(["sh", "-c", full_command])
+            # Execute with sh -c using --machine flag
+            # Syntax: orbctl --machine <vm_name> run sh -c "<command>"
+            exec_cmd = ["orbctl", "--machine", vm_name, "run", "sh", "-c", full_command]
             
             result = await asyncio.to_thread(
                 subprocess.run,
@@ -421,7 +528,7 @@ class VMManager:
             )
             return result
         except Exception as e:
-            logger.error(f"Error executing command in VM: {e}")
+            logger.error(f"Error executing command in VM {vm_name}: {e}")
             raise
     
     async def copy_to_vm(self, vm_name: str, local_path: str, remote_path: str) -> bool:
@@ -492,29 +599,114 @@ class VMManager:
             return False
     
     async def delete_vm(self, vm_name: str, user_id: int) -> bool:
-        """Delete an OrbStack VM"""
+        """Delete an OrbStack VM completely"""
         try:
-            # Stop VM first
-            await self.stop_vm(vm_name)
+            logger.info(f"Starting VM deletion process for {vm_name} (user {user_id})...")
             
-            # Delete VM using orbctl delete
-            # orbctl delete <name>
+            # First, check if VM exists
+            vm_exists = await self._check_vm_exists(vm_name)
+            if not vm_exists:
+                logger.warning(f"VM {vm_name} does not exist, nothing to delete")
+                # Remove from config anyway
+                if user_id in self.vm_configs:
+                    del self.vm_configs[user_id]
+                return True  # Consider it successful if VM doesn't exist
+            
+            # Stop VM first (if it's running)
+            logger.info(f"Stopping VM {vm_name} before deletion...")
+            stop_result = await self.stop_vm(vm_name)
+            if not stop_result:
+                logger.warning(f"Failed to stop VM {vm_name}, attempting deletion anyway...")
+            
+            # Wait a moment for VM to fully stop
+            await asyncio.sleep(2)
+            
+            # Delete VM using orbctl delete with --force flag
+            # Use --force to avoid any confirmation prompts
+            logger.info(f"Deleting VM {vm_name} with force flag...")
+            delete_cmd = ["orbctl", "delete", "--force", vm_name]
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["orbctl", "delete", vm_name],
+                delete_cmd,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=60  # Increase timeout for deletion
             )
             
-            if result.returncode == 0:
+            # Log the output for debugging
+            logger.info(f"orbctl delete --force stdout: {result.stdout}")
+            logger.info(f"orbctl delete --force stderr: {result.stderr}")
+            logger.info(f"orbctl delete --force returncode: {result.returncode}")
+            
+            # Wait a moment for deletion to complete
+            await asyncio.sleep(3)
+            
+            # Verify VM was actually deleted
+            vm_still_exists = await self._check_vm_exists(vm_name)
+            
+            if result.returncode == 0 and not vm_still_exists:
+                logger.info(f"VM {vm_name} successfully deleted")
                 # Remove from config
                 if user_id in self.vm_configs:
                     del self.vm_configs[user_id]
+                    logger.info(f"Removed VM config for user {user_id}")
                 return True
-            return False
+            elif vm_still_exists:
+                # VM still exists, try alternative deletion methods
+                logger.error(f"VM {vm_name} still exists after delete --force command")
+                logger.info(f"Attempting alternative deletion methods for VM {vm_name}...")
+                
+                # Try with -f flag (shorthand for --force)
+                try:
+                    logger.info(f"Attempting deletion with -f flag for VM {vm_name}...")
+                    last_result = await asyncio.to_thread(
+                        subprocess.run,
+                        ["orbctl", "delete", "-f", vm_name],
+                        capture_output=True,
+                        text=True,
+                        timeout=60
+                    )
+                    await asyncio.sleep(3)
+                    vm_still_exists_last = await self._check_vm_exists(vm_name)
+                    if not vm_still_exists_last:
+                        logger.info(f"VM {vm_name} deleted successfully with -f flag")
+                        if user_id in self.vm_configs:
+                            del self.vm_configs[user_id]
+                        return True
+                    else:
+                        logger.error(f"VM {vm_name} still exists after -f flag deletion attempt")
+                        logger.error(f"Delete command output: {last_result.stdout}")
+                        logger.error(f"Delete command error: {last_result.stderr}")
+                        return False
+                except Exception as last_error:
+                    logger.error(f"Last resort deletion method failed: {last_error}")
+                    return False
+            else:
+                # Command failed but VM might still be deleted
+                error_msg = f"Delete command returned non-zero: {result.stderr or result.stdout}"
+                logger.error(error_msg)
+                if not vm_still_exists:
+                    # VM was deleted despite error code
+                    logger.info(f"VM {vm_name} was deleted (verified, despite error code)")
+                    if user_id in self.vm_configs:
+                        del self.vm_configs[user_id]
+                    return True
+                else:
+                    logger.error(f"VM {vm_name} still exists after failed delete attempt")
+                    return False
         except Exception as e:
-            logger.error(f"Error deleting VM: {e}")
+            logger.error(f"Error deleting VM {vm_name}: {e}", exc_info=True)
+            # Try to verify if VM was deleted despite the exception
+            try:
+                vm_still_exists = await self._check_vm_exists(vm_name)
+                if not vm_still_exists:
+                    logger.info(f"VM {vm_name} was deleted despite exception")
+                    # Remove from config
+                    if user_id in self.vm_configs:
+                        del self.vm_configs[user_id]
+                    return True
+            except Exception as check_error:
+                logger.error(f"Error checking VM existence after deletion exception: {check_error}")
             return False
     
     async def list_user_vms(self, user_id: Optional[int] = None) -> List[Dict[str, str]]:

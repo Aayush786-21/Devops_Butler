@@ -4,7 +4,7 @@ A simplified, reliable deployment automation platform with essential robustness 
 No Nginx proxy, no GitHub OAuth, no OpenAI dependencies - just clean, working deployment.
 """
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, UploadFile, File, Form, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, HttpUrl
@@ -41,9 +41,12 @@ from cloudflare_manager import (
 # Import robust features (simplified versions)
 from robust_error_handler import global_error_handler, with_error_handling, RetryConfig
 from robust_logging import global_logger, LogLevel, LogCategory
+import logging
 
 # Helper functions - Process-based (no Docker)
 from process_manager import process_manager as pm
+
+logger = logging.getLogger(__name__)
 
 def get_running_processes():
     """Get list of currently running process project IDs"""
@@ -79,9 +82,11 @@ def get_process_details():
                 continue
             except Exception as e:
                 # Skip this process on error
+                logger.debug(f"Error getting details for process {project_id}: {e}")
                 continue
     except Exception as e:
         # Process manager may not be initialized yet
+        logger.debug(f"Error getting process details: {e}")
         pass
     return processes
 
@@ -357,7 +362,7 @@ async def login(user_credentials: UserLogin):
     }
 
 @app.post("/api/auth/register")
-async def register(user_data: UserRegister):
+async def register(user_data: UserRegister, background_tasks: BackgroundTasks):
     """User registration endpoint"""
     try:
         global_logger.log_user_action(
@@ -374,20 +379,24 @@ async def register(user_data: UserRegister):
             )
         
         # Create VM for the new user asynchronously (don't block registration)
-        # This runs in the background so user registration completes quickly
+        # Use FastAPI BackgroundTasks to ensure the task is properly tracked and executed
         try:
             from auth import create_user_vm
-            # Create VM in background task - this runs after response is sent
-            # Since we're in an async function, we can use create_task directly
-            asyncio.create_task(create_user_vm(user.id))
+            # Add VM creation as a background task - FastAPI will ensure it runs after response is sent
+            background_tasks.add_task(create_user_vm, user.id)
+            
             global_logger.log_user_action(
                 user_id=str(user.id),
                 action="vm_creation_started",
                 details={"username": user.username, "vm_name": f"butler-user-{user.id}"}
             )
+            logger.info(f"VM creation task scheduled for user {user.id} via BackgroundTasks")
         except Exception as vm_error:
+            import traceback
+            error_trace = traceback.format_exc()
             # Log VM creation error but don't fail user registration
-            global_logger.log_error(f"Failed to start VM creation for user {user.id}: {vm_error}")
+            logger.error(f"Failed to schedule VM creation for user {user.id}: {vm_error}\n{error_trace}")
+            global_logger.log_error(f"Failed to schedule VM creation for user {user.id}: {vm_error}\n{error_trace}")
             # User registration still succeeds even if VM creation fails
             # VM will be created on first deployment attempt
         
@@ -2316,18 +2325,66 @@ async def delete_user_account(
             for ev in remaining_env_vars:
                 session.delete(ev)
             
-            # Delete VM if it exists
-            if vm_exists and vm_name:
+            # Delete VM if it exists (always try to delete, even if vm_exists check failed)
+            if vm_name:
                 try:
+                    logger.info(f"Attempting to delete VM {vm_name} for user {current_user.id}...")
                     vm_deleted = await vm_manager.delete_vm(vm_name, current_user.id)
                     if vm_deleted:
+                        logger.info(f"VM {vm_name} successfully deleted")
                         global_logger.log_user_action(
                             user_id=str(current_user.id),
                             action="vm_deleted",
                             details={"vm_name": vm_name}
                         )
+                    else:
+                        logger.error(f"Failed to delete VM {vm_name}")
+                        global_logger.log_error(f"Failed to delete VM {vm_name} for user {current_user.id}")
+                        # Verify VM was actually deleted
+                        try:
+                            vm_still_exists = await vm_manager._check_vm_exists(vm_name)
+                            if vm_still_exists:
+                                logger.error(f"VM {vm_name} still exists after deletion attempt - this is a critical error")
+                                global_logger.log_error(f"VM {vm_name} still exists after deletion attempt")
+                            else:
+                                logger.info(f"VM {vm_name} was deleted (verified)")
+                                vm_deleted = True
+                        except Exception as verify_error:
+                            logger.error(f"Error verifying VM deletion: {verify_error}")
                 except Exception as e:
-                    global_logger.log_error(f"Error deleting VM {vm_name}: {e}")
+                    import traceback
+                    error_trace = traceback.format_exc()
+                    logger.error(f"Error deleting VM {vm_name}: {e}\n{error_trace}")
+                    global_logger.log_error(f"Error deleting VM {vm_name}: {e}\n{error_trace}")
+                    # Try one more time with direct orbctl command as fallback (with --force flag)
+                    try:
+                        logger.info(f"Attempting fallback VM deletion for {vm_name} with --force flag...")
+                        import subprocess
+                        fallback_result = await asyncio.to_thread(
+                            subprocess.run,
+                            ["orbctl", "delete", "--force", vm_name],
+                            capture_output=True,
+                            text=True,
+                            timeout=60
+                        )
+                        await asyncio.sleep(2)  # Wait for deletion to complete
+                        # Verify VM was deleted
+                        vm_still_exists_fallback = await vm_manager._check_vm_exists(vm_name)
+                        if not vm_still_exists_fallback:
+                            logger.info(f"VM {vm_name} deleted successfully using fallback method with --force")
+                            global_logger.log_user_action(
+                                user_id=str(current_user.id),
+                                action="vm_deleted_fallback",
+                                details={"vm_name": vm_name, "method": "fallback_with_force"}
+                            )
+                        else:
+                            logger.error(f"VM {vm_name} still exists after fallback deletion attempt")
+                            logger.error(f"Fallback deletion output: {fallback_result.stdout}")
+                            logger.error(f"Fallback deletion error: {fallback_result.stderr}")
+                    except Exception as fallback_error:
+                        import traceback
+                        fallback_trace = traceback.format_exc()
+                        logger.error(f"Fallback VM deletion also failed: {fallback_error}\n{fallback_trace}")
                     # Continue with user deletion even if VM deletion fails
             
             # Delete user account

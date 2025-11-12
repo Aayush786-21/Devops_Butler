@@ -300,6 +300,13 @@ let username = localStorage.getItem('username');
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
+  // Clear sidebar search field to prevent username from appearing
+  const sidebarSearch = document.getElementById('sidebarSearch');
+  if (sidebarSearch) {
+    sidebarSearch.value = '';
+    sidebarSearch.setAttribute('autocomplete', 'off');
+  }
+  
   // Check auth first - will redirect if not logged in
   checkAuthStatus();
   
@@ -311,6 +318,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (authToken && username) {
         setupEventListeners();
         setupCommandPalette();
+        
+        // Ensure sidebar search is still empty (in case browser autofilled it)
+        const sidebarSearchAfter = document.getElementById('sidebarSearch');
+        if (sidebarSearchAfter && sidebarSearchAfter.value === username) {
+          sidebarSearchAfter.value = '';
+        }
         
         // Show projects page by default
         const projectsPage = document.getElementById('page-projects');
@@ -4894,6 +4907,17 @@ async function loadUserProfile() {
       
       // Update team name and project owner information
       updateTeamAndOwnerInfo(data.display_name || data.username || 'User');
+      
+      // Ensure sidebar search field is not populated with username (clear if it was autofilled)
+      const sidebarSearch = document.getElementById('sidebarSearch');
+      if (sidebarSearch) {
+        // Clear if it contains username or display name
+        const searchValue = sidebarSearch.value.trim();
+        if (searchValue === (data.username || '') || searchValue === (data.display_name || '')) {
+          sidebarSearch.value = '';
+        }
+      }
+      
       if (userEmail) {
         userEmail.textContent = data.email || 'Logged in';
       }

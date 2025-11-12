@@ -185,9 +185,10 @@ def create_user(username: str, email: str, password: str) -> Optional[User]:
 
 async def create_user_vm(user_id: int) -> bool:
     """
-    Create an OrbStack VM for a user.
+    Create an OrbStack VM for a user with automatic setup.
     This is called asynchronously after user creation.
     Updates user.vm_status to track creation progress.
+    Automatically installs all dependencies (git, nodejs, python3, etc.) during setup.
     """
     logger = logging.getLogger(__name__)
     try:
@@ -201,9 +202,34 @@ async def create_user_vm(user_id: int) -> bool:
                 session.add(user)
                 session.commit()
         
-        logger.info(f"Creating VM for user {user_id}")
+        logger.info(f"Creating VM for user {user_id}...")
         vm_info = await vm_manager.get_or_create_user_vm(user_id)
-        logger.info(f"VM created successfully for user {user_id}: {vm_info.get('vm_name')}")
+        vm_name = vm_info.get('vm_name')
+        logger.info(f"VM created successfully for user {user_id}: {vm_name}")
+        
+        # Ensure VM setup is complete (install dependencies)
+        # This will check if git is installed and run setup if needed
+        # For new VMs, setup is already run in _create_vm, but we verify it completed
+        logger.info(f"Verifying VM setup for {vm_name}...")
+        try:
+            # Check if git is installed (indicator that setup completed)
+            git_check = await vm_manager.exec_in_vm(vm_name, "which git")
+            if git_check.returncode != 0 or not git_check.stdout.strip():
+                logger.info(f"Git not found in VM {vm_name}, running setup...")
+                await vm_manager._setup_vm(vm_name, vm_info)
+                logger.info(f"VM setup completed for {vm_name}")
+            else:
+                logger.info(f"VM {vm_name} is already set up (git found)")
+        except Exception as setup_error:
+            logger.warning(f"Setup verification failed for {vm_name}: {setup_error}, but continuing...")
+            # Try to run setup anyway
+            try:
+                await vm_manager._setup_vm(vm_name, vm_info)
+                logger.info(f"VM setup completed for {vm_name} after retry")
+            except Exception as setup_retry_error:
+                logger.error(f"VM setup failed for {vm_name}: {setup_retry_error}")
+                # Don't fail VM creation if setup fails - user can still deploy
+                # Setup will be retried on first deployment
         
         # Update user status to 'ready'
         with Session(engine) as session:
@@ -213,6 +239,7 @@ async def create_user_vm(user_id: int) -> bool:
                 session.add(user)
                 session.commit()
         
+        logger.info(f"VM creation and setup completed for user {user_id}")
         return True
     except Exception as e:
         # Log error and update status to 'failed'

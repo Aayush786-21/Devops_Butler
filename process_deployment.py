@@ -13,8 +13,11 @@ import json
 import re
 import socket
 import datetime
+import logging
 from typing import Optional, Tuple, Dict
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from utils import (
     validate_git_url,
@@ -349,15 +352,42 @@ async def run_process_deployment(
         
         await manager.broadcast(f"✅ Using VM: {vm_name}")
         
+        # Get the username from the VM dynamically
+        try:
+            username_result = await vm_manager.exec_in_vm(vm_name, "whoami")
+            if username_result.returncode == 0 and username_result.stdout.strip():
+                vm_username = username_result.stdout.strip()
+                logger.info(f"VM username detected: {vm_username}")
+            else:
+                # Fallback to $USER environment variable
+                user_env_result = await vm_manager.exec_in_vm(vm_name, "echo $USER")
+                if user_env_result.returncode == 0 and user_env_result.stdout.strip():
+                    vm_username = user_env_result.stdout.strip()
+                    logger.info(f"VM username from $USER: {vm_username}")
+                else:
+                    # Fallback: extract from $HOME
+                    home_result = await vm_manager.exec_in_vm(vm_name, "echo $HOME")
+                    if home_result.returncode == 0 and home_result.stdout.strip():
+                        home_path = home_result.stdout.strip()
+                        vm_username = home_path.split('/')[-1] if home_path.startswith('/home/') else 'ubuntu'
+                        logger.info(f"VM username from $HOME: {vm_username}")
+                    else:
+                        # Last resort: default to 'ubuntu'
+                        vm_username = 'ubuntu'
+                        logger.warning(f"Could not detect VM username, using default: {vm_username}")
+        except Exception as e:
+            logger.warning(f"Failed to get VM username: {e}, using default")
+            vm_username = 'ubuntu'  # Default fallback
+        
         # Extract repository name
         repo_name = extract_repo_name(git_url)
         project_id = f"{repo_name}-{str(uuid.uuid4())[:8]}"
         
         await manager.broadcast(f"🚀 Starting VM-based deployment: {project_id}")
         
-        # Project directory inside VM
-        # Use /projects/{project_id} inside the VM
-        vm_project_dir = f"/projects/{project_id}"
+        # Project directory inside VM user's home directory
+        # Use format: /home/{username}/projects/{project_id}
+        vm_project_dir = f"/home/{vm_username}/projects/{project_id}"
         
         # Resolve root directory within VM project directory
         if root_directory and root_directory != "./":
@@ -380,11 +410,33 @@ async def run_process_deployment(
                 if db_deployment:
                     deployment_id = db_deployment.id  # Store ID for later use
                     if db_deployment.project_dir:
-                        # Use existing project directory in VM
-                        project_dir = db_deployment.project_dir
+                        # Check if project_dir is in old format (/projects/...) and migrate to home directory
+                        old_project_dir = db_deployment.project_dir
+                        if old_project_dir.startswith('/projects/'):
+                            # Migrate from old /projects/ format to /home/username/projects/ format
+                            deployment_id_from_path = old_project_dir.split('/')[-1]
+                            new_project_dir = f"/home/{vm_username}/projects/{deployment_id_from_path}"
+                            logger.info(f"Migrating project directory from {old_project_dir} to {new_project_dir}")
+                            # Move the directory if it exists
+                            try:
+                                move_result = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"mv {old_project_dir} {new_project_dir} 2>&1 || echo 'MOVE_FAILED'"
+                                )
+                                if 'MOVE_FAILED' not in move_result.stdout:
+                                    logger.info(f"Successfully migrated project directory")
+                                else:
+                                    logger.warning(f"Directory migration may have failed: {move_result.stdout}")
+                            except Exception as e:
+                                logger.warning(f"Failed to migrate directory: {e}")
+                            project_dir = new_project_dir
+                            db_deployment.project_dir = new_project_dir
+                        else:
+                            # Use existing project directory in VM (already in home directory format)
+                            project_dir = db_deployment.project_dir
                         vm_project_dir = project_dir  # Update vm_project_dir to match existing project_dir
                     else:
-                        # Create new directory and update
+                        # Create new directory and update with home directory path
                         db_deployment.project_dir = project_dir
                         db_deployment.vm_name = vm_name
                         db_deployment.vm_ip = vm_ip
@@ -410,7 +462,27 @@ async def run_process_deployment(
                     db_deployment = existing_child
                     deployment_id = db_deployment.id  # Store ID for later use
                     if db_deployment.project_dir:
-                        project_dir = db_deployment.project_dir
+                        # Check if project_dir is in old format (/projects/...) and migrate to home directory
+                        old_project_dir = db_deployment.project_dir
+                        if old_project_dir.startswith('/projects/'):
+                            # Migrate from old /projects/ format to /home/username/projects/ format
+                            deployment_id_from_path = old_project_dir.split('/')[-1]
+                            new_project_dir = f"/home/{vm_username}/projects/{deployment_id_from_path}"
+                            logger.info(f"Migrating child project directory from {old_project_dir} to {new_project_dir}")
+                            # Move the directory if it exists
+                            try:
+                                move_result = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"mv {old_project_dir} {new_project_dir} 2>&1 || echo 'MOVE_FAILED'"
+                                )
+                                if 'MOVE_FAILED' not in move_result.stdout:
+                                    logger.info(f"Successfully migrated child project directory")
+                            except Exception as e:
+                                logger.warning(f"Failed to migrate child directory: {e}")
+                            project_dir = new_project_dir
+                            db_deployment.project_dir = new_project_dir
+                        else:
+                            project_dir = db_deployment.project_dir
                         vm_project_dir = project_dir  # Update vm_project_dir to match existing project_dir
                     else:
                         db_deployment.project_dir = project_dir
@@ -484,16 +556,23 @@ async def run_process_deployment(
             if update_result.returncode != 0:
                 await manager.broadcast(f"⚠️ Git pull failed: {update_result.stderr}")
         else:
-            # Create project directory if it doesn't exist
-            # Extract parent directory from vm_project_dir (e.g., /projects from /projects/project-id)
+            # Create project directory in user's home directory if it doesn't exist
+            # Extract parent directory from vm_project_dir (e.g., /home/username/projects from /home/username/projects/project-id)
             parent_dir = "/".join(vm_project_dir.rstrip("/").split("/")[:-1])
             if not parent_dir:
-                parent_dir = "/projects"
+                # Fallback: use user's home directory projects folder
+                parent_dir = f"/home/{vm_username}/projects"
             
-            await vm_manager.exec_in_vm(
+            # Create parent directory in user's home (no sudo needed)
+            mkdir_result = await vm_manager.exec_in_vm(
                 vm_name,
-                f"mkdir -p {parent_dir}"
+                f"mkdir -p {parent_dir} && chmod 755 {parent_dir}"
             )
+            if mkdir_result.returncode != 0:
+                error_output = mkdir_result.stderr or mkdir_result.stdout or "Unknown error"
+                error_msg = f"Failed to create parent directory {parent_dir} in VM: {error_output}"
+                await manager.broadcast(f"❌ {error_msg}")
+                raise Exception(error_msg)
             
             # Clone repository inside VM
             clone_result = await vm_manager.exec_in_vm(
@@ -517,67 +596,269 @@ async def run_process_deployment(
             await manager.broadcast("✅ Repository cloned successfully in VM")
         
         # Auto-detect build and start commands if not provided
-        # Need to check files inside VM
-        if not build_command or not start_command:
-            await manager.broadcast("🔍 Auto-detecting build and start commands in VM...")
-            # List files in project directory to check for package.json, etc.
-            ls_result = await vm_manager.exec_in_vm(
-                vm_name,
-                f"ls -la {vm_project_dir}",
-                cwd=vm_project_dir
-            )
+        # Priority: 1. User-provided, 2. AI analysis results from DB, 3. File-based detection
+        if not build_command or not start_command or not port:
+            await manager.broadcast("🔍 Auto-detecting build and start commands...")
             
-            # For now, use a simple detection by checking for package.json
-            # We'll improve this later with better detection logic
-            check_package_json = await vm_manager.exec_in_vm(
-                vm_name,
-                f"test -f {vm_project_dir}/package.json && echo 'nodejs' || echo 'unknown'"
-            )
+            # PRIORITY 1: Check for AI analysis results in database (if deployment exists)
+            # AI analysis runs in background after import, so results may already be available
+            ai_detected = False
+            if deployment_id:
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment:
+                        # Use AI analysis results if available (these are set by project_analyzer.py)
+                        if not build_command and deployment.build_command:
+                            build_command = deployment.build_command
+                            ai_detected = True
+                            await manager.broadcast(f"🤖 Using AI-detected build command: {build_command}")
+                        
+                        if not start_command and deployment.start_command:
+                            start_command = deployment.start_command
+                            ai_detected = True
+                            await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
+                        
+                        if not port and deployment.port:
+                            port = deployment.port
+                            ai_detected = True
+                            await manager.broadcast(f"🤖 Using AI-detected port: {port}")
             
-            # Simple detection - can be improved
-            if "nodejs" in (check_package_json.stdout or ""):
-                if not build_command:
-                    build_command = "npm install"
-                if not start_command:
-                    start_command = "npm start"
-                if not port:
-                    port = 3000
-            
-            # If still not detected, use default detection function
-            # We need to copy files temporarily to detect, or run detection inside VM
-            # For now, let's use a basic approach
+            # PRIORITY 2: Use dockerfile_parser for Docker-based detection (if AI results not available)
             if not build_command or not start_command:
-                # Try to detect by checking for common files
-                # This is a simplified version - full detection would need to read files
-                detected_build, detected_start, detected_port = None, None, None
+                await manager.broadcast("📁 Checking project files for build/start commands...")
                 
-                # Check for Node.js
-                check_node = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"test -f {vm_project_dir}/package.json && cat {vm_project_dir}/package.json | grep -q '\"scripts\"' && echo 'nodejs' || echo 'no'"
-                )
+                # Check for docker-compose.yml first (use dockerfile_parser)
+                compose_files = ['docker-compose.yml', 'docker-compose.yaml']
+                for compose_file in compose_files:
+                    compose_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"test -f {vm_project_dir}/{compose_file} && echo 'found' || echo 'not_found'"
+                    )
+                    if "found" in (compose_check.stdout or ""):
+                        # Read docker-compose file
+                        compose_content = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"cat {vm_project_dir}/{compose_file}"
+                        )
+                        if compose_content.returncode == 0 and compose_content.stdout:
+                            # Use dockerfile_parser to parse docker-compose
+                            try:
+                                # Write content to temp file for parsing
+                                import tempfile
+                                with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as tmp_file:
+                                    tmp_file.write(compose_content.stdout)
+                                    tmp_compose_path = tmp_file.name
+                                
+                                compose_info = parse_docker_compose(tmp_compose_path)
+                                if compose_info:
+                                    # Find main service
+                                    main_service = None
+                                    for service_name in ['web', 'app', 'frontend', 'main']:
+                                        if service_name in compose_info:
+                                            main_service = compose_info[service_name]
+                                            break
+                                    if not main_service and compose_info:
+                                        main_service = list(compose_info.values())[0]
+                                    
+                                    if main_service:
+                                        if not start_command and main_service.get('command'):
+                                            start_command = main_service['command']
+                                            await manager.broadcast(f"✅ Detected start command from docker-compose: {start_command}")
+                                        if not port and main_service.get('port'):
+                                            port = main_service['port']
+                                            await manager.broadcast(f"✅ Detected port from docker-compose: {port}")
+                                
+                                # Clean up temp file
+                                os.unlink(tmp_compose_path)
+                            except Exception as e:
+                                logger.debug(f"Error parsing docker-compose: {e}")
+                                pass
+                        break
                 
-                if "nodejs" in (check_node.stdout or ""):
-                    detected_build = "npm install"
-                    detected_start = "npm start"
-                    detected_port = 3000
+                # Check for Dockerfile (use dockerfile_parser)
+                if not start_command:
+                    dockerfile_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"test -f {vm_project_dir}/Dockerfile && echo 'found' || echo 'not_found'"
+                    )
+                    
+                    if "found" in (dockerfile_check.stdout or ""):
+                        # Read Dockerfile
+                        dockerfile_content = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"cat {vm_project_dir}/Dockerfile"
+                        )
+                        if dockerfile_content.returncode == 0 and dockerfile_content.stdout:
+                            try:
+                                # Write content to temp file for parsing
+                                import tempfile
+                                with tempfile.NamedTemporaryFile(mode='w', suffix='.Dockerfile', delete=False) as tmp_file:
+                                    tmp_file.write(dockerfile_content.stdout)
+                                    tmp_dockerfile_path = tmp_file.name
+                                
+                                dockerfile_info = parse_dockerfile(tmp_dockerfile_path)
+                                if dockerfile_info:
+                                    if not build_command and dockerfile_info.get('build_command'):
+                                        build_command = dockerfile_info['build_command']
+                                        await manager.broadcast(f"✅ Detected build command from Dockerfile: {build_command}")
+                                    if not start_command and dockerfile_info.get('start_command'):
+                                        start_command = dockerfile_info['start_command']
+                                        await manager.broadcast(f"✅ Detected start command from Dockerfile: {start_command}")
+                                    if not port and dockerfile_info.get('port'):
+                                        port = dockerfile_info['port']
+                                        await manager.broadcast(f"✅ Detected port from Dockerfile: {port}")
+                                
+                                # Clean up temp file
+                                os.unlink(tmp_dockerfile_path)
+                            except Exception as e:
+                                logger.debug(f"Error parsing Dockerfile: {e}")
+                                pass
                 
-                if detected_build:
-                    build_command = detected_build
-                    await manager.broadcast(f"✅ Detected build command: {build_command}")
+                # Check for package.json (Node.js) - detailed detection
+                if not build_command or not start_command:
+                    package_json_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"test -f {vm_project_dir}/package.json && echo 'found' || echo 'not_found'"
+                    )
+                    
+                    if "found" in (package_json_check.stdout or ""):
+                        # Read package.json
+                        package_json_content = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"cat {vm_project_dir}/package.json"
+                        )
+                        if package_json_content.returncode == 0 and package_json_content.stdout:
+                            try:
+                                package_data = json.loads(package_json_content.stdout)
+                                scripts = package_data.get('scripts', {})
+                                deps = package_data.get('dependencies', {})
+                                dev_deps = package_data.get('devDependencies', {})
+                                
+                                # Detect build command
+                                if not build_command:
+                                    if 'build' in scripts:
+                                        build_command = "npm install && npm run build"
+                                    elif 'next' in deps or 'next' in dev_deps:
+                                        build_command = "npm install && npx next build"
+                                    else:
+                                        build_command = "npm install"
+                                    await manager.broadcast(f"✅ Detected build command: {build_command}")
+                                
+                                # Detect start command
+                                if not start_command:
+                                    if 'start' in scripts:
+                                        start_command = "npm start"
+                                    elif 'next' in deps or 'next' in dev_deps:
+                                        start_command = "npx next start"
+                                    elif 'dev' in scripts:
+                                        start_command = "npm run dev"
+                                    elif 'serve' in scripts:
+                                        start_command = "npm run serve"
+                                    else:
+                                        # Check for common entry points (single VM call)
+                                        entry_points = [
+                                            'src/index.js',
+                                            'src/server.js',
+                                            'server.js',
+                                            'app.js',
+                                            'index.js'
+                                        ]
+                                        entry_check = await vm_manager.exec_in_vm(
+                                            vm_name,
+                                            f"for file in {' '.join([f'{vm_project_dir}/{ep}' for ep in entry_points])}; do if [ -f \"$file\" ]; then echo $(basename $(dirname \"$file\"))/$(basename \"$file\") 2>/dev/null || echo $(basename \"$file\"); break; fi; done"
+                                        )
+                                        entry_point = (entry_check.stdout or "").strip()
+                                        if entry_point:
+                                            # Clean up the path
+                                            if entry_point.startswith(f'{vm_project_dir}/'):
+                                                entry_point = entry_point.replace(f'{vm_project_dir}/', '')
+                                            start_command = f"node {entry_point}"
+                                        else:
+                                            start_command = "npm start"  # Fallback
+                                    await manager.broadcast(f"✅ Detected start command: {start_command}")
+                                
+                                # Default port for Node.js
+                                if not port:
+                                    port = 3000
+                                    await manager.broadcast(f"✅ Using default Node.js port: {port}")
+                            except json.JSONDecodeError as e:
+                                # Fallback to simple detection
+                                if not build_command:
+                                    build_command = "npm install"
+                                if not start_command:
+                                    start_command = "npm start"
+                                if not port:
+                                    port = 3000
                 
-                if detected_start:
-                    start_command = detected_start
-                    await manager.broadcast(f"✅ Detected start command: {start_command}")
-                
-                if detected_port and not port:
-                    port = detected_port
-                    await manager.broadcast(f"✅ Detected default port: {port}")
+                # Check for requirements.txt (Python)
+                if not build_command or not start_command:
+                    requirements_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"test -f {vm_project_dir}/requirements.txt && echo 'found' || echo 'not_found'"
+                    )
+                    
+                    if "found" in (requirements_check.stdout or ""):
+                        # Check for Python entry points (single VM call)
+                        python_files = ['app.py', 'manage.py', 'main.py']
+                        python_check = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"for file in {' '.join(python_files)}; do if [ -f {vm_project_dir}/$file ]; then echo $file; break; fi; done"
+                        )
+                        python_file = (python_check.stdout or "").strip()
+                        
+                        if not build_command:
+                            build_command = "pip install -r requirements.txt"
+                        
+                        if python_file == 'app.py':
+                            # Flask project
+                            if not start_command:
+                                start_command = "python app.py"
+                            if not port:
+                                port = 5000
+                            await manager.broadcast(f"✅ Detected Python Flask project")
+                        elif python_file == 'manage.py':
+                            # Django project
+                            if not start_command:
+                                start_command = "python manage.py runserver 0.0.0.0:8000"
+                            if not port:
+                                port = 8000
+                            await manager.broadcast(f"✅ Detected Python Django project")
+                        elif python_file == 'main.py':
+                            # Python project with main.py
+                            if not start_command:
+                                start_command = "python main.py"
+                            if not port:
+                                port = 5000
+                            await manager.broadcast(f"✅ Detected Python project with main.py")
+                        else:
+                            # requirements.txt exists but no standard entry point
+                            # Don't set start_command - let user specify it manually
+                            await manager.broadcast(f"⚠️ Python project detected but no standard entry point found")
         
         # Find free port if not specified (ports are forwarded from VM to host)
         if not port:
-            port = 3000  # Default port, can be improved with port detection in VM
-            await manager.broadcast(f"🎯 Using port: {port}")
+            port = 3000  # Default port
+            await manager.broadcast(f"🎯 Using default port: {port}")
+        
+        # Update deployment record with detected commands (if not already set)
+        if deployment_id and (build_command or start_command or port):
+            with Session(engine) as session:
+                deployment = session.get(Deployment, deployment_id)
+                if deployment:
+                    updated = False
+                    if build_command and not deployment.build_command:
+                        deployment.build_command = build_command
+                        updated = True
+                    if start_command and not deployment.start_command:
+                        deployment.start_command = start_command
+                        updated = True
+                    if port and not deployment.port:
+                        deployment.port = port
+                        updated = True
+                    if updated:
+                        session.add(deployment)
+                        session.commit()
+                        await manager.broadcast("💾 Saved detected commands to deployment record")
         
         # Run build command inside VM if provided
         if build_command:

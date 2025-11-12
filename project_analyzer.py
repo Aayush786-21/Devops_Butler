@@ -18,11 +18,13 @@ logger = logging.getLogger(__name__)
 
 # Try to import Gemini AI, but make it optional
 try:
-    import google.generativeai as genai
+    import google.generativeai as genai  # type: ignore
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
     logger.warning("google-generativeai not installed. AI analysis will be disabled.")
+    # Create a dummy genai module for type checking
+    genai = None  # type: ignore
 
 
 async def analyze_project_with_gemini(
@@ -50,7 +52,7 @@ async def analyze_project_with_gemini(
     Returns:
         Dictionary with analysis results or None if analysis fails
     """
-    if not GEMINI_AVAILABLE:
+    if not GEMINI_AVAILABLE or genai is None:
         logger.warning("Gemini AI not available. Skipping AI analysis.")
         return None
     
@@ -61,9 +63,9 @@ async def analyze_project_with_gemini(
             logger.warning("GEMINI_API_KEY not set in .env file. Skipping AI analysis.")
             return None
         
-        # Configure Gemini
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Configure Gemini (type checker knows genai is not None here due to check above)
+        genai.configure(api_key=api_key)  # type: ignore[union-attr]
+        model = genai.GenerativeModel('gemini-1.5-flash')  # type: ignore[union-attr]
         
         logger.info(f"Starting AI analysis for project: {project_dir}")
         

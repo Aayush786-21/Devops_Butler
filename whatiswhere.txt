@@ -11,6 +11,7 @@
   - Reads Gemini API key from `.env` file (`GEMINI_API_KEY`)
   - Updates deployment record with detected build_command, start_command, and port
   - Runs asynchronously so import doesn't block
+  - **Deployment Integration**: AI analysis results are used by `process_deployment.py` as the second priority (after user-provided commands) when detecting build and start commands during deployment. This ensures intelligent analysis is leveraged before falling back to file-based detection.
 - **Analysis Results**: 
   - Framework/Technology Stack
   - Build Command
@@ -22,7 +23,8 @@
   - Additional Notes
 - **Dependencies**: `google-generativeai` package (added to requirements.txt)
 - **Error Handling**: Analysis failures don't block import - gracefully handles errors
-- **Location**: `project_analyzer.py`, `orchestrator.py` (import endpoint), `requirements.txt`
+- **Location**: `project_analyzer.py`, `orchestrator.py` (import endpoint), `process_deployment.py` (deployment logic), `requirements.txt`
+- **Command Detection Priority**: The deployment logic now follows this priority order: 1) User-provided commands, 2) AI analysis results from database, 3) Docker-based detection (docker-compose.yml, Dockerfile), 4) File-based detection (package.json, requirements.txt, etc.). This ensures that intelligent AI analysis is used when available, making deployments more accurate and user-friendly.
 
 ### MAJOR ARCHITECTURE CHANGE - VM-Based Deployment with OrbStack
 - **New Deployment Model**: Each user gets an isolated OrbStack VM for deployments
@@ -305,7 +307,7 @@
   - **Cloudflare**: Automatically configures tunnel ingress and DNS records
 - **Monorepo Support**: Detects frontend/backend folders, deploys separately with environment variable linking
 - **Split Repo Support**: Deploys frontend and backend from separate repos, connects via environment variables
-- **Command Auto-Detection**: Detects build/start commands from Dockerfile, docker-compose, package.json, etc.
+- **Command Auto-Detection**: Detects build/start commands with priority: 1) User-provided, 2) AI analysis results from database, 3) Dockerfile/docker-compose (via dockerfile_parser), 4) File-based detection (package.json, requirements.txt, etc.). AI analysis results take priority over file-based detection when available.
 - **URL Validation**: `validate_git_url()` - In `utils.py`
 - **Repo Name Extraction**: `extract_repo_name()` - In `utils.py`
 
