@@ -1400,7 +1400,10 @@ function showProjectContent(page) {
             const dialog = showDeploymentProgressDialog(false);
             document.getElementById('step-frontend').style.display = 'flex';
             dialog.updateFrontendStatus('deploying', 'Deploying your frontend now...');
-            const result = await deploySingle(url, 'frontend', dialog, true);
+            const buildCmd = document.getElementById('build-command')?.value.trim() || null;
+            const startCmd = document.getElementById('start-command')?.value.trim() || null;
+            const portNum = document.getElementById('port')?.value.trim() || null;
+            const result = await deploySingle(url, 'frontend', dialog, true, buildCmd, startCmd, portNum);
             // Show URL and close button after success
             if (result && result.success && result.deployed_url) {
               dialog.showUrls(result.deployed_url, null);
@@ -1419,7 +1422,10 @@ function showProjectContent(page) {
             const dialog = showDeploymentProgressDialog(false);
             document.getElementById('step-backend').style.display = 'flex';
             dialog.updateBackendStatus('deploying', 'Deploying your backend now...');
-            const result = await deploySingle(url, 'backend', dialog, true);
+            const buildCmd = document.getElementById('build-command')?.value.trim() || null;
+            const startCmd = document.getElementById('start-command')?.value.trim() || null;
+            const portNum = document.getElementById('port')?.value.trim() || null;
+            const result = await deploySingle(url, 'backend', dialog, true, buildCmd, startCmd, portNum);
             // Show URL and close button after success
             if (result && result.success && result.deployed_url) {
               dialog.showUrls(null, result.deployed_url);
@@ -1587,6 +1593,19 @@ function showProjectContent(page) {
                 // Include project_id if available (for imported split projects)
                 if (currentProject && currentProject.id) {
                   formData.append('project_id', String(currentProject.id));
+                }
+                // Add optional build/start commands and port
+                const buildCmd = document.getElementById('build-command')?.value.trim();
+                const startCmd = document.getElementById('start-command')?.value.trim();
+                const portNum = document.getElementById('port')?.value.trim();
+                if (buildCmd) {
+                  formData.append('build_command', buildCmd);
+                }
+                if (startCmd) {
+                  formData.append('start_command', startCmd);
+                }
+                if (portNum) {
+                  formData.append('port', portNum);
                 }
                 
                 const response = await fetch('/deploy', {
@@ -3047,6 +3066,19 @@ async function handleDeploy(e) {
     if (typeof currentProject === 'object' && currentProject && currentProject.id) {
       formData.append('project_id', String(currentProject.id));
     }
+    // Add optional build/start commands and port
+    const buildCommand = document.getElementById('build-command')?.value.trim();
+    const startCommand = document.getElementById('start-command')?.value.trim();
+    const port = document.getElementById('port')?.value.trim();
+    if (buildCommand) {
+      formData.append('build_command', buildCommand);
+    }
+    if (startCommand) {
+      formData.append('start_command', startCommand);
+    }
+    if (port) {
+      formData.append('port', port);
+    }
     
     const response = await fetch('/deploy', {
       method: 'POST',
@@ -3121,6 +3153,16 @@ async function deploySingle(repoUrl, componentType = null, progressDialog = null
     // If deploying a component of a split repo, include the component_type
     if (componentType && typeof currentProject === 'object' && currentProject && currentProject.project_type === 'split') {
       formData.append('component_type', componentType);
+    }
+    // Add optional build/start commands and port
+    if (buildCommand) {
+      formData.append('build_command', buildCommand);
+    }
+    if (startCommand) {
+      formData.append('start_command', startCommand);
+    }
+    if (port) {
+      formData.append('port', port);
     }
     
     const response = await fetch('/deploy', {

@@ -64,6 +64,13 @@ class Deployment(SQLModel, table=True):
     
     # Component type: 'frontend', 'backend', or None (standalone/parent)
     component_type: Optional[str] = Field(default=None, index=True)
+    
+    # Process-based deployment fields (like Vercel/Netlify)
+    build_command: Optional[str] = Field(default=None)  # e.g., "npm install && npm run build"
+    start_command: Optional[str] = Field(default=None)  # e.g., "npm run start" or "node server.js"
+    port: Optional[int] = Field(default=None)  # Port number (e.g., 3000, 8080)
+    process_pid: Optional[int] = Field(default=None)  # Process ID for tracking running process
+    project_dir: Optional[str] = Field(default=None)  # Directory where project is cloned (persistent)
 
 class EnvironmentVariable(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

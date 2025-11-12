@@ -111,6 +111,33 @@
               <div class="form-group" id="single-repo-group">
                 <label for="git-url">Git Repository URL</label>
                 <input type="text" id="git-url" name="git_url" placeholder="https://github.com/username/repo" required />
+                <small style="color: var(--text-secondary); font-size: 0.875rem; display: block; margin-top: 0.25rem;">
+                  Commands will be auto-detected, or specify them below
+                </small>
+              </div>
+              
+              <!-- Optional build/start commands and port -->
+              <div class="form-group" id="deploy-commands-group" style="margin-top: 1rem;">
+                <details style="border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem;">
+                  <summary style="cursor: pointer; font-weight: 600; margin-bottom: 0.5rem;">⚙️ Advanced Options (Optional)</summary>
+                  <div style="margin-top: 0.75rem;">
+                    <div class="form-group">
+                      <label for="build-command">Build Command (optional)</label>
+                      <input type="text" id="build-command" name="build_command" placeholder="e.g., npm install && npm run build" />
+                      <small style="color: var(--text-secondary); font-size: 0.875rem;">Leave empty to auto-detect</small>
+                    </div>
+                    <div class="form-group">
+                      <label for="start-command">Start Command (optional)</label>
+                      <input type="text" id="start-command" name="start_command" placeholder="e.g., npm run start" />
+                      <small style="color: var(--text-secondary); font-size: 0.875rem;">Leave empty to auto-detect</small>
+                    </div>
+                    <div class="form-group">
+                      <label for="port">Port (optional)</label>
+                      <input type="number" id="port" name="port" placeholder="e.g., 3000" min="1" max="65535" />
+                      <small style="color: var(--text-secondary); font-size: 0.875rem;">Leave empty to auto-detect</small>
+                    </div>
+                  </div>
+                </details>
               </div>
 
               <!-- New structured split layout -->

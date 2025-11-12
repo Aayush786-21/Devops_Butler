@@ -43,6 +43,17 @@ def create_db_and_tables():
                 conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN domain_status TEXT NULL"))
             if 'last_domain_sync' not in existing_cols:
                 conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN last_domain_sync TIMESTAMP NULL"))
+            # Add process-based deployment fields
+            if 'build_command' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN build_command TEXT NULL"))
+            if 'start_command' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN start_command TEXT NULL"))
+            if 'port' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN port INTEGER NULL"))
+            if 'process_pid' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN process_pid INTEGER NULL"))
+            if 'project_dir' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN project_dir TEXT NULL"))
     except Exception:
         # Never block startup on a migration error; logs will capture details elsewhere
         pass

@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import os
 import re
+import shutil
 import tempfile
 import uuid
 import datetime
@@ -20,7 +21,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 # Import core modules
-from simple_pipeline import run_deployment_pipeline, extract_repo_name, validate_git_url, run_split_deployment
+from simple_pipeline import extract_repo_name, validate_git_url
 import subprocess
 from database import create_db_and_tables, get_session, engine
 from connection_manager import manager
@@ -41,75 +42,34 @@ from cloudflare_manager import (
 from robust_error_handler import global_error_handler, with_error_handling, RetryConfig
 from robust_logging import global_logger, LogLevel, LogCategory
 
-# Helper functions
-def get_running_containers():
-    """Get list of currently running container names"""
-    try:
-        result = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.returncode == 0:
-            return set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
-        else:
-            global_logger.log_error(f"Docker ps failed: {result.stderr}")
-            return set()
-    except subprocess.TimeoutExpired:
-        global_logger.log_error("Docker ps command timed out")
-        return set()
-    except Exception as e:
-        global_logger.log_error(f"Error running docker ps: {str(e)}")
-        return set()
+# Helper functions - Process-based (no Docker)
+from process_manager import process_manager as pm
 
-def get_container_details():
-    """Get detailed information about running containers"""
-    try:
-        result = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}|{{.Status}}|{{.Ports}}|{{.Image}}"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.returncode == 0:
-            containers = {}
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():
-                    parts = line.split('|')
-                    if len(parts) >= 4:
-                        name = parts[0]
-                        status = parts[1]
-                        ports = parts[2]
-                        image = parts[3]
-                        
-                        # Parse uptime from status (e.g., "Up 2 hours", "Up 3 days")
-                        uptime = "Unknown"
-                        if "Up" in status:
-                            uptime_match = status.split("Up ")[1].split(",")[0] if "Up " in status else "Unknown"
-                            uptime = uptime_match.strip()
-                        
-                        # Parse port information
-                        port_info = "No ports"
-                        if ports and ports != "":
-                            port_info = ports
-                        
-                        containers[name] = {
-                            "status": status,
-                            "uptime": uptime,
-                            "ports": port_info,
-                            "image": image
-                        }
-            return containers
-        else:
-            global_logger.log_error(f"Docker ps failed: {result.stderr}")
-            return {}
-    except subprocess.TimeoutExpired:
-        global_logger.log_error("Docker ps command timed out")
-        return {}
-    except Exception as e:
-        global_logger.log_error(f"Error running docker ps: {str(e)}")
-        return {}
+def get_running_processes():
+    """Get list of currently running process project IDs"""
+    # Process manager tracks all running processes
+    return set(pm.processes.keys()) if pm.processes else set()
+
+def get_process_details():
+    """Get detailed information about running processes"""
+    processes = {}
+    for project_id, process in pm.processes.items():
+        if process.poll() is None:  # Process is running
+            pid = process.pid
+            # Get deployment info from database
+            with Session(engine) as session:
+                deployment = session.exec(
+                    select(Deployment).where(Deployment.container_name == project_id)
+                ).first()
+                if deployment:
+                    processes[project_id] = {
+                        "status": "running",
+                        "pid": pid,
+                        "port": deployment.port or "Unknown",
+                        "uptime": "Running",  # Could calculate from process start time
+                        "command": deployment.start_command or "Unknown"
+                    }
+    return processes
 
 # Pydantic models
 class Project(BaseModel):
@@ -249,12 +209,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Preflight checks for external dependencies
 async def preflight_checks() -> dict:
-    """Check Docker and Git availability and Docker daemon connectivity."""
+    """Check Git availability (Docker no longer required)."""
     import subprocess
     checks = {
         'git_cli': False,
-        'docker_cli': False,
-        'docker_daemon': False,
     }
     # git
     try:
@@ -262,18 +220,6 @@ async def preflight_checks() -> dict:
         checks['git_cli'] = res.returncode == 0
     except Exception:
         checks['git_cli'] = False
-    # docker cli
-    try:
-        res = await asyncio.to_thread(subprocess.run, ["docker", "--version"], capture_output=True, text=True)
-        checks['docker_cli'] = res.returncode == 0
-    except Exception:
-        checks['docker_cli'] = False
-    # docker daemon
-    try:
-        res = await asyncio.to_thread(subprocess.run, ["docker", "info"], capture_output=True, text=True)
-        checks['docker_daemon'] = res.returncode == 0
-    except Exception:
-        checks['docker_daemon'] = False
     return checks
 
 
@@ -432,36 +378,31 @@ async def register(user_data: UserRegister):
 # Applications API endpoint
 @app.get("/api/applications")
 async def get_applications():
-    """Get all running applications/containers for the dashboard"""
+    """Get all running applications/processes for the dashboard"""
     try:
-        import docker
-        client = docker.from_env()
-        containers = client.containers.list()
+        # Get all deployments from database
+        with Session(engine) as session:
+            deployments = session.exec(select(Deployment)).all()
         
         applications = []
-        for container in containers:
-            # Filter out system containers
-            if any(system_name in container.name.lower() for system_name in ['nginx', 'proxy', 'db', 'postgres', 'mysql']):
-                continue
-            
-            # Get port mappings
-            ports = []
-            if container.attrs.get('NetworkSettings', {}).get('Ports'):
-                port_mappings = container.attrs['NetworkSettings']['Ports']
-                for internal_port, mappings in port_mappings.items():
-                    if mappings:
-                        for mapping in mappings:
-                            if mapping.get('HostPort'):
-                                ports.append(f"http://localhost:{mapping['HostPort']}")
+        running_processes = get_running_processes()
+        process_details = get_process_details()
+        
+        for deployment in deployments:
+            # Check if process is running
+            is_running = deployment.container_name in running_processes
+            process_info = process_details.get(deployment.container_name, {})
             
             applications.append({
-                'id': container.id[:12],
-                'name': container.name,
-                'status': container.status,
-                'image': container.image.tags[0] if container.image.tags else 'unknown',
-                'created': container.attrs['Created'],
-                'ports': ports,
-                'url': ports[0] if ports else None
+                'id': str(deployment.id),
+                'name': deployment.container_name,
+                'status': 'running' if is_running else deployment.status,
+                'pid': process_info.get('pid'),
+                'port': process_info.get('port') or deployment.port or 'Unknown',
+                'created': deployment.created_at.isoformat() if deployment.created_at else None,
+                'ports': [f"http://localhost:{deployment.port}"] if deployment.port else [],
+                'url': deployment.deployed_url,
+                'command': process_info.get('command') or deployment.start_command
             })
         
         return {'applications': applications, 'count': len(applications)}
@@ -806,6 +747,9 @@ async def deploy(
     backend_url: Optional[str] = Form(None),
     project_id: Optional[int] = Form(None),
     component_type: Optional[str] = Form(None),
+    build_command: Optional[str] = Form(None),
+    start_command: Optional[str] = Form(None),
+    port: Optional[int] = Form(None),
     current_user: User = Depends(get_current_user)
 ):
     """Deploy a Git repository (single or split frontend/backend)"""
@@ -821,14 +765,15 @@ async def deploy(
             raise HTTPException(status_code=422, detail="git_url is required for single repository deployment.")
         if not validate_git_url(git_url):
             raise HTTPException(status_code=422, detail="Invalid or unsupported repository URL.")
-    # Environment sanity checks
+    # Environment sanity checks (Docker is optional now - we use direct process execution)
     checks = await preflight_checks()
     if not checks['git_cli']:
         raise HTTPException(status_code=503, detail="Git CLI not available on server.")
-    if not checks['docker_cli']:
-        raise HTTPException(status_code=503, detail="Docker CLI not available on server.")
-    if not checks['docker_daemon']:
-        raise HTTPException(status_code=503, detail="Docker daemon not reachable. Please start Docker Desktop.")
+    # Docker is optional - we use process-based deployment now
+    # if not checks['docker_cli']:
+    #     raise HTTPException(status_code=503, detail="Docker CLI not available on server.")
+    # if not checks['docker_daemon']:
+    #     raise HTTPException(status_code=503, detail="Docker daemon not reachable. Please start Docker Desktop.")
     # Start deployment trace
     trace_id = global_logger.start_deployment_trace(
         repo_url=git_url,
@@ -865,12 +810,20 @@ async def deploy(
         with global_logger.timer("deployment_pipeline"):
             global_logger.add_deployment_stage(trace_id, "deployment_pipeline", "started")
             
+            # Use process-based deployment (like Vercel/Netlify)
+            from process_deployment import run_process_deployment
+            
+            # Prepare environment variables
+            env_vars_dict = {}
+            if env_vars:
+                env_vars_dict = {var.key: var.value for var in env_vars}
+            
             if deploy_type == "split":
                 # Handle split frontend/backend deployment
-                await manager.broadcast("🚀 Deploying split repositories (Frontend + Backend)")
-                # If deploying from an imported split project, use its id as parent
-                parent_id = project_id if project_id is not None else None
-                result = await run_split_deployment(frontend_url, backend_url, user_id=current_user.id, env_dir=repo_dir, parent_project_id=parent_id)
+                await manager.broadcast("🚀 Deploying split repositories (Frontend + Backend) using process-based deployment")
+                # TODO: Implement split deployment with process-based approach
+                # For now, deploy backend first, then frontend
+                raise HTTPException(status_code=501, detail="Split deployment with process-based approach is not yet implemented. Use single deployment for now.")
             else:
                 # Handle single deployment - either standalone or as a component of split repo
                 existing_id: Optional[int] = None
@@ -895,10 +848,14 @@ async def deploy(
                             # Regular redeployment - reuse existing deployment record
                             existing_id = existing.id
                 
-                result = await run_deployment_pipeline(
-                    git_url, 
-                    user_id=current_user.id, 
-                    env_dir=repo_dir, 
+                # Use process-based deployment
+                result = await run_process_deployment(
+                    git_url=git_url,
+                    user_id=current_user.id,
+                    build_command=build_command,
+                    start_command=start_command,
+                    port=port,
+                    env_vars=env_vars_dict,
                     existing_deployment_id=existing_id,
                     parent_project_id=parent_id,
                     component_type=component_type
@@ -907,11 +864,11 @@ async def deploy(
             # Check if deployment was successful
             if result is not None:
                 if isinstance(result, tuple) and len(result) == 2:
-                    container_name, deployed_url = result
-                    if container_name and deployed_url:
+                    project_id_str, deployed_url = result
+                    if project_id_str and deployed_url:
                         global_logger.add_deployment_stage(
                             trace_id, "deployment_pipeline", "completed",
-                            {"deployed_url": deployed_url, "container_name": container_name}
+                            {"deployed_url": deployed_url, "project_id": project_id_str}
                         )
                         
                         global_logger.finish_deployment_trace(trace_id, "success", deployed_url)
@@ -922,7 +879,7 @@ async def deploy(
                             details={
                                 "repo_url": git_url,
                                 "deployed_url": deployed_url,
-                                "container_name": container_name,
+                                "project_id": project_id_str,
                                 "trace_id": trace_id
                             }
                         )
@@ -932,9 +889,8 @@ async def deploy(
                             with Session(engine) as session:
                                 dep = session.get(Deployment, project_id)
                                 if dep:
-                                    dep.status = "success"
+                                    dep.status = "running"  # Process is running
                                     dep.deployed_url = deployed_url
-                                    dep.container_name = container_name
                                     if dep.custom_domain:
                                         try:
                                             service_url = _derive_service_url(deployed_url)
@@ -949,12 +905,12 @@ async def deploy(
                         return {
                             "message": "Deployment successful!",
                             "deployed_url": deployed_url,
-                            "container_name": container_name,
+                            "project_id": project_id_str,
                             "trace_id": trace_id
                         }
                     else:
                         # Result has correct structure but empty/invalid values
-                        error_msg = f"Deployment pipeline returned invalid values: container_name='{container_name}', deployed_url='{deployed_url}'"
+                        error_msg = f"Deployment pipeline returned invalid values: project_id='{project_id_str}', deployed_url='{deployed_url}'"
                         global_logger.add_deployment_stage(
                             trace_id, "deployment_pipeline", "failed",
                             {"error": error_msg}
@@ -1163,7 +1119,7 @@ def list_deployments(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """List all deployments for the current user with real-time container status and metrics"""
+    """List all deployments for the current user with real-time process status and metrics"""
     global_logger.log_user_action(
         user_id=str(current_user.id),
         action="list_deployments"
@@ -1176,23 +1132,23 @@ def list_deployments(
     )
     deployments = session.exec(statement).all()
     
-    # Get detailed container information
-    container_details = get_container_details()
-    running_containers = get_running_containers()
+    # Get detailed process information
+    process_details = get_process_details()
+    running_processes = get_running_processes()
     
     # Convert to dict format for JSON response with real-time status and metrics
     deployment_list = []
     for deployment in deployments:
-        # Check if container is actually running
-        is_running = deployment.container_name in running_containers
+        # Check if process is actually running
+        is_running = deployment.container_name in running_processes and pm.is_process_running(deployment.container_name)
         
-        # Get detailed container info if running
-        container_info = container_details.get(deployment.container_name, {})
+        # Get detailed process info if running
+        process_info = process_details.get(deployment.container_name, {})
         
         # Determine real status
         if is_running:
             real_status = "running"
-        elif deployment.status == "success":
+        elif deployment.status == "success" or deployment.status == "running":
             real_status = "stopped"  # Was successful but not currently running
         else:
             real_status = deployment.status
@@ -1211,10 +1167,10 @@ def list_deployments(
             "updated_at": deployment.updated_at,
             "user_id": deployment.user_id,
             "is_running": is_running,
-            "container_uptime": container_info.get("uptime", "Unknown"),
-            "container_ports": container_info.get("ports", "No ports"),
-            "container_image": container_info.get("image", "Unknown"),
-            "container_status": container_info.get("status", "Unknown"),
+            "process_pid": process_info.get("pid") or deployment.process_pid,
+            "port": process_info.get("port") or deployment.port,
+            "start_command": deployment.start_command,
+            "build_command": deployment.build_command,
             "parent_project_id": getattr(deployment, 'parent_project_id', None),
             "component_type": getattr(deployment, 'component_type', None)
         }
@@ -1248,18 +1204,18 @@ def get_project_components(
         )
     ).all()
     
-    # Get container details
-    container_details = get_container_details()
-    running_containers = get_running_containers()
+    # Get process details
+    process_details = get_process_details()
+    running_processes = get_running_processes()
     
     component_list = []
     for component in components:
-        is_running = component.container_name in running_containers
-        container_info = container_details.get(component.container_name, {})
+        is_running = component.container_name in running_processes and pm.is_process_running(component.container_name)
+        process_info = process_details.get(component.container_name, {})
         
         if is_running:
             real_status = "running"
-        elif component.status == "success":
+        elif component.status == "success" or component.status == "running":
             real_status = "stopped"
         else:
             real_status = component.status
@@ -1272,10 +1228,10 @@ def get_project_components(
             "status": real_status,
             "deployed_url": component.deployed_url,
             "is_running": is_running,
-            "container_uptime": container_info.get("uptime", "Unknown"),
-            "container_ports": container_info.get("ports", "No ports"),
-            "container_image": container_info.get("image", "Unknown"),
-            "container_status": container_info.get("status", "Unknown"),
+            "process_pid": process_info.get("pid") or component.process_pid,
+            "port": process_info.get("port") or component.port,
+            "start_command": component.start_command,
+            "build_command": component.build_command,
             "created_at": component.created_at,
             "updated_at": component.updated_at
         })
@@ -1506,7 +1462,7 @@ async def get_project_logs(
     project_id: int,
     current_user: User = Depends(get_current_user)
 ):
-    """Get logs for a specific project/container"""
+    """Get logs for a specific project/process"""
     try:
         with Session(engine) as session:
             # Verify project belongs to user
@@ -1520,30 +1476,18 @@ async def get_project_logs(
             if not deployment:
                 raise HTTPException(status_code=404, detail="Project not found")
             
-            # Get container logs using docker logs
+            # Get process logs from process manager
             try:
-                result = subprocess.run(
-                    ["docker", "logs", "--tail", "100", deployment.container_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                
-                if result.returncode == 0:
-                    logs = result.stdout
-                else:
-                    logs = f"Error getting logs: {result.stderr}"
-                    
-            except subprocess.TimeoutExpired:
-                logs = "Log retrieval timed out"
+                logs = pm.get_process_logs(deployment.container_name, lines=100)
+                logs_text = "\n".join(logs) if logs else "No logs available"
             except Exception as e:
-                logs = f"Error retrieving logs: {str(e)}"
+                logs_text = f"Error retrieving logs: {str(e)}"
             
             return {
                 "project_id": project_id,
                 "container_name": deployment.container_name,
-                "logs": logs,
-                "is_running": deployment.container_name in get_running_containers()
+                "logs": logs_text,
+                "is_running": pm.is_process_running(deployment.container_name)
             }
             
     except HTTPException:
@@ -1557,7 +1501,7 @@ async def restart_project(
     project_id: int,
     current_user: User = Depends(get_current_user)
 ):
-    """Restart a specific project/container"""
+    """Restart a specific project/process"""
     try:
         with Session(engine) as session:
             # Verify project belongs to user
@@ -1571,16 +1515,34 @@ async def restart_project(
             if not deployment:
                 raise HTTPException(status_code=404, detail="Project not found")
             
-            # Restart container using docker restart
+            if not deployment.start_command or not deployment.project_dir:
+                raise HTTPException(status_code=400, detail="Project not properly deployed. Missing start command or project directory.")
+            
+            # Restart process using process manager
             try:
-                result = subprocess.run(
-                    ["docker", "restart", deployment.container_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
+                # Prepare environment variables
+                env_vars = {}
+                env_vars_list = session.exec(
+                    select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
+                ).all()
+                if env_vars_list:
+                    env_vars = {var.key: var.value for var in env_vars_list}
+                
+                success, pid, error = await pm.restart_process(
+                    project_id=deployment.container_name,
+                    command=deployment.start_command,
+                    cwd=deployment.project_dir,
+                    env=env_vars,
+                    port=deployment.port
                 )
                 
-                if result.returncode == 0:
+                if success:
+                    # Update deployment in database
+                    deployment.process_pid = pid
+                    deployment.status = "running"
+                    session.add(deployment)
+                    session.commit()
+                    
                     global_logger.log_user_action(
                         user_id=str(current_user.id),
                         action="restart_project",
@@ -1590,15 +1552,14 @@ async def restart_project(
                         "project_id": project_id,
                         "container_name": deployment.container_name,
                         "status": "restarted",
-                        "message": "Project restarted successfully"
+                        "message": "Project restarted successfully",
+                        "pid": pid
                     }
                 else:
-                    raise HTTPException(status_code=500, detail=f"Failed to restart container: {result.stderr}")
+                    raise HTTPException(status_code=500, detail=f"Failed to restart process: {error}")
                     
-            except subprocess.TimeoutExpired:
-                raise HTTPException(status_code=500, detail="Restart operation timed out")
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error restarting container: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error restarting process: {str(e)}")
             
     except HTTPException:
         raise
@@ -1607,7 +1568,7 @@ async def restart_project(
         raise HTTPException(status_code=500, detail="Failed to restart project")
 
 
-# Delete project: stop/remove container, remove image if possible, delete DB + env vars
+# Delete project: stop process, remove project directory, delete DB + env vars
 @app.delete("/projects/{project_id}")
 async def delete_project(
     project_id: int,
@@ -1626,38 +1587,18 @@ async def delete_project(
 
             container_name = deployment.container_name
 
-            # Attempt to detect image name for the container (if present)
-            image_name = None
+            # Stop process if running
             try:
-                proc = subprocess.run(
-                    ["docker", "ps", "-a", "--filter", f"name={container_name}", "--format", "{{.Image}}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                if proc.returncode == 0 and proc.stdout.strip():
-                    image_name = proc.stdout.strip().splitlines()[0].strip()
-            except Exception:
-                image_name = None
+                await pm.stop_process(container_name)
+            except Exception as e:
+                global_logger.log_error(f"Error stopping process {container_name}: {e}")
 
-            # Stop container if running
-            try:
-                subprocess.run(["docker", "stop", container_name], capture_output=True, text=True, timeout=20)
-            except Exception:
-                pass
-
-            # Remove container (force)
-            try:
-                subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, timeout=20)
-            except Exception:
-                pass
-
-            # Remove image if known
-            if image_name:
+            # Remove project directory if it exists
+            if deployment.project_dir and os.path.exists(deployment.project_dir):
                 try:
-                    subprocess.run(["docker", "rmi", "-f", image_name], capture_output=True, text=True, timeout=30)
-                except Exception:
-                    pass
+                    shutil.rmtree(deployment.project_dir, ignore_errors=True)
+                except Exception as e:
+                    global_logger.log_error(f"Error removing project directory {deployment.project_dir}: {e}")
 
             # Delete related environment variables
             env_vars = session.exec(
@@ -1680,35 +1621,16 @@ async def delete_project(
             for child in child_deployments:
                 child_container_name = child.container_name
                 
-                # Stop and remove child container
+                # Stop child process
                 try:
-                    subprocess.run(["docker", "stop", child_container_name], capture_output=True, text=True, timeout=20)
+                    await pm.stop_process(child_container_name)
                 except Exception:
                     pass
                 
-                try:
-                    subprocess.run(["docker", "rm", "-f", child_container_name], capture_output=True, text=True, timeout=20)
-                except Exception:
-                    pass
-                
-                # Get child image for deletion
-                child_image_name = None
-                try:
-                    proc = subprocess.run(
-                        ["docker", "ps", "-a", "--filter", f"name={child_container_name}", "--format", "{{.Image}}"],
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
-                    if proc.returncode == 0 and proc.stdout.strip():
-                        child_image_name = proc.stdout.strip().splitlines()[0].strip()
-                except Exception:
-                    pass
-                
-                # Remove child image
-                if child_image_name:
+                # Remove child project directory
+                if child.project_dir and os.path.exists(child.project_dir):
                     try:
-                        subprocess.run(["docker", "rmi", "-f", child_image_name], capture_output=True, text=True, timeout=30)
+                        shutil.rmtree(child.project_dir, ignore_errors=True)
                     except Exception:
                         pass
                 
@@ -1743,7 +1665,7 @@ async def delete_project(
             global_logger.log_user_action(
                 user_id=str(current_user.id),
                 action="project_deleted",
-                details={"project_id": project_id, "container_name": container_name, "image": image_name}
+                details={"project_id": project_id, "container_name": container_name}
             )
 
             return {"message": "Project deleted"}
@@ -1838,7 +1760,7 @@ async def logs_websocket(websocket: WebSocket):
 
 @app.websocket("/ws/project/{project_id}/logs")
 async def project_logs_websocket(websocket: WebSocket, project_id: int):
-    """WebSocket endpoint for project-specific container logs streaming"""
+    """WebSocket endpoint for project-specific process logs streaming"""
     await websocket.accept()
     global_logger.log_structured(
         level=LogLevel.INFO,
@@ -1850,7 +1772,7 @@ async def project_logs_websocket(websocket: WebSocket, project_id: int):
     try:
         # Send initial connection message
         await websocket.send_json({
-            "message": "Connected to container logs stream",
+            "message": "Connected to process logs stream",
             "type": "success"
         })
         
@@ -1865,49 +1787,41 @@ async def project_logs_websocket(websocket: WebSocket, project_id: int):
         
         if not container_name:
             await websocket.send_json({
-                "message": f"No container found for project {project_id}",
+                "message": f"No project found for project {project_id}",
                 "type": "error"
             })
             await websocket.close()
             return
         
-        # Stream Docker container logs
+        # Stream process logs
         last_log_count = 0
         while True:
             try:
-                # Get recent logs from container with ANSI color codes stripped
-                result = subprocess.run(
-                    ["docker", "logs", "--tail", "50", "--no-color", container_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
+                # Get recent logs from process manager
+                logs = pm.get_process_logs(container_name, lines=50)
                 
-                if result.returncode == 0 and result.stdout:
-                    # Send logs line by line
-                    lines = result.stdout.strip().split('\n')
+                if logs:
                     # Only send new lines to avoid spamming
-                    new_lines = lines[-10:] if len(lines) > last_log_count else []
-                    last_log_count = len(lines)
+                    new_lines = logs[-10:] if len(logs) > last_log_count else []
+                    last_log_count = len(logs)
                     
                     for line in new_lines:
                         if line.strip():
-                            # Clean up ANSI escape codes
-                            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-                            clean_line = ansi_escape.sub('', line)
                             await websocket.send_json({
-                                "message": clean_line,
+                                "message": line.strip(),
                                 "type": "info"
                             })
+                elif not pm.is_process_running(container_name):
+                    # Process is not running
+                    await websocket.send_json({
+                        "message": "Process is not running",
+                        "type": "warning"
+                    })
+                    await asyncio.sleep(5)
                 
                 # Wait before next fetch
                 await asyncio.sleep(2)
                 
-            except subprocess.TimeoutExpired:
-                await websocket.send_json({
-                    "message": "Container logs timeout",
-                    "type": "warning"
-                })
             except Exception as e:
                 global_logger.log_error(f"Error in logs loop: {str(e)}")
                 await websocket.send_json({

@@ -1,7 +1,27 @@
 # DevOps Butler - Codebase Location Guide
-# Last Updated: 2025-11-03
+# Last Updated: 2025-01-XX
 
 ## Recent Updates (Latest Session)
+
+### MAJOR ARCHITECTURE CHANGE - Process-Based Deployment (Like Vercel/Netlify)
+- **New Deployment Model**: Replaced Docker containerization with direct process execution
+- **Rationale**: Simpler UX, faster deployments, more flexible (users specify commands), feels like Vercel/Netlify
+- **New Files**:
+  - `process_manager.py` - Manages processes (start, stop, restart, logs, health checks)
+  - `process_deployment.py` - Process-based deployment handler (replaces Docker deployment)
+- **Database Changes**: Added fields to `Deployment` model:
+  - `build_command` (TEXT) - Build command (e.g., "npm install && npm run build")
+  - `start_command` (TEXT) - Start command (e.g., "npm run start")
+  - `port` (INTEGER) - Port number
+  - `process_pid` (INTEGER) - Process ID for tracking
+  - `project_dir` (TEXT) - Persistent project directory
+- **Auto-Detection**: Automatically detects build/start commands from package.json, requirements.txt, etc.
+- **Process Management**: Uses subprocess.Popen for direct process execution, no Docker needed
+- **Logs**: Real-time log streaming from process stdout/stderr
+- **Health Checks**: Process status and port accessibility monitoring
+- **Location**: `process_manager.py`, `process_deployment.py`, `login.py` (Deployment model), `database.py` (migrations)
+
+## Previous Updates
 
 ### Bug Fixes - Port Conflict Resolution
 - **Auto Port Cleanup**: `orchestrator.py` now automatically kills processes on port 8000 before starting
