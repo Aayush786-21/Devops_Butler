@@ -223,7 +223,7 @@ function showDeleteConfirmation(projectName) {
       <h3>Delete Project</h3>
       <p>
         Are you sure you want to delete <strong>${escapeHtml(projectName)}</strong>?<br>
-        This will stop and remove its container and image.
+        This will stop the process and remove the project.
       </p>
       <div class="delete-confirmation-actions">
         <button class="cancel-btn">Cancel</button>
@@ -962,10 +962,18 @@ function renderProjects(projects) {
           
                  ${project.status === 'running' ? `
                  <div class="project-metrics">
+                   ${project.port ? `
                    <div class="metric">
-                     <span class="metric-label">Uptime</span>
-                     <span class="metric-value">${project.containerUptime}</span>
-            </div>
+                     <span class="metric-label">Port</span>
+                     <span class="metric-value">${project.port}</span>
+                   </div>
+                   ` : ''}
+                   ${project.processPid ? `
+                   <div class="metric">
+                     <span class="metric-label">PID</span>
+                     <span class="metric-value">${project.processPid}</span>
+                   </div>
+                   ` : ''}
             </div>
             ` : ''}
             </div>
@@ -2583,9 +2591,11 @@ function updateProjectConfigValues() {
   const idEl = document.getElementById('projectConfigId');
   const createdEl = document.getElementById('projectConfigCreated');
   const updatedEl = document.getElementById('projectConfigUpdated');
-  const portsEl = document.getElementById('projectConfigPorts');
-  const imageEl = document.getElementById('projectConfigImage');
-  const statusEl = document.getElementById('projectConfigStatus');
+  // Process-based configuration values (no Docker)
+  const portEl = document.getElementById('projectConfigPort');
+  const pidEl = document.getElementById('projectConfigPid');
+  const startCmdEl = document.getElementById('projectConfigStartCommand');
+  const buildCmdEl = document.getElementById('projectConfigBuildCommand');
   
   if (nameEl) nameEl.textContent = currentProject.name || 'Unknown';
   if (ownerEl) {
@@ -2597,10 +2607,6 @@ function updateProjectConfigValues() {
   if (idEl) idEl.textContent = currentProject.id || '-';
   if (createdEl) createdEl.textContent = currentProject.createdAt ? formatDateTime(currentProject.createdAt) : 'Unknown';
   if (updatedEl) updatedEl.textContent = currentProject.updatedAt ? getRelativeTime(new Date(currentProject.updatedAt)) : 'Unknown';
-  const portEl = document.getElementById('projectConfigPort');
-  const pidEl = document.getElementById('projectConfigPid');
-  const startCmdEl = document.getElementById('projectConfigStartCommand');
-  const buildCmdEl = document.getElementById('projectConfigBuildCommand');
   if (portEl) portEl.textContent = currentProject?.port || 'Not set';
   if (pidEl) pidEl.textContent = currentProject?.processPid || 'Not running';
   if (startCmdEl) startCmdEl.textContent = currentProject?.startCommand || 'Not set';
