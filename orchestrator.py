@@ -53,22 +53,36 @@ def get_running_processes():
 def get_process_details():
     """Get detailed information about running processes"""
     processes = {}
-    for project_id, process in pm.processes.items():
-        if process.poll() is None:  # Process is running
-            pid = process.pid
-            # Get deployment info from database
-            with Session(engine) as session:
-                deployment = session.exec(
-                    select(Deployment).where(Deployment.container_name == project_id)
-                ).first()
-                if deployment:
-                    processes[project_id] = {
-                        "status": "running",
-                        "pid": pid,
-                        "port": deployment.port or "Unknown",
-                        "uptime": "Running",  # Could calculate from process start time
-                        "command": deployment.start_command or "Unknown"
-                    }
+    try:
+        if not hasattr(pm, 'processes') or not pm.processes:
+            return processes
+        
+        for project_id, process in list(pm.processes.items()):
+            try:
+                if process and process.poll() is None:  # Process is running
+                    pid = process.pid
+                    # Get deployment info from database
+                    with Session(engine) as session:
+                        deployment = session.exec(
+                            select(Deployment).where(Deployment.container_name == project_id)
+                        ).first()
+                        if deployment:
+                            processes[project_id] = {
+                                "status": "running",
+                                "pid": pid,
+                                "port": deployment.port or "Unknown",
+                                "uptime": "Running",  # Could calculate from process start time
+                                "command": deployment.start_command or "Unknown"
+                            }
+            except (ProcessLookupError, AttributeError):
+                # Process may have exited, skip it
+                continue
+            except Exception as e:
+                # Skip this process on error
+                continue
+    except Exception as e:
+        # Process manager may not be initialized yet
+        pass
     return processes
 
 # Pydantic models

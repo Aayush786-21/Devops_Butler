@@ -899,11 +899,11 @@ async function loadProjects() {
           isSplit,
           frontend_url: frontendUrl,
           backend_url: backendUrl,
-          // Real container metrics from docker ps
-          containerUptime: deployment.container_uptime || 'Unknown',
-          containerPorts: deployment.container_ports || 'No ports',
-          containerImage: deployment.container_image || 'Unknown',
-          containerStatus: deployment.container_status || 'Unknown',
+          // Process-based metrics (no Docker)
+          processPid: deployment.process_pid || null,
+          port: deployment.port || null,
+          startCommand: deployment.start_command || null,
+          buildCommand: deployment.build_command || null,
           isRunning: deployment.is_running || false,
           custom_domain: deployment.custom_domain || null,
           domain_status: deployment.domain_status || null,
@@ -1844,23 +1844,31 @@ async function showProjectConfiguration() {
             </div>
           </div>
           <div class="config-row">
-            <div class="config-label">Container Ports:</div>
+            <div class="config-label">Port:</div>
             <div class="config-value-container">
-              <span class="config-value-text" id="projectConfigPorts">${currentProject?.containerPorts ? formatPorts(currentProject.containerPorts) : 'No ports'}</span>
+              <span class="config-value-text" id="projectConfigPort">${currentProject?.port || 'Not set'}</span>
             </div>
           </div>
           <div class="config-row">
-            <div class="config-label">Docker Image:</div>
+            <div class="config-label">Process PID:</div>
             <div class="config-value-container">
-              <span class="config-value-text" id="projectConfigImage">${currentProject?.containerImage || 'Unknown'}</span>
+              <span class="config-value-text" id="projectConfigPid">${currentProject?.processPid || 'Not running'}</span>
             </div>
           </div>
           <div class="config-row">
-            <div class="config-label">Container Status:</div>
+            <div class="config-label">Start Command:</div>
             <div class="config-value-container">
-              <span class="config-value-text" id="projectConfigStatus">${currentProject?.containerStatus || 'Unknown'}</span>
+              <span class="config-value-text" id="projectConfigStartCommand">${currentProject?.startCommand || 'Not set'}</span>
             </div>
           </div>
+          ${currentProject?.buildCommand ? `
+          <div class="config-row">
+            <div class="config-label">Build Command:</div>
+            <div class="config-value-container">
+              <span class="config-value-text" id="projectConfigBuildCommand">${currentProject.buildCommand}</span>
+            </div>
+          </div>
+          ` : ''}
         </div>
         <div class="config-actions">
           <button class="btn-secondary" id="changeProjectNameBtn">Change project name</button>
@@ -1949,10 +1957,18 @@ async function showProjectStatus() {
                   </div>
                   ${frontend && frontend.status === 'running' ? `
                     <div class="project-metrics">
+                      ${frontend.port ? `
                       <div class="metric">
-                        <span class="metric-label">Uptime</span>
-                        <span class="metric-value">${frontend.container_uptime || 'Unknown'}</span>
+                        <span class="metric-label">Port</span>
+                        <span class="metric-value">${frontend.port}</span>
                       </div>
+                      ` : ''}
+                      ${frontend.process_pid ? `
+                      <div class="metric">
+                        <span class="metric-label">PID</span>
+                        <span class="metric-value">${frontend.process_pid}</span>
+                      </div>
+                      ` : ''}
                     </div>
                   ` : ''}
                 </div>
@@ -1982,10 +1998,18 @@ async function showProjectStatus() {
                   </div>
                   ${backend && backend.status === 'running' ? `
                     <div class="project-metrics">
+                      ${backend.port ? `
                       <div class="metric">
-                        <span class="metric-label">Uptime</span>
-                        <span class="metric-value">${backend.container_uptime || 'Unknown'}</span>
+                        <span class="metric-label">Port</span>
+                        <span class="metric-value">${backend.port}</span>
                       </div>
+                      ` : ''}
+                      ${backend.process_pid ? `
+                      <div class="metric">
+                        <span class="metric-label">PID</span>
+                        <span class="metric-value">${backend.process_pid}</span>
+                      </div>
+                      ` : ''}
                     </div>
                   ` : ''}
                 </div>
@@ -2097,10 +2121,18 @@ async function loadAndDisplayProjectComponents() {
             </div>
             ${frontend && frontend.status === 'running' ? `
               <div class="project-metrics">
+                ${frontend.port ? `
                 <div class="metric">
-                  <span class="metric-label">Uptime</span>
-                  <span class="metric-value">${frontend.container_uptime || 'Unknown'}</span>
+                  <span class="metric-label">Port</span>
+                  <span class="metric-value">${frontend.port}</span>
                 </div>
+                ` : ''}
+                ${frontend.process_pid ? `
+                <div class="metric">
+                  <span class="metric-label">PID</span>
+                  <span class="metric-value">${frontend.process_pid}</span>
+                </div>
+                ` : ''}
               </div>
             ` : ''}
           </div>
@@ -2130,10 +2162,18 @@ async function loadAndDisplayProjectComponents() {
             </div>
             ${backend && backend.status === 'running' ? `
               <div class="project-metrics">
+                ${backend.port ? `
                 <div class="metric">
-                  <span class="metric-label">Uptime</span>
-                  <span class="metric-value">${backend.container_uptime || 'Unknown'}</span>
+                  <span class="metric-label">Port</span>
+                  <span class="metric-value">${backend.port}</span>
                 </div>
+                ` : ''}
+                ${backend.process_pid ? `
+                <div class="metric">
+                  <span class="metric-label">PID</span>
+                  <span class="metric-value">${backend.process_pid}</span>
+                </div>
+                ` : ''}
               </div>
             ` : ''}
           </div>
@@ -2557,9 +2597,14 @@ function updateProjectConfigValues() {
   if (idEl) idEl.textContent = currentProject.id || '-';
   if (createdEl) createdEl.textContent = currentProject.createdAt ? formatDateTime(currentProject.createdAt) : 'Unknown';
   if (updatedEl) updatedEl.textContent = currentProject.updatedAt ? getRelativeTime(new Date(currentProject.updatedAt)) : 'Unknown';
-  if (portsEl) portsEl.textContent = currentProject.containerPorts ? formatPorts(currentProject.containerPorts) : 'No ports';
-  if (imageEl) imageEl.textContent = currentProject.containerImage || 'Unknown';
-  if (statusEl) statusEl.textContent = currentProject.containerStatus || 'Unknown';
+  const portEl = document.getElementById('projectConfigPort');
+  const pidEl = document.getElementById('projectConfigPid');
+  const startCmdEl = document.getElementById('projectConfigStartCommand');
+  const buildCmdEl = document.getElementById('projectConfigBuildCommand');
+  if (portEl) portEl.textContent = currentProject?.port || 'Not set';
+  if (pidEl) pidEl.textContent = currentProject?.processPid || 'Not running';
+  if (startCmdEl) startCmdEl.textContent = currentProject?.startCommand || 'Not set';
+  if (buildCmdEl) buildCmdEl.textContent = currentProject?.buildCommand || 'Not set';
 }
 
 // Copy to clipboard functionality
@@ -5074,3 +5119,4 @@ function setupCommandPalette() {
     });
   }
 }
+
