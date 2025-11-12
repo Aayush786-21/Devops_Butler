@@ -3,7 +3,7 @@
 
 ## Recent Updates (Latest Session)
 
-### AI-Powered Project Analysis with Gemini
+### AI-Powered Project Analysis with Gemini (Enhanced)
 - **New Feature**: AI analysis of imported projects using Google Gemini AI
 - **Location**: `project_analyzer.py` - Analyzes project structure to detect build/start commands, ports, frameworks, etc.
 - **Integration**: 
@@ -11,20 +11,27 @@
   - Reads Gemini API key from `.env` file (`GEMINI_API_KEY`)
   - Updates deployment record with detected build_command, start_command, and port
   - Runs asynchronously so import doesn't block
-  - **Deployment Integration**: AI analysis results are used by `process_deployment.py` as the second priority (after user-provided commands) when detecting build and start commands during deployment. This ensures intelligent analysis is leveraged before falling back to file-based detection.
+  - **Deployment Integration**: AI analysis results are used by `process_deployment.py` as the second priority (after static site detection, but before Docker/file-based detection) when detecting build and start commands during deployment.
+- **Enhanced Static Site Detection**:
+  - **Priority 1**: Checks for static HTML files FIRST before AI analysis
+  - **AI Prompt Enhancement**: Explicitly instructs AI to detect static sites and never suggest `pip install -r requirements.txt` for static sites
+  - **Validation**: Validates AI suggestions - if AI suggests `pip install -r requirements.txt`, verifies that `requirements.txt` exists AND Python entry points exist
+  - **Override Logic**: If static site detected (via HTML files or AI framework detection), forces `build_command=None`, `start_command=python3 -m http.server 8080`, `port=8080`
+  - **Fallback**: If AI analysis fails or provides incorrect results, uses file-based detection as fallback
 - **Analysis Results**: 
-  - Framework/Technology Stack
-  - Build Command
-  - Start Command
-  - Install Command
-  - Port Number
+  - Framework/Technology Stack (validated)
+  - Build Command (validated - never suggests requirements.txt if file doesn't exist)
+  - Start Command (validated)
+  - Install Command (validated)
+  - Port Number (validated - default 8080 if invalid)
   - Root Directory
   - Environment Variables
   - Additional Notes
 - **Dependencies**: `google-generativeai` package (added to requirements.txt)
-- **Error Handling**: Analysis failures don't block import - gracefully handles errors
+- **Error Handling**: Analysis failures don't block import - gracefully handles errors with fallbacks
 - **Location**: `project_analyzer.py`, `orchestrator.py` (import endpoint), `process_deployment.py` (deployment logic), `requirements.txt`
-- **Command Detection Priority**: The deployment logic now follows this priority order: 1) User-provided commands, 2) AI analysis results from database, 3) Docker-based detection (docker-compose.yml, Dockerfile), 4) File-based detection (package.json, requirements.txt, etc.). This ensures that intelligent AI analysis is used when available, making deployments more accurate and user-friendly.
+- **Command Detection Priority**: The deployment logic now follows this priority order: 1) Static HTML site detection (highest priority), 2) User-provided commands, 3) AI analysis results from database (validated), 4) Docker-based detection (docker-compose.yml, Dockerfile), 5) File-based detection (package.json, requirements.txt, etc.). Static site detection always overrides AI results to prevent misclassification.
+- **Robustness**: Deployment never fails completely - always uses fallbacks (static HTTP server) if detection fails or commands are invalid.
 
 ### MAJOR ARCHITECTURE CHANGE - VM-Based Deployment with OrbStack
 - **New Deployment Model**: Each user gets an isolated OrbStack VM for deployments
@@ -34,10 +41,12 @@
 - **VM Setup**: VMs are Ubuntu-based and automatically configured with dependencies (git, nodejs, python3, npm, etc.)
 - **Deployment Flow**: 
   1. User registers → VM created automatically (`butler-user-{user_id}`)
-  2. User imports repo → Repo cloned inside VM (`/projects/{project_id}`)
-  3. Build command executed inside VM
+  2. User imports repo → Repo cloned inside VM (`/home/{username}/projects/{deployment_id}`) - dynamically detects VM username
+  3. Build command executed inside VM (if needed)
   4. Start command executed inside VM (background process with nohup)
   5. Domain configured: `project-name.butler.aayush786.xyz` → `localhost:{port}` (via Cloudflare tunnel)
+- **Project Directory Format**: `/home/{username}/projects/{deployment_id}` (dynamically detected username, e.g., `/home/ubuntu/projects/1` or `/home/aayush/projects/1`)
+- **Migration**: Old deployments with `/projects/{deployment_id}` are automatically migrated to `/home/{username}/projects/{deployment_id}` during deployment
 - **Database Changes**: Added VM fields to `Deployment` model:
   - `vm_name` (TEXT) - OrbStack VM name (e.g., "butler-user-1")
   - `vm_ip` (TEXT) - VM IP address
@@ -512,11 +521,12 @@ Devops_Butler/
    - Deploy page shows multi form with pre-filled URLs
    - Config page shows components section with frontend/backend cards
 6. **User deletes multi-repo** → `DELETE /projects/{parent_id}`:
+   - Stops process inside VM (if process_pid exists)
+   - Removes Cloudflare DNS record (if custom_domain exists)
+   - Deletes project directory from VM (verifies existence before deletion)
    - Finds all children where `parent_project_id = parent_id`
-   - Stops and removes all child containers
-   - Deletes all child images
-   - Deletes all child env vars
-   - Deletes all child DB records
+   - For each child: stops process, removes directory from VM, removes Cloudflare DNS, deletes env vars, deletes DB record
+   - Deletes parent's env vars and DB record
    - Then deletes parent
 7. **User deletes account** → `DELETE /api/user/account`:
    - Stops all processes in user's deployments (inside VM)

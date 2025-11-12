@@ -73,18 +73,35 @@ async def analyze_project_with_gemini(
         if connection_manager:
             await connection_manager.broadcast("🔍 Analyzing project structure...")
         
-        # Step 1: Get project structure (list of files and directories)
+        # Step 1: Check for static HTML sites FIRST (highest priority)
+        # This prevents static sites from being misclassified as Python/Node.js projects
+        is_static_site = False
+        html_check = await vm_manager.exec_in_vm(
+            vm_name,
+            f"if [ -f {project_dir}/index.html ] || [ $(find {project_dir} -maxdepth 1 -name '*.html' 2>/dev/null | wc -l) -gt 0 ]; then echo 'found'; else echo 'not_found'; fi"
+        )
+        
+        if "found" in (html_check.stdout or "").strip():
+            is_static_site = True
+            logger.info("Detected static HTML site - will recommend static server, no build command")
+        
+        # Step 2: Get project structure (list of files and directories)
+        # Include HTML files in the search to help AI detect static sites
         ls_result = await vm_manager.exec_in_vm(
             vm_name,
-            f"find {project_dir} -maxdepth 2 -type f \\( -name '*.json' -o -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.yml' -o -name '*.yaml' -o -name 'Dockerfile' -o -name 'docker-compose.yml' -o -name 'README.md' -o -name 'package.json' -o -name 'requirements.txt' -o -name 'go.mod' -o -name 'Cargo.toml' -o -name 'pom.xml' \\) | head -30"
+            f"find {project_dir} -maxdepth 2 -type f \\( -name '*.json' -o -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.html' -o -name '*.htm' -o -name '*.yml' -o -name '*.yaml' -o -name 'Dockerfile' -o -name 'docker-compose.yml' -o -name 'README.md' -o -name 'package.json' -o -name 'requirements.txt' -o -name 'go.mod' -o -name 'Cargo.toml' -o -name 'pom.xml' \\) | head -30"
         )
         
         files_list = ls_result.stdout.strip().split('\n') if ls_result.stdout else []
         files_list = [f.replace(project_dir, '.').strip() for f in files_list if f.strip() and f.strip() != '.']
         
-        # Step 2: Read key configuration files
+        # Count HTML files
+        html_files = [f for f in files_list if f.endswith('.html') or f.endswith('.htm')]
+        html_count = len(html_files)
+        
+        # Step 3: Read key configuration files
         key_files_content = {}
-        key_files = ['package.json', 'requirements.txt', 'Dockerfile', 'docker-compose.yml', 'docker-compose.yaml', 'README.md', 'go.mod', 'Cargo.toml', 'pom.xml', 'app.py', 'main.py', 'server.js', 'index.js', 'index.ts']
+        key_files = ['package.json', 'requirements.txt', 'Dockerfile', 'docker-compose.yml', 'docker-compose.yaml', 'README.md', 'go.mod', 'Cargo.toml', 'pom.xml', 'app.py', 'main.py', 'server.js', 'index.js', 'index.ts', 'index.html']
         
         for key_file in key_files:
             try:
@@ -127,21 +144,78 @@ Key Files Content:
             project_summary += f"\n=== {file_name} ===\n{content_preview}\n"
         
         # Step 4: Create prompt for Gemini
+        # CRITICAL: Check for static HTML sites FIRST before suggesting any build commands
+        static_site_instruction = ""
+        if is_static_site or html_count > 0:
+            static_site_instruction = """
+⚠️ **CRITICAL: STATIC SITE DETECTION** ⚠️
+This project appears to be a STATIC HTML SITE (found {html_count} HTML file(s)).
+For static HTML sites:
+- build_command MUST be NULL (no build needed)
+- start_command MUST be "python3 -m http.server 8080" (simple HTTP server)
+- port MUST be 8080
+- DO NOT suggest "pip install -r requirements.txt" or any Python dependencies
+- DO NOT suggest Node.js build commands unless package.json exists AND is required
+- Static sites do NOT need dependencies installed - they are just HTML/CSS/JS files
+
+ONLY if this is NOT a static site (no HTML files or HTML files are part of a larger framework like React/Next.js), then proceed with normal analysis.
+""".format(html_count=html_count)
+        
         prompt = f"""
 You are a DevOps expert analyzing a project repository. Analyze the following project structure and configuration files to determine how to build, run, and deploy this application.
 
-Analyze the project and provide:
+{static_site_instruction}
 
-1. **Framework/Technology Stack**: What framework or technology is this project using? (e.g., React, Next.js, Vue, Django, Flask, Express, Go, Rust, Java, etc.)
-2. **Build Command**: What command should be used to build/install dependencies? (e.g., "npm install", "pip install -r requirements.txt", "npm install && npm run build", etc.)
-3. **Start Command**: What command should be used to start/run the application? (e.g., "npm start", "npm run dev", "python app.py", "python manage.py runserver 0.0.0.0:8000", etc.)
-4. **Port Number**: What port does this application typically run on? (e.g., 3000, 5000, 8000, 8080, etc.)
+**ANALYSIS PRIORITY (IMPORTANT - FOLLOW THIS ORDER):**
+
+1. **FIRST: Check if this is a static HTML site**
+   - If index.html exists OR multiple .html files exist → This is a STATIC SITE
+   - For static sites: build_command = null, start_command = "python3 -m http.server 8080", port = 8080
+   - DO NOT suggest dependencies or build commands for pure static sites
+
+2. **SECOND: Check for framework-specific files**
+   - package.json exists → Node.js project (check for build scripts)
+   - requirements.txt exists → Python project (ONLY if Python entry points exist like app.py, manage.py, main.py)
+   - Dockerfile exists → Extract commands from Dockerfile
+   - docker-compose.yml exists → Extract commands from docker-compose
+
+3. **THIRD: Validate suggestions**
+   - If suggesting "pip install -r requirements.txt", VERIFY that requirements.txt exists AND Python entry points exist
+   - If suggesting "npm install", VERIFY that package.json exists
+   - If no build is needed, set build_command to null
+
+**Analysis Requirements:**
+
+1. **Framework/Technology Stack**: What framework or technology is this project using? 
+   - For static sites: "Static HTML"
+   - For frameworks: React, Next.js, Vue, Django, Flask, Express, Go, Rust, Java, etc.
+
+2. **Build Command**: 
+   - For static sites: null (NO BUILD NEEDED)
+   - For other projects: "npm install", "pip install -r requirements.txt" (ONLY if requirements.txt exists), "npm install && npm run build", etc.
+   - IMPORTANT: If requirements.txt doesn't exist, DO NOT suggest "pip install -r requirements.txt"
+
+3. **Start Command**: 
+   - For static sites: "python3 -m http.server 8080" (MANDATORY)
+   - For other projects: "npm start", "npm run dev", "python app.py", "python manage.py runserver 0.0.0.0:8000", etc.
+
+4. **Port Number**: 
+   - For static sites: 8080 (MANDATORY)
+   - For other projects: 3000 (Node.js), 5000 (Flask), 8000 (Django), 8080 (default), etc.
+
 5. **Root Directory**: Is there a specific subdirectory where the application should be run from? (e.g., "./frontend", "./backend", "./", etc.) If not specified, use "./"
-6. **Install Command**: What command should be used to install dependencies? (e.g., "npm install", "pip install -r requirements.txt", etc.)
+
+6. **Install Command**: Same as build_command (for compatibility)
+
 7. **Environment Variables**: What environment variables might be needed? (e.g., DATABASE_URL, API_KEY, PORT, etc.) - return as a list
+
 8. **Additional Notes**: Any special configuration or setup steps needed?
 
+**Project Analysis:**
 {project_summary}
+
+**HTML Files Found: {html_count}**
+**Is Static Site: {is_static_site}**
 
 Please provide your analysis in the following JSON format (ONLY JSON, no markdown, no code blocks):
 {{
@@ -156,8 +230,18 @@ Please provide your analysis in the following JSON format (ONLY JSON, no markdow
     "confidence": "string"
 }}
 
+**REMEMBER:**
+- If this is a static HTML site (HTML files found), build_command MUST be null and start_command MUST be "python3 -m http.server 8080"
+- Do NOT suggest "pip install -r requirements.txt" unless requirements.txt EXISTS in the project
+- Do NOT suggest build commands for static sites
+
 Respond ONLY with valid JSON, no additional text or markdown.
-"""
+""".format(
+            static_site_instruction=static_site_instruction,
+            project_summary=project_summary,
+            html_count=html_count,
+            is_static_site=is_static_site
+        )
         
         # Step 5: Call Gemini API
         if connection_manager:
@@ -256,44 +340,136 @@ async def analyze_project_in_vm(
             with Session(engine) as session:
                 deployment = session.get(Deployment, deployment_id)
                 if deployment:
-                    # Update build command if detected
-                    if analysis_result.get('build_command'):
-                        deployment.build_command = analysis_result['build_command']
-                        logger.info(f"Updated build_command: {analysis_result['build_command']}")
+                    # Validate and sanitize AI results before storing
+                    # Check if this is a static site (framework contains "Static" or "HTML")
+                    framework = analysis_result.get('framework', '').lower()
+                    is_static = 'static' in framework or 'html' in framework
                     
-                    # Update install command if detected (can be used as build command if no build_command)
-                    if analysis_result.get('install_command') and not deployment.build_command:
-                        deployment.build_command = analysis_result['install_command']
-                        logger.info(f"Updated build_command from install_command: {analysis_result['install_command']}")
+                    # Also check if HTML files exist (double-check)
+                    if not is_static:
+                        html_check = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"if [ -f {project_dir}/index.html ] || [ $(find {project_dir} -maxdepth 1 -name '*.html' 2>/dev/null | wc -l) -gt 0 ]; then echo 'found'; else echo 'not_found'; fi"
+                        )
+                        if "found" in (html_check.stdout or "").strip():
+                            is_static = True
+                            logger.info("Detected static site via HTML file check - overriding AI framework detection")
                     
-                    # Update start command if detected
-                    if analysis_result.get('start_command'):
-                        deployment.start_command = analysis_result['start_command']
-                        logger.info(f"Updated start_command: {analysis_result['start_command']}")
+                    # For static sites, force correct values (ignore AI mistakes)
+                    if is_static:
+                        logger.info("✅ Detected static site - forcing correct build/start commands (overriding any incorrect AI suggestions)")
+                        deployment.build_command = None  # No build for static sites
+                        deployment.start_command = "python3 -m http.server 8080"  # Force static server
+                        deployment.port = 8080  # Force port 8080
+                        logger.info("✅ Overrode AI results for static site - build_command=None, start_command=python3 -m http.server 8080, port=8080")
+                    else:
+                        # Update build command if detected, but validate it
+                        build_cmd = analysis_result.get('build_command')
+                        if build_cmd:
+                            # Validate build command makes sense
+                            # If it's pip install -r requirements.txt, validate requirements.txt exists
+                            if "pip install -r requirements.txt" in build_cmd:
+                                req_check = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"test -f {project_dir}/requirements.txt && echo 'exists' || echo 'not_exists'"
+                                )
+                                if "not_exists" in (req_check.stdout or "").strip():
+                                    logger.warning(f"⚠️ AI suggested 'pip install -r requirements.txt' but requirements.txt not found - setting build_command to None")
+                                    deployment.build_command = None
+                                else:
+                                    # Also check if Python entry points exist
+                                    python_entry_check = await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"test -f {project_dir}/app.py -o -f {project_dir}/main.py -o -f {project_dir}/manage.py && echo 'exists' || echo 'not_exists'"
+                                    )
+                                    if "not_exists" in (python_entry_check.stdout or "").strip():
+                                        logger.warning(f"⚠️ requirements.txt exists but no Python entry points found - setting build_command to None")
+                                        deployment.build_command = None
+                                    else:
+                                        deployment.build_command = build_cmd
+                                        logger.info(f"✅ Validated and set build_command: {build_cmd}")
+                            elif build_cmd.lower() == 'null' or build_cmd.lower() == 'none':
+                                deployment.build_command = None
+                            else:
+                                deployment.build_command = build_cmd
+                                logger.info(f"Updated build_command: {deployment.build_command}")
+                        else:
+                            # No build command from AI - check if install_command exists
+                            install_cmd = analysis_result.get('install_command')
+                            if install_cmd and install_cmd.lower() != 'null' and install_cmd.lower() != 'none':
+                                # Validate install command
+                                if "pip install -r requirements.txt" in install_cmd:
+                                    req_check = await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"test -f {project_dir}/requirements.txt && echo 'exists' || echo 'not_exists'"
+                                    )
+                                    if "exists" in (req_check.stdout or "").strip():
+                                        deployment.build_command = install_cmd
+                                        logger.info(f"Updated build_command from install_command: {install_cmd}")
+                                    else:
+                                        logger.warning(f"⚠️ AI suggested install_command with requirements.txt but file not found - skipping")
+                                else:
+                                    deployment.build_command = install_cmd
+                                    logger.info(f"Updated build_command from install_command: {install_cmd}")
+                        
+                        # Update start command if detected
+                        if analysis_result.get('start_command'):
+                            start_cmd = analysis_result['start_command']
+                            if start_cmd.lower() != 'null' and start_cmd.lower() != 'none':
+                                deployment.start_command = start_cmd
+                                logger.info(f"Updated start_command: {deployment.start_command}")
+                        
+                        # Update port if detected
+                        if analysis_result.get('port'):
+                            try:
+                                port = int(analysis_result['port'])
+                                if port > 0 and port < 65536:
+                                    deployment.port = port
+                                    logger.info(f"Updated port: {port}")
+                                else:
+                                    logger.warning(f"Invalid port value: {port}, using default 8080")
+                                    deployment.port = 8080
+                            except (ValueError, TypeError):
+                                logger.warning(f"Invalid port value: {analysis_result.get('port')}, using default 8080")
+                                deployment.port = 8080
+                        else:
+                            # No port from AI - set default
+                            deployment.port = 8080
+                            logger.info("No port from AI, using default 8080")
                     
-                    # Update port if detected
-                    if analysis_result.get('port'):
-                        try:
-                            port = int(analysis_result['port'])
-                            deployment.port = port
-                            logger.info(f"Updated port: {port}")
-                        except (ValueError, TypeError):
-                            logger.warning(f"Invalid port value: {analysis_result.get('port')}")
-                    
-                    # Store framework type (we can add this field later)
-                    framework = analysis_result.get('framework', '')
+                    # Store framework type
                     if framework:
-                        logger.info(f"Detected framework: {framework}")
+                        logger.info(f"Detected framework: {analysis_result.get('framework', '')}")
                     
-                    # Store environment variables (we can add this field later)
+                    # Store environment variables
                     env_vars = analysis_result.get('environment_variables', [])
                     if env_vars:
                         logger.info(f"Detected environment variables: {env_vars}")
                     
-                    # Store notes (we can add this field later)
+                    # Store notes
                     notes = analysis_result.get('notes', '')
                     if notes:
                         logger.info(f"Analysis notes: {notes}")
+                    
+                    # Final validation - ensure we have at least a start command
+                    if not deployment.start_command:
+                        logger.warning("⚠️ AI analysis did not provide start_command, checking for static site as fallback")
+                        # Check if static site (has HTML files)
+                        html_check = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"if [ -f {project_dir}/index.html ] || [ $(find {project_dir} -maxdepth 1 -name '*.html' 2>/dev/null | wc -l) -gt 0 ]; then echo 'found'; else echo 'not_found'; fi"
+                        )
+                        if "found" in (html_check.stdout or "").strip():
+                            deployment.start_command = "python3 -m http.server 8080"
+                            deployment.port = 8080
+                            deployment.build_command = None
+                            logger.info("✅ Set default static site configuration as fallback")
+                        else:
+                            # No static site and no start command - set a safe default
+                            logger.warning("⚠️ No start command and not a static site - setting safe default")
+                            deployment.start_command = "echo 'No start command detected. Please configure deployment manually.'"
+                            deployment.port = 8080
+                            logger.info("✅ Set safe default start command")
                     
                     session.add(deployment)
                     session.commit()

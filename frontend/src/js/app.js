@@ -856,24 +856,22 @@ async function loadVMStatus() {
 
 function updateVMStatusUI(status, message) {
   // Update dashboard VM status card
-  updateVMStatusCard('vmStatusCard', 'vmStatusIcon', 'vmStatusSpinner', 'vmStatusMessage', 
-                     'vmStatusProgress', 'vmProgressFill', 'vmProgressText', 'dashboardActions', 
-                     status, message);
+  updateVMStatusCard('vmStatusCard', 'vmStatusBadge', 'vmStatusDot', 'vmStatusText', 
+                     'vmStatusMessage', 'vmStatusDetails', 'dashboardActions', status, message);
   
   // Update projects page VM status card
-  updateVMStatusCard('vmStatusCardProjects', 'vmStatusIconProjects', 'vmStatusSpinnerProjects', 
-                     'vmStatusMessageProjects', 'vmStatusProgressProjects', 'vmProgressFillProjects', 
-                     'vmProgressTextProjects', null, status, message);
+  updateVMStatusCard('vmStatusCardProjects', 'vmStatusBadgeProjects', 'vmStatusDotProjects', 
+                     'vmStatusTextProjects', 'vmStatusMessageProjects', 'vmStatusDetailsProjects', 
+                     null, status, message);
 }
 
-function updateVMStatusCard(cardId, iconId, spinnerId, messageId, progressId, fillId, textId, actionsId, status, message) {
+function updateVMStatusCard(cardId, badgeId, dotId, textId, messageId, detailsId, actionsId, status, message) {
   const vmStatusCard = document.getElementById(cardId);
-  const vmStatusIcon = document.getElementById(iconId);
-  const vmStatusSpinner = document.getElementById(spinnerId);
+  const statusBadge = document.getElementById(badgeId);
+  const statusDot = document.getElementById(dotId);
+  const statusText = document.getElementById(textId);
   const vmStatusMessage = document.getElementById(messageId);
-  const vmStatusProgress = document.getElementById(progressId);
-  const vmProgressFill = document.getElementById(fillId);
-  const vmProgressText = document.getElementById(textId);
+  const vmStatusDetails = document.getElementById(detailsId);
   const dashboardActions = actionsId ? document.getElementById(actionsId) : null;
   
   if (!vmStatusCard) return;
@@ -886,65 +884,82 @@ function updateVMStatusCard(cardId, iconId, spinnerId, messageId, progressId, fi
     vmStatusMessage.textContent = message;
   }
   
-  // Update icon and styling based on status
+  // Update status badge and details based on status
   if (status === 'creating') {
-    // Show spinner animation
-    if (vmStatusSpinner) {
-      vmStatusSpinner.textContent = '⏳';
-      vmStatusSpinner.className = 'vm-status-spinner spinning';
+    // Set creating status
+    if (statusBadge) {
+      statusBadge.className = 'status-badge creating';
     }
-    if (vmStatusIcon) {
-      vmStatusIcon.className = 'vm-status-icon vm-status-creating';
+    if (statusDot) {
+      statusDot.className = 'status-dot creating';
     }
-    // Show progress bar
-    if (vmStatusProgress) {
-      vmStatusProgress.style.display = 'block';
-      // Animate progress bar (indeterminate)
-      if (vmProgressFill) {
-        vmProgressFill.style.width = '100%';
-        vmProgressFill.className = 'vm-progress-fill vm-progress-indeterminate';
-      }
-      if (vmProgressText) {
-        vmProgressText.textContent = 'Creating your virtual machine... This may take 2-5 minutes.';
-      }
+    if (statusText) {
+      statusText.textContent = 'Creating';
+    }
+    // Show details with estimated time
+    if (vmStatusDetails) {
+      vmStatusDetails.style.display = 'block';
+      vmStatusDetails.textContent = 'Estimated time remaining: 2-5 minutes';
     }
     // Hide actions while creating
     if (dashboardActions) {
       dashboardActions.style.display = 'none';
     }
   } else if (status === 'ready') {
-    // Show success icon
-    if (vmStatusSpinner) {
-      vmStatusSpinner.textContent = '✅';
-      vmStatusSpinner.className = 'vm-status-spinner';
+    // Set ready status (VM is ready and running)
+    if (statusBadge) {
+      statusBadge.className = 'status-badge running';
     }
-    if (vmStatusIcon) {
-      vmStatusIcon.className = 'vm-status-icon vm-status-ready';
+    if (statusDot) {
+      statusDot.className = 'status-dot running';
     }
-    // Hide progress bar
-    if (vmStatusProgress) {
-      vmStatusProgress.style.display = 'none';
+    if (statusText) {
+      statusText.textContent = 'Running';
+    }
+    // Hide details
+    if (vmStatusDetails) {
+      vmStatusDetails.style.display = 'none';
     }
     // Show actions
     if (dashboardActions) {
       dashboardActions.style.display = 'grid';
     }
   } else if (status === 'failed') {
-    // Show error icon
-    if (vmStatusSpinner) {
-      vmStatusSpinner.textContent = '❌';
-      vmStatusSpinner.className = 'vm-status-spinner';
+    // Set failed status
+    if (statusBadge) {
+      statusBadge.className = 'status-badge failed';
     }
-    if (vmStatusIcon) {
-      vmStatusIcon.className = 'vm-status-icon vm-status-failed';
+    if (statusDot) {
+      statusDot.className = 'status-dot failed';
     }
-    // Hide progress bar
-    if (vmStatusProgress) {
-      vmStatusProgress.style.display = 'none';
+    if (statusText) {
+      statusText.textContent = 'Failed';
+    }
+    // Show error details
+    if (vmStatusDetails) {
+      vmStatusDetails.style.display = 'block';
+      vmStatusDetails.textContent = 'Please check that OrbStack is installed and running, then try again.';
     }
     // Show actions but with warning
     if (dashboardActions) {
       dashboardActions.style.display = 'grid';
+    }
+  } else {
+    // Unknown status - default to creating
+    if (statusBadge) {
+      statusBadge.className = 'status-badge creating';
+    }
+    if (statusDot) {
+      statusDot.className = 'status-dot creating';
+    }
+    if (statusText) {
+      statusText.textContent = 'Checking';
+    }
+    if (vmStatusDetails) {
+      vmStatusDetails.style.display = 'none';
+    }
+    if (dashboardActions) {
+      dashboardActions.style.display = 'none';
     }
   }
 }

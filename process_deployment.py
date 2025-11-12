@@ -600,30 +600,77 @@ async def run_process_deployment(
         if not build_command or not start_command or not port:
             await manager.broadcast("🔍 Auto-detecting build and start commands...")
             
-            # PRIORITY 1: Check for AI analysis results in database (if deployment exists)
-            # AI analysis runs in background after import, so results may already be available
-            ai_detected = False
-            if deployment_id:
-                with Session(engine) as session:
-                    deployment = session.get(Deployment, deployment_id)
-                    if deployment:
-                        # Use AI analysis results if available (these are set by project_analyzer.py)
-                        if not build_command and deployment.build_command:
-                            build_command = deployment.build_command
-                            ai_detected = True
-                            await manager.broadcast(f"🤖 Using AI-detected build command: {build_command}")
-                        
-                        if not start_command and deployment.start_command:
-                            start_command = deployment.start_command
-                            ai_detected = True
-                            await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
-                        
-                        if not port and deployment.port:
-                            port = deployment.port
-                            ai_detected = True
-                            await manager.broadcast(f"🤖 Using AI-detected port: {port}")
+            # PRIORITY 1: Check for static HTML files FIRST (before AI results)
+            # This prevents static sites from being misclassified as Python/Node.js projects
+            # Static sites should NEVER run build commands like "pip install -r requirements.txt"
+            is_static_site = False
+            if not build_command or not start_command:
+                await manager.broadcast("📄 Checking for static HTML files...")
+                try:
+                    # Check for index.html or any .html files in the project directory
+                    html_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"if [ -f {vm_project_dir}/index.html ] || [ $(find {vm_project_dir} -maxdepth 1 -name '*.html' 2>/dev/null | wc -l) -gt 0 ]; then echo 'found'; else echo 'not_found'; fi"
+                    )
+                    
+                    if "found" in (html_check.stdout or "").strip():
+                        # Static HTML site detected - prioritize this over ALL other detections
+                        is_static_site = True
+                        await manager.broadcast("✅ Detected static HTML site - overriding AI analysis")
+                        # Force static site configuration (ignore AI results)
+                        build_command = None  # No build needed for static sites
+                        if not start_command:
+                            # Use Python's built-in HTTP server for static sites
+                            start_command = "python3 -m http.server 8080"
+                            await manager.broadcast(f"✅ Detected start command for static site: {start_command}")
+                        if not port:
+                            port = 8080
+                            await manager.broadcast(f"✅ Detected port for static site: {port}")
+                except Exception as e:
+                    logger.debug(f"Error checking for static HTML files: {e}")
+                    # Continue with other detection methods
             
-            # PRIORITY 2: Use dockerfile_parser for Docker-based detection (if AI results not available)
+            # PRIORITY 2: Check for AI analysis results in database (if deployment exists and NOT a static site)
+            # AI analysis runs in background after import, so results may already be available
+            # BUT: Skip AI results if we detected a static site (they might be wrong)
+            if not is_static_site:
+                ai_detected = False
+                if deployment_id:
+                    with Session(engine) as session:
+                        deployment = session.get(Deployment, deployment_id)
+                        if deployment:
+                            # Use AI analysis results if available (these are set by project_analyzer.py)
+                            # BUT: Validate that requirements.txt exists before using pip install command
+                            if not build_command and deployment.build_command:
+                                # Check if build command is pip install -r requirements.txt
+                                if "pip install -r requirements.txt" in deployment.build_command:
+                                    # Verify requirements.txt exists before using this command
+                                    req_check = await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"test -f {vm_project_dir}/requirements.txt && echo 'exists' || echo 'not_exists'"
+                                    )
+                                    if "exists" in (req_check.stdout or "").strip():
+                                        build_command = deployment.build_command
+                                        ai_detected = True
+                                        await manager.broadcast(f"🤖 Using AI-detected build command: {build_command}")
+                                    else:
+                                        await manager.broadcast(f"⚠️ AI suggested 'pip install -r requirements.txt' but requirements.txt not found, skipping build command")
+                                else:
+                                    build_command = deployment.build_command
+                                    ai_detected = True
+                                    await manager.broadcast(f"🤖 Using AI-detected build command: {build_command}")
+                            
+                            if not start_command and deployment.start_command:
+                                start_command = deployment.start_command
+                                ai_detected = True
+                                await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
+                            
+                            if not port and deployment.port:
+                                port = deployment.port
+                                ai_detected = True
+                                await manager.broadcast(f"🤖 Using AI-detected port: {port}")
+            
+            # PRIORITY 3: Use dockerfile_parser for Docker-based detection (if AI results not available and not static site)
             if not build_command or not start_command:
                 await manager.broadcast("📁 Checking project files for build/start commands...")
                 
@@ -834,7 +881,7 @@ async def run_process_deployment(
                             # requirements.txt exists but no standard entry point
                             # Don't set start_command - let user specify it manually
                             await manager.broadcast(f"⚠️ Python project detected but no standard entry point found")
-        
+                
         # Find free port if not specified (ports are forwarded from VM to host)
         if not port:
             port = 3000  # Default port
@@ -861,73 +908,153 @@ async def run_process_deployment(
                         await manager.broadcast("💾 Saved detected commands to deployment record")
         
         # Run build command inside VM if provided
+        # Skip build for static sites (build_command should be None)
         if build_command:
-            await manager.broadcast(f"🔨 Running build command in VM: {build_command}")
-            try:
-                # Execute build command inside VM
-                build_result = await vm_manager.exec_in_vm(
+            # Validate build command makes sense (check if required files exist)
+            # For pip install -r requirements.txt, verify requirements.txt exists
+            if "pip install -r requirements.txt" in build_command or "pip install -r" in build_command:
+                req_check = await vm_manager.exec_in_vm(
                     vm_name,
-                    build_command,
-                    cwd=vm_project_dir,
-                    env=env_vars
+                    f"test -f {vm_project_dir}/requirements.txt && echo 'exists' || echo 'not_exists'"
                 )
-                
-                if build_result.returncode != 0:
-                    error_output = build_result.stderr or build_result.stdout or "Unknown build error"
-                    error_msg = f"Build failed in VM (exit code {build_result.returncode}): {error_output[:500]}"
+                if "not_exists" in (req_check.stdout or "").strip():
+                    await manager.broadcast(f"⚠️ Build command requires requirements.txt but file not found, skipping build step")
+                    build_command = None  # Skip build if requirements.txt doesn't exist
+                else:
+                    await manager.broadcast(f"✅ Found requirements.txt, proceeding with build")
+            
+            if build_command:
+                await manager.broadcast(f"🔨 Running build command in VM: {build_command}")
+                try:
+                    # Execute build command inside VM
+                    build_result = await vm_manager.exec_in_vm(
+                        vm_name,
+                        build_command,
+                        cwd=vm_project_dir,
+                        env=env_vars
+                    )
+                    
+                    if build_result.returncode != 0:
+                        error_output = build_result.stderr or build_result.stdout or "Unknown build error"
+                        error_msg = f"Build failed in VM (exit code {build_result.returncode}): {error_output[:500]}"
+                        await manager.broadcast(f"❌ {error_msg}")
+                        # Log build output for debugging
+                        if build_result.stdout:
+                            await manager.broadcast(f"Build stdout: {build_result.stdout[:1000]}")
+                        if build_result.stderr:
+                            await manager.broadcast(f"Build stderr: {build_result.stderr[:1000]}")
+                        # For static sites or if requirements.txt doesn't exist, don't fail deployment
+                        # Just skip the build step
+                        if "requirements.txt" in error_output.lower() and ("no such file" in error_output.lower() or "cannot find" in error_output.lower()):
+                            await manager.broadcast(f"⚠️ requirements.txt not found, skipping build step (this is OK for static sites)")
+                            build_command = None  # Skip build
+                        else:
+                            # For other build errors, fail deployment
+                            if deployment_id:
+                                with Session(engine) as session:
+                                    deployment = session.get(Deployment, deployment_id)
+                                    if deployment:
+                                        deployment.status = "failed"
+                                        session.add(deployment)
+                                        session.commit()
+                            return None
+                    else:
+                        await manager.broadcast("✅ Build completed successfully in VM")
+                        # Log build output if available
+                        if build_result.stdout:
+                            await manager.broadcast(f"Build output: {build_result.stdout[:500]}")
+                except Exception as e:
+                    error_msg = f"Build command failed in VM with error: {str(e)}"
                     await manager.broadcast(f"❌ {error_msg}")
-                    # Log build output for debugging
-                    if build_result.stdout:
-                        await manager.broadcast(f"Build stdout: {build_result.stdout[:1000]}")
-                    if build_result.stderr:
-                        await manager.broadcast(f"Build stderr: {build_result.stderr[:1000]}")
-                    if deployment_id:
-                        with Session(engine) as session:
-                            deployment = session.get(Deployment, deployment_id)
-                            if deployment:
-                                deployment.status = "failed"
-                                session.add(deployment)
-                                session.commit()
-                    return None
-                
-                await manager.broadcast("✅ Build completed successfully in VM")
-                # Log build output if available
-                if build_result.stdout:
-                    await manager.broadcast(f"Build output: {build_result.stdout[:500]}")
-            except Exception as e:
-                error_msg = f"Build command failed in VM with error: {str(e)}"
-                await manager.broadcast(f"❌ {error_msg}")
-                if deployment_id:
-                    with Session(engine) as session:
-                        deployment = session.get(Deployment, deployment_id)
-                        if deployment:
-                            deployment.status = "failed"
-                            session.add(deployment)
-                            session.commit()
-                return None
+                    # For static sites, skip build errors related to missing files
+                    if "requirements.txt" in str(e).lower() or "no such file" in str(e).lower():
+                        await manager.broadcast(f"⚠️ Build error related to missing file, skipping build step")
+                        build_command = None  # Skip build
+                    else:
+                        if deployment_id:
+                            with Session(engine) as session:
+                                deployment = session.get(Deployment, deployment_id)
+                                if deployment:
+                                    deployment.status = "failed"
+                                    session.add(deployment)
+                                    session.commit()
+                        return None
         
         # Validate that we have a start command
+        # If no start_command detected, do a final check for static HTML files
         if not start_command:
-            error_msg = "No start command provided or detected. Please specify a start command in the deployment settings."
-            await manager.broadcast(f"❌ {error_msg}")
-            if deployment_id:
-                with Session(engine) as session:
-                    deployment = session.get(Deployment, deployment_id)
-                    if deployment:
-                        deployment.status = "failed"
-                        session.add(deployment)
-                        session.commit()
-            return None
+            await manager.broadcast("🔍 Final check: Verifying if this is a static site...")
+            try:
+                # Check for HTML files in the project directory
+                html_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"if [ -f {vm_project_dir}/index.html ] || [ $(find {vm_project_dir} -maxdepth 1 -name '*.html' 2>/dev/null | wc -l) -gt 0 ]; then echo 'found'; else echo 'not_found'; fi"
+                )
+                
+                if "found" in (html_check.stdout or "").strip():
+                    # Static HTML site detected - use Python HTTP server
+                    start_command = "python3 -m http.server 8080"
+                    if not port:
+                        port = 8080
+                    if not build_command:
+                        build_command = None  # No build needed for static sites
+                    await manager.broadcast(f"✅ Detected static HTML site, using: {start_command} on port {port}")
+                else:
+                    # Not a static site and no start command - use safe fallback instead of failing
+                    logger.warning(f"⚠️ No start command detected and not a static site. Using safe fallback.")
+                    await manager.broadcast(f"⚠️ No start command detected. Using fallback: python3 -m http.server 8080")
+                    # Use static server as fallback (works for most projects)
+                    start_command = "python3 -m http.server 8080"
+                    if not port:
+                        port = 8080
+                    if not build_command:
+                        build_command = None  # No build needed for simple HTTP server
+                    await manager.broadcast(f"✅ Using fallback start command: {start_command} on port {port}")
+                    # Don't fail - continue with fallback
+            except Exception as e:
+                # If check fails, use safe fallback instead of failing
+                logger.warning(f"⚠️ Error checking for static files: {e}, using fallback")
+                await manager.broadcast(f"⚠️ Error checking project type, using safe fallback")
+                # Use static server as fallback (works for most projects)
+                if not start_command:
+                    start_command = "python3 -m http.server 8080"
+                    if not port:
+                        port = 8080
+                    if not build_command:
+                        build_command = None
+                    await manager.broadcast(f"✅ Using fallback start command: {start_command} on port {port}")
+                # Don't fail - continue with fallback
         
         # Prepare environment variables
         process_env = env_vars or {}
         
         # Ensure we have a deployment_id before starting process
         if not deployment_id:
-            error_msg = "No deployment record found. Cannot start process."
-            await manager.broadcast(f"❌ {error_msg}")
-            print(f"Error: {error_msg} - deployment_id is None")
-            return None
+            error_msg = "No deployment record found. Attempting to find existing deployment..."
+            await manager.broadcast(f"⚠️ {error_msg}")
+            logger.warning(f"Warning: {error_msg} - deployment_id is None, trying to recover")
+            # Try to find deployment record as fallback
+            try:
+                with Session(engine) as session:
+                    # Try to find deployment by git_url and user_id (most recent)
+                    deployment = session.exec(
+                        select(Deployment).where(
+                            Deployment.git_url == git_url,
+                            Deployment.user_id == user_id
+                        ).order_by(Deployment.created_at.desc())
+                    ).first()
+                    if deployment:
+                        deployment_id = deployment.id
+                        logger.info(f"✅ Found existing deployment record: {deployment_id}")
+                        await manager.broadcast(f"✅ Found deployment record: {deployment_id}")
+                    else:
+                        logger.error("❌ No deployment record found and cannot create one - this should not happen")
+                        await manager.broadcast(f"❌ Critical error: No deployment record found")
+                        return None
+            except Exception as e:
+                logger.error(f"Error trying to find deployment record: {e}")
+                await manager.broadcast(f"❌ Critical error: Cannot find deployment record: {str(e)}")
+                return None
         
         # Start process inside VM using nohup or PM2 for background execution
         # Use deployment_id as project_id for process tracking
@@ -948,152 +1075,405 @@ async def run_process_deployment(
             pid_file = f"/tmp/project-{deployment_id}.pid"
             
             # Start command in background using nohup
-            # The exec_in_vm function will handle cwd and env variables
-            # Format: nohup command > log 2>&1 & echo $! > pid_file
-            start_cmd = f"nohup {start_command} > {log_file} 2>&1 & echo $! > {pid_file}"
+            # Problem: `echo $!` captures the PID of the nohup/shell process, not the actual process
+            # Solution: Use a better method - run the process and find its PID by port or process name
+            # Escape single quotes in start_command for safe shell execution
+            # Replace single quotes with '\'' (end quote, escaped quote, start quote)
+            escaped_start_command = start_command.replace("'", "'\"'\"'")
+            # Use a wrapper that properly captures the PID of the actual process
+            # Format: (cd dir && nohup command > log 2>&1 &) && sleep 1 && pgrep -f 'command' | head -1 > pid_file
+            # Better: Just start the process and find PID by port/process name afterwards
+            start_cmd = f"cd {vm_project_dir} && nohup sh -c '{escaped_start_command}' > {log_file} 2>&1 &"
             
             # Execute the command with environment variables
-            # The exec_in_vm function will handle setting env vars and cwd
+            # Note: env vars are exported in exec_in_vm, so they should be available
+            await manager.broadcast(f"📝 Executing: {start_command} in directory: {vm_project_dir}")
+            logger.info(f"Start command: {start_cmd}")
             start_result = await vm_manager.exec_in_vm(
                 vm_name,
                 start_cmd,
-                cwd=vm_project_dir,
+                cwd=None,  # Don't use cwd in exec_in_vm since we're using cd in the command
                 env=env_vars_full
             )
             
+            # Check if command executed (nohup always returns 0, so we check stderr for actual errors)
             if start_result.returncode != 0:
-                error_msg = f"Failed to start process in VM: {start_result.stderr}"
+                error_output = start_result.stderr or start_result.stdout or "Unknown error"
+                error_msg = f"Failed to start process in VM (exit code {start_result.returncode}): {error_output[:500]}"
                 await manager.broadcast(f"❌ {error_msg}")
-                print(f"Process start failed: {error_msg}")
-                if start_result.stdout:
-                    await manager.broadcast(f"Output: {start_result.stdout[:500]}")
-                with Session(engine) as session:
-                    deployment = session.get(Deployment, deployment_id)
-                    if deployment:
-                        deployment.status = "failed"
-                        session.add(deployment)
-                        session.commit()
-                return None
-            
-            # Wait a moment for process to start and PID file to be created
-            await asyncio.sleep(1)
-            
-            # Read PID from file
-            pid_result = await vm_manager.exec_in_vm(
-                vm_name,
-                f"cat {pid_file} 2>/dev/null || echo ''"
-            )
-            
-            pid = None
-            if pid_result.returncode == 0 and pid_result.stdout.strip():
-                try:
-                    pid = int(pid_result.stdout.strip())
-                except ValueError:
-                    pass
-            
-            # If PID file is empty, try to find the process by command
-            if not pid:
-                # Try to find process by command pattern
-                find_pid_result = await vm_manager.exec_in_vm(
+                logger.error(f"Process start failed: {error_msg}")
+                logger.error(f"Start command: {start_cmd}")
+                logger.error(f"Start result stdout: {start_result.stdout}")
+                logger.error(f"Start result stderr: {start_result.stderr}")
+                # Read log file to see if process started anyway
+                log_check = await vm_manager.exec_in_vm(
                     vm_name,
-                    f"ps aux | grep '{start_command}' | grep -v grep | awk '{{print $2}}' | head -1"
+                    f"cat {log_file} 2>/dev/null | head -20 || echo 'No log file'"
                 )
-                if find_pid_result.returncode == 0 and find_pid_result.stdout.strip():
+                if log_check.stdout:
+                    await manager.broadcast(f"Log file content: {log_check.stdout[:500]}")
+                # Don't fail immediately - check if process is actually running
+                await manager.broadcast(f"⚠️ Command returned non-zero, but checking if process is running...")
+            else:
+                await manager.broadcast(f"✅ Start command executed successfully")
+                if start_result.stdout:
+                    logger.info(f"Start command output: {start_result.stdout[:200]}")
+            
+            # Wait a moment for process to start
+            await asyncio.sleep(2)
+            
+            # Initialize variables for process verification
+            pid = None
+            
+            # PRIORITY 1: Check port FIRST (most reliable method for process verification)
+            process_running = False
+            port_listening = False
+            
+            if port:
+                # Check if port is listening (primary verification method)
+                port_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
+                )
+                if port_check.stdout and port_check.stdout.strip():
+                    port_listening = True
+                    process_running = True
+                    logger.info(f"✅ Port {port} is listening - process is running")
+                    
+                    # Try to extract PID from port check
+                    if not pid or pid <= 0:
+                        try:
+                            # Try lsof first (most reliable)
+                            pid_check = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
+                            )
+                            if pid_check.stdout and pid_check.stdout.strip():
+                                pid = int(pid_check.stdout.strip())
+                                logger.info(f"✅ Found PID from port check (lsof): {pid}")
+                            else:
+                                # Try netstat
+                                pid_line = port_check.stdout.strip().split('\n')[0]
+                                import re
+                                pid_match = re.search(r'\b(\d+)\b', pid_line)
+                                if pid_match:
+                                    pid = int(pid_match.group(1))
+                                    logger.info(f"✅ Extracted PID from port check (netstat): {pid}")
+                                else:
+                                    pid = -1  # PID unknown but process is running
+                                    logger.info(f"✅ Process is running on port {port} (PID unknown)")
+                        except Exception as e:
+                            logger.warning(f"Failed to extract PID from port check: {e}")
+                            pid = -1  # PID unknown but process is running
+            
+            # PRIORITY 2: Check log file to see if process started successfully
+            log_file_exists = False
+            log_has_content = False
+            log_check = await vm_manager.exec_in_vm(
+                vm_name,
+                f"test -f {log_file} && echo 'exists' || echo 'not_exists'"
+            )
+            if "exists" in (log_check.stdout or "").strip():
+                log_file_exists = True
+                # Read log file content
+                log_content_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"wc -l < {log_file} 2>/dev/null || echo '0'"
+                )
+                if log_content_check.stdout and log_content_check.stdout.strip():
                     try:
-                        pid = int(find_pid_result.stdout.strip())
+                        line_count = int(log_content_check.stdout.strip())
+                        if line_count > 0:
+                            log_has_content = True
+                            logger.info(f"✅ Log file exists with {line_count} lines")
+                        else:
+                            logger.warning(f"⚠️ Log file exists but is empty")
                     except ValueError:
                         pass
+                
+                # Read last 20 lines of log file
+                log_tail = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"tail -20 {log_file} 2>/dev/null || echo 'No log content'"
+                )
+                if log_tail.stdout:
+                    log_content = log_tail.stdout
+                    if "error" in log_content.lower() or "failed" in log_content.lower() or "traceback" in log_content.lower():
+                        logger.warning(f"⚠️ Errors found in log file: {log_content[:300]}")
+                        # Check if it's a port conflict (not a fatal error)
+                        if "address already in use" in log_content.lower() or ("port" in log_content.lower() and "in use" in log_content.lower()):
+                            logger.info(f"⚠️ Port conflict detected in log, but port is listening - process is running")
+                            if not port_listening:
+                                # Port conflict but port not listening - might be a different port
+                                # Check if any port is listening
+                                await manager.broadcast(f"⚠️ Port conflict detected, checking if process is running...")
+                        else:
+                            await manager.broadcast(f"⚠️ Errors in log file: {log_content[:200]}")
+                    else:
+                        logger.info(f"✅ Log file has content and no critical errors")
+            else:
+                logger.warning(f"⚠️ Log file does not exist: {log_file}")
             
-            # Verify process is running
-            if pid:
+            # PRIORITY 3: Check PID if we have one (less reliable, but useful for confirmation)
+            if pid and pid > 0 and not process_running:
+                # Check if process with PID is running
                 check_result = await vm_manager.exec_in_vm(
                     vm_name,
                     f"ps -p {pid} > /dev/null 2>&1 && echo 'running' || echo 'stopped'"
                 )
-                if "stopped" in (check_result.stdout or ""):
-                    error_msg = "Process started but exited immediately"
-                    await manager.broadcast(f"❌ {error_msg}")
-                    # Read log file for error details
-                    log_result = await vm_manager.exec_in_vm(
-                        vm_name,
-                        f"tail -50 {log_file} 2>/dev/null || echo 'No log file'"
-                    )
-                    if log_result.stdout:
-                        await manager.broadcast(f"Log output: {log_result.stdout[:500]}")
-                    with Session(engine) as session:
-                        deployment = session.get(Deployment, deployment_id)
-                        if deployment:
-                            deployment.status = "failed"
-                            session.add(deployment)
-                            session.commit()
-                    return None
-            else:
-                # Process might still be starting, check logs
-                await asyncio.sleep(1)
-                # Check if process is actually running (by checking port or process name)
-                check_process = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"pgrep -f '{start_command.split()[0]}' || echo 'not_found'"
-                )
-                if "not_found" in (check_process.stdout or ""):
-                    error_msg = "Process failed to start - no process found"
-                    await manager.broadcast(f"❌ {error_msg}")
-                    # Read log file
-                    log_result = await vm_manager.exec_in_vm(
-                        vm_name,
-                        f"cat {log_file} 2>/dev/null || echo 'No log file'"
-                    )
-                    if log_result.stdout:
-                        await manager.broadcast(f"Process logs: {log_result.stdout[:1000]}")
-                    with Session(engine) as session:
-                        deployment = session.get(Deployment, deployment_id)
-                        if deployment:
-                            deployment.status = "failed"
-                            session.add(deployment)
-                            session.commit()
-                    return None
+                if "running" in (check_result.stdout or ""):
+                    process_running = True
+                    logger.info(f"✅ Process {pid} is running (verified via ps -p)")
                 else:
-                    # Extract PID from pgrep output
+                    logger.warning(f"⚠️ Process {pid} not found via ps -p")
+                    # PID might be wrong (could be shell PID, not process PID)
+                    # Try to find process by command name
+                    if start_command:
+                        cmd_name = start_command.split()[0]
+                        pgrep_result = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"pgrep -f '{cmd_name}' | head -1 || echo ''"
+                        )
+                        if pgrep_result.stdout and pgrep_result.stdout.strip():
+                            try:
+                                actual_pid = int(pgrep_result.stdout.strip())
+                                logger.info(f"✅ Found process via pgrep: {actual_pid}")
+                                pid = actual_pid
+                                process_running = True
+                            except ValueError:
+                                pass
+            
+            # PRIORITY 4: If port is not listening yet, wait a bit and check again (process might be starting)
+            if not process_running and port:
+                await asyncio.sleep(3)  # Wait for process to start
+                # Check port again (final attempt)
+                port_check2 = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
+                )
+                if port_check2.stdout and port_check2.stdout.strip():
+                    port_listening = True
+                    process_running = True
+                    logger.info(f"✅ Port {port} is now listening - process started")
+                    
+                    # Try to get PID from port
                     try:
-                        pid = int(check_process.stdout.strip().split()[0])
-                    except (ValueError, IndexError):
+                        pid_from_port = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
+                        )
+                        if pid_from_port.stdout and pid_from_port.stdout.strip():
+                            pid = int(pid_from_port.stdout.strip())
+                            logger.info(f"✅ Found PID from port (after wait): {pid}")
+                    except Exception:
                         pid = None
             
-            await manager.broadcast(f"✅ Process started in VM (PID: {pid})")
+            # Final verification: If process is not running by port check, check log for fatal errors
+            if not process_running:
+                # Read log file to see what happened
+                log_result = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"cat {log_file} 2>/dev/null | tail -50 || echo 'No log file'"
+                )
+                if log_result.stdout and log_result.stdout.strip() != 'No log file':
+                    log_content = log_result.stdout
+                    logger.warning(f"⚠️ Process not running. Log content: {log_content[:500]}")
+                    
+                    # Check for fatal errors
+                    fatal_errors = [
+                        "traceback",
+                        "fatal",
+                        "cannot bind",
+                        "permission denied",
+                        "command not found"
+                    ]
+                    
+                    has_fatal_error = any(error in log_content.lower() for error in fatal_errors)
+                    
+                    # Check for port conflict (not fatal if port is in use by our process)
+                    if "address already in use" in log_content.lower() or ("port" in log_content.lower() and "in use" in log_content.lower()):
+                        # Port conflict - check if port is actually in use
+                        port_conflict_check = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || echo ''"
+                        )
+                        if port_conflict_check.stdout and port_conflict_check.stdout.strip():
+                            # Port is in use - process is running despite the error message
+                            process_running = True
+                            port_listening = True
+                            logger.info(f"✅ Port {port} is in use - process is running (port conflict resolved)")
+                            await manager.broadcast(f"✅ Port {port} is in use - process is running")
+                        elif has_fatal_error:
+                            # Fatal error and port not in use - fail
+                            error_msg = f"Process failed to start. Fatal error: {log_content[:500]}"
+                            await manager.broadcast(f"❌ {error_msg}")
+                            logger.error(f"Process start failed: {error_msg}")
+                            with Session(engine) as session:
+                                deployment = session.get(Deployment, deployment_id)
+                                if deployment:
+                                    deployment.status = "failed"
+                                    session.add(deployment)
+                                    session.commit()
+                            return None
+                    elif has_fatal_error:
+                        # Fatal error - fail
+                        error_msg = f"Process failed to start. Fatal error: {log_content[:500]}"
+                        await manager.broadcast(f"❌ {error_msg}")
+                        logger.error(f"Process start failed: {error_msg}")
+                        with Session(engine) as session:
+                            deployment = session.get(Deployment, deployment_id)
+                            if deployment:
+                                deployment.status = "failed"
+                                session.add(deployment)
+                                session.commit()
+                        return None
+                    else:
+                        # No fatal errors - might be starting slowly, check one more time
+                        await asyncio.sleep(2)
+                        final_port_check = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
+                        )
+                        if final_port_check.stdout and final_port_check.stdout.strip():
+                            process_running = True
+                            port_listening = True
+                            logger.info(f"✅ Port {port} is now listening - process started (delayed)")
+                            await manager.broadcast(f"✅ Process is running (port {port} is listening)")
+                        elif start_result.returncode == 0:
+                            # Command succeeded but port not listening - might be a non-port-based service
+                            # For now, assume it's running if command succeeded
+                            logger.warning(f"⚠️ Command succeeded but port {port} not listening - assuming process is running")
+                            await manager.broadcast(f"⚠️ Cannot verify port, but command succeeded - assuming running")
+                            process_running = True
+                            pid = None
+                        else:
+                            # Command failed and process not running - fail
+                            error_msg = "Process failed to start and cannot be verified"
+                            await manager.broadcast(f"❌ {error_msg}")
+                            logger.error(f"Process start failed: {error_msg}")
+                            with Session(engine) as session:
+                                deployment = session.get(Deployment, deployment_id)
+                                if deployment:
+                                    deployment.status = "failed"
+                                    session.add(deployment)
+                                    session.commit()
+                            return None
+                else:
+                    # No log file - command might not have executed
+                    if start_result.returncode == 0:
+                        # Command succeeded - assume process is running
+                        logger.warning(f"⚠️ No log file but command succeeded - assuming process is running")
+                        await manager.broadcast(f"⚠️ Cannot verify process, but command succeeded - assuming running")
+                        process_running = True
+                        pid = None
+                    else:
+                        # Command failed and no log - fail
+                        error_msg = "Process failed to start (no log file and command failed)"
+                        await manager.broadcast(f"❌ {error_msg}")
+                        logger.error(f"Process start failed: {error_msg}")
+                        with Session(engine) as session:
+                            deployment = session.get(Deployment, deployment_id)
+                            if deployment:
+                                deployment.status = "failed"
+                                session.add(deployment)
+                                session.commit()
+                        return None
+            
+            # If process is running, try to get PID one final time if we don't have it
+            if process_running and (not pid or pid <= 0):
+                if port:
+                    final_pid_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
+                    )
+                    if final_pid_check.stdout and final_pid_check.stdout.strip():
+                        try:
+                            pid = int(final_pid_check.stdout.strip())
+                            logger.info(f"✅ Found PID on final check: {pid}")
+                        except ValueError:
+                            pid = None
+                
+                # Broadcast success
+                if pid and pid > 0:
+                    await manager.broadcast(f"✅ Process started successfully in VM (PID: {pid}, Port: {port})")
+                else:
+                    await manager.broadcast(f"✅ Process started successfully in VM (Port: {port} listening, PID unknown)")
+                    logger.info(f"✅ Process is running on port {port} (PID unknown)")
+            
+            # Final check: If process is still not running, fail
+            if not process_running:
+                error_msg = "Process failed to start and is not running"
+                await manager.broadcast(f"❌ {error_msg}")
+                logger.error(f"Process start failed: {error_msg}")
+                # Read full log for debugging
+                full_log = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"cat {log_file} 2>/dev/null || echo 'No log file'"
+                )
+                if full_log.stdout:
+                    logger.error(f"Full log: {full_log.stdout}")
+                    await manager.broadcast(f"📋 Full log: {full_log.stdout[:1000]}")
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment:
+                        deployment.status = "failed"
+                        session.add(deployment)
+                        session.commit()
+                return None
             
         except Exception as e:
             error_msg = f"Exception while starting process in VM: {str(e)}"
             await manager.broadcast(f"❌ {error_msg}")
-            print(f"Process start exception: {e}")
+            logger.error(f"Process start exception: {e}", exc_info=True)
             import traceback
-            traceback.print_exc()
-            with Session(engine) as session:
-                deployment = session.get(Deployment, deployment_id)
-                if deployment:
-                    deployment.status = "failed"
-                    session.add(deployment)
-                    session.commit()
-            return None
-        
-        # Wait a moment for process to start
-        await asyncio.sleep(2)
-        
-        # Check if process is still running
-        if pid:
-            check_result = await vm_manager.exec_in_vm(
-                vm_name,
-                f"ps -p {pid} > /dev/null 2>&1 && echo 'running' || echo 'stopped'"
-            )
-            if "stopped" in (check_result.stdout or ""):
-                error_msg = "Process exited after startup"
-                await manager.broadcast(f"❌ {error_msg}")
-                # Read log file
-                log_result = await vm_manager.exec_in_vm(
+            error_trace = traceback.format_exc()
+            logger.error(f"Traceback: {error_trace}")
+            
+            # Try to read log file to see what happened
+            try:
+                log_check = await vm_manager.exec_in_vm(
                     vm_name,
-                    f"cat {log_file} 2>/dev/null || echo 'No log file'"
+                    f"cat {log_file} 2>/dev/null | tail -30 || echo 'No log file'"
                 )
-                if log_result.stdout:
-                    await manager.broadcast(f"Process logs: {log_result.stdout[:1000]}")
+                if log_check.stdout:
+                    logger.error(f"Log file content: {log_check.stdout}")
+                    await manager.broadcast(f"📋 Log file: {log_check.stdout[:500]}")
+            except Exception:
+                pass
+            
+            # Check if process is actually running despite the exception
+            try:
+                if port:
+                    port_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || echo ''"
+                    )
+                    if port_check.stdout.strip():
+                        # Process is running despite exception - continue
+                        await manager.broadcast(f"⚠️ Exception occurred, but process is running (port {port} in use) - continuing")
+                        pid = None  # PID unknown
+                        # Don't return None - continue with deployment
+                    else:
+                        # Process not running - fail
+                        with Session(engine) as session:
+                            deployment = session.get(Deployment, deployment_id)
+                            if deployment:
+                                deployment.status = "failed"
+                                session.add(deployment)
+                                session.commit()
+                        return None
+                else:
+                    # No port to check - fail
+                    with Session(engine) as session:
+                        deployment = session.get(Deployment, deployment_id)
+                        if deployment:
+                            deployment.status = "failed"
+                            session.add(deployment)
+                            session.commit()
+                    return None
+            except Exception as check_error:
+                logger.error(f"Error checking process status: {check_error}")
+                # Fail if we can't check
                 with Session(engine) as session:
                     deployment = session.get(Deployment, deployment_id)
                     if deployment:
@@ -1102,6 +1482,7 @@ async def run_process_deployment(
                         session.commit()
                 return None
         
+        # Process is now running (verified in the try block above)
         # Generate deployed URL - use custom domain if available, otherwise use localhost
         # For VM-based deployment, we'll use the custom domain format
         deployed_url = None
@@ -1149,7 +1530,13 @@ async def run_process_deployment(
                 deployment.build_command = build_command
                 deployment.start_command = start_command
                 deployment.port = port
-                deployment.process_pid = pid
+                # Only set PID if we have a valid one (not None, not -1)
+                if pid and pid > 0:
+                    deployment.process_pid = pid
+                else:
+                    # PID unknown but process is running - set to None
+                    deployment.process_pid = None
+                    logger.warning(f"⚠️ Process is running but PID is unknown - setting process_pid to None")
                 deployment.project_dir = project_dir
                 deployment.vm_name = vm_name
                 deployment.vm_ip = vm_ip

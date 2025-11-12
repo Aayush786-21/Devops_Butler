@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>DevOps Butler</title>
   <link rel="icon" type="image/png" href="/icons/logo.png"/>
-  <script type="module" crossorigin src="/assets/main-BFVr1P-B.js"></script>
+  <script type="module" crossorigin src="/assets/main-CfFih3a6.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/styles-BoJhmHct.css">
+  <link rel="stylesheet" crossorigin href="/assets/styles-DF4fOI3f.css">
 </head>
 <body>
   <div class="app-container">
@@ -91,19 +91,20 @@
           <!-- VM Status Card -->
           <div class="vm-status-card" id="vmStatusCard" style="display: none;">
             <div class="vm-status-header">
-              <div class="vm-status-icon" id="vmStatusIcon">
-                <span class="vm-status-spinner" id="vmStatusSpinner">⏳</span>
-              </div>
+              <svg class="vm-status-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="vmStatusIcon">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+              </svg>
               <div class="vm-status-content">
-                <h3>Virtual Machine Status</h3>
+                <div class="vm-title-row">
+                  <h3 class="vm-status-title">Virtual Machine</h3>
+                  <span class="status-badge" id="vmStatusBadge">
+                    <span class="status-dot" id="vmStatusDot"></span>
+                    <span id="vmStatusText">Checking</span>
+                  </span>
+                </div>
                 <p class="vm-status-message" id="vmStatusMessage">Checking VM status...</p>
+                <div class="vm-status-details" id="vmStatusDetails" style="display: none;"></div>
               </div>
-            </div>
-            <div class="vm-status-progress" id="vmStatusProgress" style="display: none;">
-              <div class="vm-progress-bar">
-                <div class="vm-progress-fill" id="vmProgressFill"></div>
-              </div>
-              <p class="vm-progress-text" id="vmProgressText">Creating your virtual machine...</p>
             </div>
           </div>
           
@@ -142,19 +143,20 @@
           <!-- VM Status Card (also shown on projects page) -->
           <div class="vm-status-card" id="vmStatusCardProjects" style="display: none;">
             <div class="vm-status-header">
-              <div class="vm-status-icon" id="vmStatusIconProjects">
-                <span class="vm-status-spinner" id="vmStatusSpinnerProjects">⏳</span>
-              </div>
+              <svg class="vm-status-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" id="vmStatusIconProjects">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+              </svg>
               <div class="vm-status-content">
-                <h3>Virtual Machine Status</h3>
+                <div class="vm-title-row">
+                  <h3 class="vm-status-title">Virtual Machine</h3>
+                  <span class="status-badge" id="vmStatusBadgeProjects">
+                    <span class="status-dot" id="vmStatusDotProjects"></span>
+                    <span id="vmStatusTextProjects">Checking</span>
+                  </span>
+                </div>
                 <p class="vm-status-message" id="vmStatusMessageProjects">Checking VM status...</p>
+                <div class="vm-status-details" id="vmStatusDetailsProjects" style="display: none;"></div>
               </div>
-            </div>
-            <div class="vm-status-progress" id="vmStatusProgressProjects" style="display: none;">
-              <div class="vm-progress-bar">
-                <div class="vm-progress-fill" id="vmProgressFillProjects"></div>
-              </div>
-              <p class="vm-progress-text" id="vmProgressTextProjects">Creating your virtual machine...</p>
             </div>
           </div>
           

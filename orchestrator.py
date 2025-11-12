@@ -1186,21 +1186,51 @@ async def get_vm_status(
                     vm_status = 'creating'
                 except Exception:
                     vm_status = 'creating'
-            # If status is 'failed', check if VM actually exists (might have been created but status wasn't updated)
-            elif vm_status == 'failed':
+            # If status is 'failed' or 'ready', verify VM is actually ready (check critical dependencies)
+            elif vm_status in ['failed', 'ready']:
                 try:
                     from vm_manager import vm_manager
                     vm_name = f"butler-user-{user.id}"
                     vm_exists = await vm_manager._check_vm_exists(vm_name)
                     if vm_exists:
-                        # VM exists, update status to ready
-                        user.vm_status = 'ready'
-                        session.add(user)
-                        session.commit()
-                        vm_status = 'ready'
+                        # Verify VM is actually ready by checking critical dependencies
+                        git_check = await vm_manager.exec_in_vm(vm_name, "which git")
+                        python_check = await vm_manager.exec_in_vm(vm_name, "which python3")
+                        
+                        if git_check.returncode == 0 and git_check.stdout.strip() and python_check.returncode == 0 and python_check.stdout.strip():
+                            # VM exists and has critical dependencies - mark as ready
+                            if vm_status != 'ready':
+                                user.vm_status = 'ready'
+                                session.add(user)
+                                session.commit()
+                            vm_status = 'ready'
+                        else:
+                            # VM exists but dependencies are missing - mark as creating or failed
+                            if vm_status == 'ready':
+                                # VM was marked as ready but dependencies are missing - mark as creating
+                                user.vm_status = 'creating'
+                                session.add(user)
+                                session.commit()
+                                # Trigger setup in background
+                                try:
+                                    from auth import create_user_vm
+                                    import asyncio
+                                    asyncio.create_task(create_user_vm(user.id))
+                                except Exception:
+                                    pass
+                            vm_status = 'creating'
                 except Exception as e:
-                    # If check fails, keep status as failed but log the error
-                    global_logger.log_error(f"Failed to verify VM existence: {str(e)}")
+                    # If check fails, keep status as is but log the error
+                    global_logger.log_error(f"Failed to verify VM readiness: {str(e)}")
+                    # If status was 'ready' but verification failed, mark as creating
+                    if vm_status == 'ready':
+                        try:
+                            user.vm_status = 'creating'
+                            session.add(user)
+                            session.commit()
+                            vm_status = 'creating'
+                        except Exception:
+                            pass
             
             return {
                 "vm_status": vm_status or 'creating',
@@ -1284,28 +1314,62 @@ async def import_repository(
         vm_name = vm_info.get('vm_name')
         vm_ip = vm_info.get('vm_ip')
         
-        # Define project directory inside VM
-        vm_project_dir = f"/projects/{deployment_id}"
+        if not vm_name:
+            error_msg = "Failed to get or create VM for user"
+            await manager.broadcast(f"❌ {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+        # Get the username from the VM dynamically (same logic as process_deployment.py)
+        vm_username = 'ubuntu'  # Default fallback
+        try:
+            username_result = await vm_manager.exec_in_vm(vm_name, "whoami")
+            if username_result.returncode == 0 and username_result.stdout.strip():
+                vm_username = username_result.stdout.strip()
+                logger.info(f"VM username detected: {vm_username}")
+            else:
+                # Fallback to $USER environment variable
+                user_env_result = await vm_manager.exec_in_vm(vm_name, "echo $USER")
+                if user_env_result.returncode == 0 and user_env_result.stdout.strip():
+                    vm_username = user_env_result.stdout.strip()
+                    logger.info(f"VM username from $USER: {vm_username}")
+                else:
+                    # Fallback: extract from $HOME
+                    home_result = await vm_manager.exec_in_vm(vm_name, "echo $HOME")
+                    if home_result.returncode == 0 and home_result.stdout.strip():
+                        home_path = home_result.stdout.strip()
+                        vm_username = home_path.split('/')[-1] if home_path.startswith('/home/') else 'ubuntu'
+                        logger.info(f"VM username from $HOME: {vm_username}")
+                    else:
+                        # Last resort: default to 'ubuntu'
+                        vm_username = 'ubuntu'
+                        logger.warning(f"Could not detect VM username, using default: {vm_username}")
+        except Exception as e:
+            logger.warning(f"Failed to get VM username: {e}, using default")
+            vm_username = 'ubuntu'  # Default fallback
+        
+        # Define project directory inside VM user's home directory
+        # Use format: /home/{username}/projects/{deployment_id}
+        vm_project_dir = f"/home/{vm_username}/projects/{deployment_id}"
         
         # Clone repository into VM
         try:
             await manager.broadcast(f"📥 Cloning repository to VM: {vm_project_dir}...")
             
-            # Create projects directory if it doesn't exist
-            await vm_manager.exec_in_vm(
-                vm_name,
-                "mkdir -p /projects"
-            )
+            # Create projects directory in user's home directory if it doesn't exist
+            # Extract parent directory from vm_project_dir (e.g., /home/username/projects from /home/username/projects/project-id)
+            parent_dir = "/".join(vm_project_dir.rstrip("/").split("/")[:-1])
+            if not parent_dir:
+                # Fallback: use user's home directory projects folder
+                parent_dir = f"/home/{vm_username}/projects"
             
-            # Clone repository inside VM
-            clone_result = await vm_manager.exec_in_vm(
+            # Create parent directory in user's home (no sudo needed)
+            mkdir_result = await vm_manager.exec_in_vm(
                 vm_name,
-                f"git clone --depth 1 {git_url} {vm_project_dir}",
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"} if os.environ else {}
+                f"mkdir -p {parent_dir} && chmod 755 {parent_dir}"
             )
-            
-            if clone_result.returncode != 0:
-                error_msg = f"Failed to clone repository in VM: {clone_result.stderr}"
+            if mkdir_result.returncode != 0:
+                error_output = mkdir_result.stderr or mkdir_result.stdout or "Unknown error"
+                error_msg = f"Failed to create parent directory {parent_dir} in VM: {error_output}"
                 await manager.broadcast(f"❌ {error_msg}")
                 # Update deployment status to failed
                 with Session(engine) as session:
@@ -1315,6 +1379,85 @@ async def import_repository(
                         session.add(deployment)
                         session.commit()
                 raise HTTPException(status_code=500, detail=error_msg)
+            
+            # Verify git is installed before cloning
+            git_check = await vm_manager.exec_in_vm(vm_name, "which git")
+            if git_check.returncode != 0 or not git_check.stdout.strip():
+                logger.info(f"Git not found in VM {vm_name}, installing...")
+                install_git = await vm_manager.exec_in_vm(vm_name, "sudo apt-get update -y && sudo apt-get install -y git")
+                if install_git.returncode != 0:
+                    error_msg = f"Failed to install git in VM: {install_git.stderr}"
+                    await manager.broadcast(f"❌ {error_msg}")
+                    with Session(engine) as session:
+                        deployment = session.get(Deployment, deployment_id)
+                        if deployment:
+                            deployment.status = "failed"
+                            session.add(deployment)
+                            session.commit()
+                    raise HTTPException(status_code=500, detail=error_msg)
+            
+            # Clone repository inside VM
+            clone_result = await vm_manager.exec_in_vm(
+                vm_name,
+                f"git clone --depth 1 {git_url} {vm_project_dir} 2>&1",
+                env={"GIT_TERMINAL_PROMPT": "0"}
+            )
+            
+            if clone_result.returncode != 0:
+                error_output = clone_result.stderr or clone_result.stdout or "Unknown error"
+                error_msg = f"Failed to clone repository in VM: {error_output[:500]}"
+                await manager.broadcast(f"❌ {error_msg}")
+                logger.error(f"Git clone failed: {error_output}")
+                # Update deployment status to failed
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment:
+                        deployment.status = "failed"
+                        session.add(deployment)
+                        session.commit()
+                raise HTTPException(status_code=500, detail=error_msg)
+            
+            # Verify clone was successful
+            verify_clone = await vm_manager.exec_in_vm(
+                vm_name,
+                f"test -d {vm_project_dir}/.git && echo 'success' || echo 'failed'"
+            )
+            
+            if "success" not in (verify_clone.stdout or "").strip():
+                error_msg = f"Repository clone verification failed - .git directory not found"
+                await manager.broadcast(f"❌ {error_msg}")
+                logger.error(f"Clone verification failed for {vm_project_dir}")
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment:
+                        deployment.status = "failed"
+                        session.add(deployment)
+                        session.commit()
+                raise HTTPException(status_code=500, detail=error_msg)
+            
+            # List files in cloned directory for confirmation
+            list_files = await vm_manager.exec_in_vm(
+                vm_name,
+                f"ls -la {vm_project_dir} | head -10"
+            )
+            if list_files.stdout:
+                logger.info(f"Files in cloned directory: {list_files.stdout[:200]}")
+            
+            # Show repository size
+            repo_size = await vm_manager.exec_in_vm(
+                vm_name,
+                f"du -sh {vm_project_dir} 2>/dev/null | cut -f1 || echo 'unknown'"
+            )
+            if repo_size.stdout:
+                logger.info(f"Repository size: {repo_size.stdout.strip()}")
+            
+            # List all projects in /home/{username}/projects for confirmation
+            list_projects = await vm_manager.exec_in_vm(
+                vm_name,
+                f"ls -la {parent_dir} 2>/dev/null | head -10 || echo 'no_projects'"
+            )
+            if list_projects.stdout:
+                logger.info(f"Projects in {parent_dir}: {list_projects.stdout[:300]}")
             
             await manager.broadcast("✅ Repository cloned successfully in VM")
             
@@ -2071,13 +2214,15 @@ async def restart_project(
         raise HTTPException(status_code=500, detail="Failed to restart project")
 
 
-# Delete project: stop process, remove project directory, delete DB + env vars
+# Delete project: stop process, remove project directory from VM, delete DB + env vars
 @app.delete("/projects/{project_id}")
 async def delete_project(
     project_id: int,
     current_user: User = Depends(get_current_user)
 ):
     try:
+        from vm_manager import vm_manager
+        
         with Session(engine) as session:
             deployment = session.exec(
                 select(Deployment).where(
@@ -2089,19 +2234,80 @@ async def delete_project(
                 raise HTTPException(status_code=404, detail="Project not found")
 
             container_name = deployment.container_name
-
-            # Stop process if running
-            try:
-                await pm.stop_process(container_name)
-            except Exception as e:
-                global_logger.log_error(f"Error stopping process {container_name}: {e}")
-
-            # Remove project directory if it exists
-            if deployment.project_dir and os.path.exists(deployment.project_dir):
+            vm_name = deployment.vm_name or f"butler-user-{current_user.id}"
+            
+            # Stop process if running (inside VM)
+            if deployment.process_pid:
                 try:
-                    shutil.rmtree(deployment.project_dir, ignore_errors=True)
+                    await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"kill -9 {deployment.process_pid} 2>/dev/null || true",
+                        cwd=deployment.project_dir if deployment.project_dir else None
+                    )
+                    global_logger.log_info(f"Stopped process {deployment.process_pid} for project {project_id}")
                 except Exception as e:
-                    global_logger.log_error(f"Error removing project directory {deployment.project_dir}: {e}")
+                    global_logger.log_error(f"Error stopping process {deployment.process_pid}: {e}")
+            
+            # Remove Cloudflare DNS record if custom domain exists
+            if deployment.custom_domain:
+                try:
+                    remove_project_hostname(deployment.custom_domain)
+                    global_logger.log_info(f"Removed Cloudflare DNS record for {deployment.custom_domain}")
+                except Exception as e:
+                    global_logger.log_error(f"Error removing Cloudflare DNS record: {e}")
+                    # Continue with deletion even if Cloudflare removal fails
+
+            # Remove project directory from VM if it exists
+            if deployment.project_dir:
+                try:
+                    # Verify directory exists in VM before deleting
+                    check_result = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"test -d {deployment.project_dir} && echo 'exists' || echo 'not_exists'"
+                    )
+                    
+                    if "exists" in (check_result.stdout or "").strip():
+                        # Remove project directory inside VM
+                        delete_result = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"rm -rf {deployment.project_dir} 2>&1"
+                        )
+                        
+                        # Verify deletion was successful
+                        verify_result = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"test -d {deployment.project_dir} && echo 'still_exists' || echo 'deleted'"
+                        )
+                        
+                        if "deleted" in (verify_result.stdout or "").strip():
+                            global_logger.log_info(f"Successfully removed project directory {deployment.project_dir} from VM {vm_name}")
+                        else:
+                            global_logger.log_warning(f"Project directory {deployment.project_dir} may still exist in VM {vm_name}")
+                            # Try again with force
+                            await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"sudo rm -rf {deployment.project_dir} 2>&1 || rm -rf {deployment.project_dir} 2>&1 || true"
+                            )
+                    else:
+                        global_logger.log_info(f"Project directory {deployment.project_dir} does not exist in VM {vm_name}, skipping deletion")
+                except Exception as e:
+                    global_logger.log_error(f"Error removing project directory {deployment.project_dir} from VM: {e}")
+                    # Try to remove anyway as a fallback
+                    try:
+                        await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"rm -rf {deployment.project_dir} 2>/dev/null || sudo rm -rf {deployment.project_dir} 2>/dev/null || true"
+                        )
+                    except Exception as fallback_error:
+                        global_logger.log_error(f"Fallback deletion also failed: {fallback_error}")
+                
+                # Also try to remove from host if it exists (legacy deployments)
+                if os.path.exists(deployment.project_dir):
+                    try:
+                        shutil.rmtree(deployment.project_dir, ignore_errors=True)
+                        global_logger.log_info(f"Removed legacy project directory {deployment.project_dir} from host")
+                    except Exception as e:
+                        global_logger.log_error(f"Error removing legacy project directory {deployment.project_dir} from host: {e}")
 
             # Delete related environment variables
             env_vars = session.exec(
@@ -2122,18 +2328,74 @@ async def delete_project(
             ).all()
             
             for child in child_deployments:
-                child_container_name = child.container_name
+                child_vm_name = child.vm_name or vm_name
                 
-                # Stop child process
-                try:
-                    await pm.stop_process(child_container_name)
-                except Exception:
-                    pass
-                
-                # Remove child project directory
-                if child.project_dir and os.path.exists(child.project_dir):
+                # Stop child process (inside VM)
+                if child.process_pid:
                     try:
-                        shutil.rmtree(child.project_dir, ignore_errors=True)
+                        await vm_manager.exec_in_vm(
+                            child_vm_name,
+                            f"kill -9 {child.process_pid} 2>/dev/null || true",
+                            cwd=child.project_dir if child.project_dir else None
+                        )
+                    except Exception:
+                        pass
+                
+                # Remove child project directory from VM
+                if child.project_dir:
+                    try:
+                        # Verify directory exists in VM before deleting
+                        check_result = await vm_manager.exec_in_vm(
+                            child_vm_name,
+                            f"test -d {child.project_dir} && echo 'exists' || echo 'not_exists'"
+                        )
+                        
+                        if "exists" in (check_result.stdout or "").strip():
+                            # Remove child project directory inside VM
+                            delete_result = await vm_manager.exec_in_vm(
+                                child_vm_name,
+                                f"rm -rf {child.project_dir} 2>&1"
+                            )
+                            
+                            # Verify deletion was successful
+                            verify_result = await vm_manager.exec_in_vm(
+                                child_vm_name,
+                                f"test -d {child.project_dir} && echo 'still_exists' || echo 'deleted'"
+                            )
+                            
+                            if "deleted" in (verify_result.stdout or "").strip():
+                                global_logger.log_info(f"Successfully removed child project directory {child.project_dir} from VM {child_vm_name}")
+                            else:
+                                global_logger.log_warning(f"Child project directory {child.project_dir} may still exist in VM {child_vm_name}")
+                                # Try again with force
+                                await vm_manager.exec_in_vm(
+                                    child_vm_name,
+                                    f"sudo rm -rf {child.project_dir} 2>&1 || rm -rf {child.project_dir} 2>&1 || true"
+                                )
+                        else:
+                            global_logger.log_info(f"Child project directory {child.project_dir} does not exist in VM {child_vm_name}, skipping deletion")
+                    except Exception as e:
+                        global_logger.log_error(f"Error removing child project directory {child.project_dir} from VM: {e}")
+                        # Try to remove anyway as a fallback
+                        try:
+                            await vm_manager.exec_in_vm(
+                                child_vm_name,
+                                f"rm -rf {child.project_dir} 2>/dev/null || sudo rm -rf {child.project_dir} 2>/dev/null || true"
+                            )
+                        except Exception:
+                            pass
+                    
+                    # Also try to remove from host if it exists (legacy deployments)
+                    if os.path.exists(child.project_dir):
+                        try:
+                            shutil.rmtree(child.project_dir, ignore_errors=True)
+                        except Exception:
+                            pass
+                
+                # Remove child's Cloudflare DNS record if exists
+                if child.custom_domain:
+                    try:
+                        remove_project_hostname(child.custom_domain)
                     except Exception:
                         pass
                 
@@ -2157,7 +2419,9 @@ async def delete_project(
                         "parent_id": project_id,
                         "child_id": child.id,
                         "component_type": child.component_type,
-                        "container_name": child_container_name
+                        "container_name": child.container_name,
+                        "vm_name": child_vm_name,
+                        "project_dir": child.project_dir
                     }
                 )
 
@@ -2168,14 +2432,22 @@ async def delete_project(
             global_logger.log_user_action(
                 user_id=str(current_user.id),
                 action="project_deleted",
-                details={"project_id": project_id, "container_name": container_name}
+                details={
+                    "project_id": project_id,
+                    "container_name": container_name,
+                    "vm_name": vm_name,
+                    "project_dir": deployment.project_dir,
+                    "custom_domain": deployment.custom_domain
+                }
             )
 
-            return {"message": "Project deleted"}
+            return {"message": "Project deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
         global_logger.log_error(f"Error deleting project: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Failed to delete project")
 
 

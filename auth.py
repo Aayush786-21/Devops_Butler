@@ -211,36 +211,85 @@ async def create_user_vm(user_id: int) -> bool:
         # This will check if git is installed and run setup if needed
         # For new VMs, setup is already run in _create_vm, but we verify it completed
         logger.info(f"Verifying VM setup for {vm_name}...")
+        setup_success = False
         try:
             # Check if git is installed (indicator that setup completed)
             git_check = await vm_manager.exec_in_vm(vm_name, "which git")
             if git_check.returncode != 0 or not git_check.stdout.strip():
                 logger.info(f"Git not found in VM {vm_name}, running setup...")
-                await vm_manager._setup_vm(vm_name, vm_info)
-                logger.info(f"VM setup completed for {vm_name}")
+                setup_success = await vm_manager._setup_vm(vm_name, vm_info)
+                if setup_success:
+                    logger.info(f"VM setup completed successfully for {vm_name}")
+                else:
+                    logger.warning(f"VM setup completed with warnings for {vm_name}")
             else:
                 logger.info(f"VM {vm_name} is already set up (git found)")
+                # Verify critical dependencies are installed
+                python_check = await vm_manager.exec_in_vm(vm_name, "which python3")
+                if python_check.returncode == 0 and python_check.stdout.strip():
+                    setup_success = True
+                    logger.info(f"VM {vm_name} has all critical dependencies (git, python3)")
+                else:
+                    logger.warning(f"Python3 not found in VM {vm_name}, running setup...")
+                    setup_success = await vm_manager._setup_vm(vm_name, vm_info)
+                    if setup_success:
+                        logger.info(f"VM setup completed successfully for {vm_name}")
+                    else:
+                        logger.warning(f"VM setup completed with warnings for {vm_name}")
         except Exception as setup_error:
             logger.warning(f"Setup verification failed for {vm_name}: {setup_error}, but continuing...")
             # Try to run setup anyway
             try:
-                await vm_manager._setup_vm(vm_name, vm_info)
-                logger.info(f"VM setup completed for {vm_name} after retry")
+                setup_success = await vm_manager._setup_vm(vm_name, vm_info)
+                if setup_success:
+                    logger.info(f"VM setup completed for {vm_name} after retry")
+                else:
+                    logger.warning(f"VM setup completed with warnings for {vm_name} after retry")
             except Exception as setup_retry_error:
                 logger.error(f"VM setup failed for {vm_name}: {setup_retry_error}")
                 # Don't fail VM creation if setup fails - user can still deploy
                 # Setup will be retried on first deployment
+                setup_success = False
         
-        # Update user status to 'ready'
+        # Verify critical dependencies before marking as ready
+        if setup_success:
+            try:
+                # Verify git is installed (critical dependency)
+                git_verify = await vm_manager.exec_in_vm(vm_name, "which git")
+                if git_verify.returncode != 0 or not git_verify.stdout.strip():
+                    logger.error(f"Git not found after setup for {vm_name}, marking as failed")
+                    setup_success = False
+                else:
+                    # Verify python3 is installed (critical dependency)
+                    python_verify = await vm_manager.exec_in_vm(vm_name, "which python3")
+                    if python_verify.returncode != 0 or not python_verify.stdout.strip():
+                        logger.error(f"Python3 not found after setup for {vm_name}, marking as failed")
+                        setup_success = False
+                    else:
+                        logger.info(f"✅ VM {vm_name} has all critical dependencies (git, python3)")
+            except Exception as verify_error:
+                logger.error(f"Failed to verify dependencies for {vm_name}: {verify_error}")
+                setup_success = False
+        
+        # Update user status based on setup success
         with Session(engine) as session:
             user = session.exec(select(User).where(User.id == user_id)).first()
             if user:
-                user.vm_status = 'ready'
+                if setup_success:
+                    user.vm_status = 'ready'
+                    logger.info(f"✅ VM {vm_name} is ready for user {user_id}")
+                else:
+                    user.vm_status = 'failed'
+                    logger.error(f"❌ VM {vm_name} setup failed for user {user_id}")
                 session.add(user)
                 session.commit()
         
-        logger.info(f"VM creation and setup completed for user {user_id}")
-        return True
+        if setup_success:
+            logger.info(f"VM creation and setup completed successfully for user {user_id}")
+            return True
+        else:
+            logger.error(f"VM creation completed but setup failed for user {user_id}")
+            return False
     except Exception as e:
         # Log error and update status to 'failed'
         logger.error(f"Failed to create VM for user {user_id}: {str(e)}", exc_info=True)
