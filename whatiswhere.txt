@@ -3,6 +3,27 @@
 
 ## Recent Updates (Latest Session)
 
+### AI-Powered Project Analysis with Gemini
+- **New Feature**: AI analysis of imported projects using Google Gemini AI
+- **Location**: `project_analyzer.py` - Analyzes project structure to detect build/start commands, ports, frameworks, etc.
+- **Integration**: 
+  - Triggered automatically in background after repository is cloned during import
+  - Reads Gemini API key from `.env` file (`GEMINI_API_KEY`)
+  - Updates deployment record with detected build_command, start_command, and port
+  - Runs asynchronously so import doesn't block
+- **Analysis Results**: 
+  - Framework/Technology Stack
+  - Build Command
+  - Start Command
+  - Install Command
+  - Port Number
+  - Root Directory
+  - Environment Variables
+  - Additional Notes
+- **Dependencies**: `google-generativeai` package (added to requirements.txt)
+- **Error Handling**: Analysis failures don't block import - gracefully handles errors
+- **Location**: `project_analyzer.py`, `orchestrator.py` (import endpoint), `requirements.txt`
+
 ### MAJOR ARCHITECTURE CHANGE - VM-Based Deployment with OrbStack
 - **New Deployment Model**: Each user gets an isolated OrbStack VM for deployments
 - **Rationale**: Prevents excessive file creation on Mac host, provides isolation between users, cleaner file system
@@ -198,9 +219,8 @@
 - **Database Models**: `login.py` - User, Deployment, EnvironmentVariable models
 - **Database Setup**: `database.py` - Database engine, migrations, session management
 - **VM Management**: `vm_manager.py` - OrbStack VM lifecycle management (create, start, stop, delete, exec commands)
-- **Deployment Pipeline**: `simple_pipeline.py` - Core deployment logic (legacy, for reference)
 - **Process Deployment**: `process_deployment.py` - VM-based process deployment (clones to VM, builds/runs inside VM)
-- **VM Management**: `vm_manager.py` - OrbStack VM lifecycle management (create, start, stop, delete, exec commands)
+- **Utilities**: `utils.py` - Utility functions (validate_git_url, extract_repo_name)
 - **Process Management**: `process_manager.py` - Process lifecycle management (legacy, processes now run directly in VMs)
 - **Authentication**: `auth.py` - User authentication, registration, and VM creation on user registration
 - **Cloudflare Manager**: `cloudflare_manager.py` - Cloudflare tunnel and DNS management for domain routing
@@ -286,9 +306,8 @@
 - **Monorepo Support**: Detects frontend/backend folders, deploys separately with environment variable linking
 - **Split Repo Support**: Deploys frontend and backend from separate repos, connects via environment variables
 - **Command Auto-Detection**: Detects build/start commands from Dockerfile, docker-compose, package.json, etc.
-- **URL Validation**: `validate_git_url()` - Line ~27 (from simple_pipeline.py)
-- **Repo Name Extraction**: `extract_repo_name()` - Line ~63 (from simple_pipeline.py)
-- **Legacy**: `simple_pipeline.py` - Old Docker-based deployment logic (kept for reference, not used)
+- **URL Validation**: `validate_git_url()` - In `utils.py`
+- **Repo Name Extraction**: `extract_repo_name()` - In `utils.py`
 
 ### Database Models (login.py)
 - **User Model**: Line ~6 - Authentication, profile, tokens
@@ -386,11 +405,15 @@
 ```
 Devops_Butler/
 ├── orchestrator.py          # FastAPI main app
-├── simple_pipeline.py       # Deployment logic
+├── process_deployment.py    # VM-based deployment logic
+├── vm_manager.py            # OrbStack VM management
+├── project_analyzer.py      # AI project analysis (Gemini)
+├── utils.py                 # Utility functions
 ├── login.py                 # Database models
 ├── database.py              # DB setup & migrations
-├── docker_build.py          # Docker image building
-├── docker_run.py            # Container management
+├── auth.py                  # Authentication & user management
+├── cloudflare_manager.py    # Cloudflare tunnel & DNS
+├── process_manager.py       # Process management (legacy)
 ├── frontend/
 │   ├── src/
 │   │   ├── index.html       # Main SPA

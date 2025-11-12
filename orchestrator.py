@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 # Import core modules
-from simple_pipeline import extract_repo_name, validate_git_url
+from utils import extract_repo_name, validate_git_url
 import subprocess
 from database import create_db_and_tables, get_session, engine
 from connection_manager import manager
@@ -1211,8 +1211,10 @@ async def import_repository(
     app_name: str = Form(...),
     current_user: User = Depends(get_current_user)
 ):
-    """Import a repository without deploying it - just create a project record"""
+    """Import a repository and clone it into the VM (without deploying it)"""
     try:
+        from vm_manager import vm_manager
+        
         # Check VM status first
         with Session(engine) as session:
             user = session.exec(select(User).where(User.id == current_user.id)).first()
@@ -1251,7 +1253,7 @@ async def import_repository(
         if not app_name or app_name == "Untitled Project":
             app_name = extract_repo_name(git_url)
         
-        # Create a deployment record with 'imported' status
+        # Create a deployment record with 'imported' status first
         with Session(engine) as session:
             deployment = Deployment(
                 user_id=current_user.id,
@@ -1266,6 +1268,80 @@ async def import_repository(
             session.add(deployment)
             session.commit()
             session.refresh(deployment)
+            deployment_id = deployment.id
+        
+        # Get or create user's VM
+        vm_info = await vm_manager.get_or_create_user_vm(current_user.id)
+        vm_name = vm_info.get('vm_name')
+        vm_ip = vm_info.get('vm_ip')
+        
+        # Define project directory inside VM
+        vm_project_dir = f"/projects/{deployment_id}"
+        
+        # Clone repository into VM
+        try:
+            await manager.broadcast(f"📥 Cloning repository to VM: {vm_project_dir}...")
+            
+            # Create projects directory if it doesn't exist
+            await vm_manager.exec_in_vm(
+                vm_name,
+                "mkdir -p /projects"
+            )
+            
+            # Clone repository inside VM
+            clone_result = await vm_manager.exec_in_vm(
+                vm_name,
+                f"git clone --depth 1 {git_url} {vm_project_dir}",
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"} if os.environ else {}
+            )
+            
+            if clone_result.returncode != 0:
+                error_msg = f"Failed to clone repository in VM: {clone_result.stderr}"
+                await manager.broadcast(f"❌ {error_msg}")
+                # Update deployment status to failed
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment:
+                        deployment.status = "failed"
+                        session.add(deployment)
+                        session.commit()
+                raise HTTPException(status_code=500, detail=error_msg)
+            
+            await manager.broadcast("✅ Repository cloned successfully in VM")
+            
+            # Update deployment record with VM info and project directory
+            with Session(engine) as session:
+                deployment = session.get(Deployment, deployment_id)
+                if deployment:
+                    deployment.vm_name = vm_name
+                    deployment.vm_ip = vm_ip
+                    deployment.project_dir = vm_project_dir
+                    session.add(deployment)
+                    session.commit()
+            
+            # Trigger AI analysis in the background (don't block import)
+            try:
+                from project_analyzer import analyze_project_in_vm
+                # Run analysis in background task
+                asyncio.create_task(
+                    analyze_project_in_vm(
+                        vm_name=vm_name,
+                        project_dir=vm_project_dir,
+                        deployment_id=deployment_id,
+                        vm_manager=vm_manager,
+                        connection_manager=manager
+                    )
+                )
+                global_logger.log_user_action(
+                    user_id=str(current_user.id),
+                    action="ai_analysis_started",
+                    details={"project_id": deployment_id, "vm_name": vm_name}
+                )
+                await manager.broadcast("🤖 AI analysis started in background...")
+            except Exception as e:
+                global_logger.log_error(f"Failed to start AI analysis: {e}")
+                # Don't fail import if analysis fails to start
+                pass
             
             global_logger.log_user_action(
                 user_id=str(current_user.id),
@@ -1273,16 +1349,35 @@ async def import_repository(
                 details={
                     "repo_url": git_url,
                     "app_name": app_name,
-                    "project_id": deployment.id
+                    "project_id": deployment_id,
+                    "vm_name": vm_name,
+                    "vm_project_dir": vm_project_dir
                 }
             )
             
             return {
-                "message": "Repository imported successfully!",
-                "project_id": deployment.id,
+                "message": "Repository imported and cloned successfully! AI analysis started in background.",
+                "project_id": deployment_id,
                 "app_name": app_name,
-                "git_url": git_url
+                "git_url": git_url,
+                "vm_name": vm_name,
+                "vm_project_dir": vm_project_dir
             }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            error_msg = f"Failed to clone repository into VM: {str(e)}"
+            global_logger.log_error(error_msg)
+            # Update deployment status to failed
+            with Session(engine) as session:
+                deployment = session.get(Deployment, deployment_id)
+                if deployment:
+                    deployment.status = "failed"
+                    session.add(deployment)
+                    session.commit()
+            raise HTTPException(status_code=500, detail=error_msg)
+            
     except HTTPException:
         # Re-raise HTTPException (like 423 for VM status) without logging as error
         raise

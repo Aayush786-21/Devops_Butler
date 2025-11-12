@@ -16,10 +16,9 @@ import datetime
 from typing import Optional, Tuple, Dict
 from pathlib import Path
 
-from simple_pipeline import (
+from utils import (
     validate_git_url,
-    extract_repo_name,
-    find_free_port
+    extract_repo_name
 )
 from connection_manager import manager
 from process_manager import process_manager as pm
@@ -383,6 +382,7 @@ async def run_process_deployment(
                     if db_deployment.project_dir:
                         # Use existing project directory in VM
                         project_dir = db_deployment.project_dir
+                        vm_project_dir = project_dir  # Update vm_project_dir to match existing project_dir
                     else:
                         # Create new directory and update
                         db_deployment.project_dir = project_dir
@@ -411,6 +411,7 @@ async def run_process_deployment(
                     deployment_id = db_deployment.id  # Store ID for later use
                     if db_deployment.project_dir:
                         project_dir = db_deployment.project_dir
+                        vm_project_dir = project_dir  # Update vm_project_dir to match existing project_dir
                     else:
                         db_deployment.project_dir = project_dir
                         db_deployment.vm_name = vm_name
