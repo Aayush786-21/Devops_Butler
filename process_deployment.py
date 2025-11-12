@@ -12,6 +12,7 @@ import uuid
 import json
 import re
 import socket
+import datetime
 from typing import Optional, Tuple, Dict
 from pathlib import Path
 
@@ -25,11 +26,72 @@ from process_manager import process_manager as pm
 from database import engine
 from login import Deployment
 from sqlmodel import Session, select
+from dockerfile_parser import parse_dockerfile, parse_docker_compose, detect_monorepo_structure
 
+
+def parse_readme_for_commands(readme_path: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+    """
+    Parse README.md file to extract build and start commands.
+    Looks for common patterns like 'npm install', 'npm run build', 'npm start', etc.
+    
+    Returns:
+        Tuple of (build_command, start_command, default_port)
+    """
+    try:
+        with open(readme_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        build_cmd = None
+        start_cmd = None
+        default_port = None
+        
+        # Look for common build/start command patterns
+        # Check for npm/yarn commands
+        if 'npm install' in content or 'yarn install' in content:
+            if 'npm run build' in content or 'yarn build' in content:
+                build_cmd = 'npm install && npm run build'
+            elif 'npm install' in content:
+                build_cmd = 'npm install'
+        
+        # Check for start commands
+        if 'npm start' in content or 'yarn start' in content:
+            start_cmd = 'npm start'
+            default_port = 3000
+        elif 'npm run dev' in content or 'yarn dev' in content:
+            start_cmd = 'npm run dev'
+            default_port = 3000
+        elif 'npm run serve' in content or 'yarn serve' in content:
+            start_cmd = 'npm run serve'
+            default_port = 3000
+        
+        # Check for Python commands
+        if 'pip install' in content or 'pip install -r requirements.txt' in content:
+            if not build_cmd:
+                build_cmd = 'pip install -r requirements.txt'
+            if 'python app.py' in content or 'flask run' in content:
+                start_cmd = 'python app.py'
+                default_port = 5000
+            elif 'python manage.py runserver' in content or 'django' in content.lower():
+                start_cmd = 'python manage.py runserver 0.0.0.0:8000'
+                default_port = 8000
+            elif 'python main.py' in content:
+                start_cmd = 'python main.py'
+                default_port = 5000
+        
+        # Check for port information
+        port_match = re.search(r'port[:\s]+(\d+)', content, re.IGNORECASE)
+        if port_match:
+            default_port = int(port_match.group(1))
+        
+        return build_cmd, start_cmd, default_port
+    except Exception as e:
+        print(f"Error parsing README.md: {e}")
+        return None, None, None
 
 async def detect_build_and_start_commands(repo_dir: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
     """
     Auto-detect build and start commands from repository.
+    Priority: docker-compose.yml > Dockerfile > README.md > project analysis
     
     Returns:
         Tuple of (build_command, start_command, default_port)
@@ -38,7 +100,54 @@ async def detect_build_and_start_commands(repo_dir: str) -> Tuple[Optional[str],
     start_cmd = None
     default_port = None
     
-    # Check for package.json (Node.js)
+    # PRIORITY 1: Check for docker-compose.yml first
+    compose_files = ['docker-compose.yml', 'docker-compose.yaml']
+    for compose_file in compose_files:
+        compose_path = os.path.join(repo_dir, compose_file)
+        if os.path.exists(compose_path):
+            compose_info = parse_docker_compose(compose_path)
+            if compose_info:
+                # Try to find the main service (usually 'web', 'app', 'frontend', or first service)
+                main_service = None
+                for service_name in ['web', 'app', 'frontend', 'main']:
+                    if service_name in compose_info:
+                        main_service = compose_info[service_name]
+                        break
+                if not main_service and compose_info:
+                    # Use first service
+                    main_service = list(compose_info.values())[0]
+                
+                if main_service and main_service.get('command'):
+                    start_cmd = main_service['command']
+                    if main_service.get('port'):
+                        default_port = main_service['port']
+                    # If we got command from docker-compose, use it
+                    if start_cmd:
+                        return build_cmd, start_cmd, default_port
+    
+    # PRIORITY 2: Check for Dockerfile (extract commands from it)
+    dockerfile_path = os.path.join(repo_dir, 'Dockerfile')
+    if os.path.exists(dockerfile_path):
+        dockerfile_info = parse_dockerfile(dockerfile_path)
+        if dockerfile_info:
+            build_cmd = dockerfile_info.get('build_command')
+            start_cmd = dockerfile_info.get('start_command')
+            if dockerfile_info.get('port'):
+                default_port = dockerfile_info['port']
+            # If we got commands from Dockerfile, use them
+            if start_cmd:
+                return build_cmd, start_cmd, default_port
+    
+    # PRIORITY 3: Check for README.md
+    readme_files = ['README.md', 'README.txt', 'README', 'readme.md']
+    for readme_file in readme_files:
+        readme_path = os.path.join(repo_dir, readme_file)
+        if os.path.exists(readme_path):
+            build_cmd, start_cmd, default_port = parse_readme_for_commands(readme_path)
+            if start_cmd:
+                return build_cmd, start_cmd, default_port
+    
+    # PRIORITY 4: Project analysis - Check for package.json (Node.js) - ALWAYS prioritize Node.js if package.json exists
     package_json_path = os.path.join(repo_dir, 'package.json')
     if os.path.exists(package_json_path):
         try:
@@ -50,22 +159,27 @@ async def detect_build_and_start_commands(repo_dir: str) -> Tuple[Optional[str],
             dev_deps = pkg.get('devDependencies', {}) or {}
             
             # Detect framework
-            has_next = 'next' in {**deps, **dev_deps}
-            has_react = 'react' in {**deps, **dev_deps}
+            has_next = 'next' in deps or 'next' in dev_deps
+            has_react = 'react' in deps or 'react' in dev_deps
+            has_vue = 'vue' in deps or 'vue' in dev_deps
             
-            # Detect build command
+            # Detect build command - always install dependencies first
             if 'build' in scripts:
-                build_cmd = 'npm run build'
+                build_cmd = 'npm install && npm run build'
             elif has_next:
                 build_cmd = 'npm install && npx next build'
             elif has_react:
                 build_cmd = 'npm install && npm run build'
+            elif has_vue:
+                build_cmd = 'npm install && npm run build'
             else:
+                # Even if no build script, install dependencies
                 build_cmd = 'npm install'
             
             # Detect start command
             if 'start' in scripts:
                 start_cmd = 'npm run start'
+                default_port = 3000
             elif has_next:
                 start_cmd = 'npx next start'
                 default_port = 3000
@@ -76,24 +190,39 @@ async def detect_build_and_start_commands(repo_dir: str) -> Tuple[Optional[str],
                 start_cmd = 'npm run serve'
                 default_port = 3000
             else:
-                # Check for server.js or app.js
-                if os.path.exists(os.path.join(repo_dir, 'server.js')):
+                # Check for common entry points
+                if os.path.exists(os.path.join(repo_dir, 'src', 'index.js')):
+                    start_cmd = 'node src/index.js'
+                elif os.path.exists(os.path.join(repo_dir, 'src', 'server.js')):
+                    start_cmd = 'node src/server.js'
+                elif os.path.exists(os.path.join(repo_dir, 'server.js')):
                     start_cmd = 'node server.js'
                 elif os.path.exists(os.path.join(repo_dir, 'app.js')):
                     start_cmd = 'node app.js'
+                elif os.path.exists(os.path.join(repo_dir, 'index.js')):
+                    start_cmd = 'node index.js'
                 else:
+                    # Fallback to npm start (will fail if no start script, but that's better than wrong command)
                     start_cmd = 'npm start'
             
             # Default port for Node.js
             if not default_port:
                 default_port = 3000
+            
+            # Return early - don't check for Python if package.json exists
+            return build_cmd, start_cmd, default_port
                 
         except Exception as e:
-            print(f"Error reading package.json: {e}")
+            # Even if package.json can't be read, if it exists, assume it's a Node.js project
+            print(f"Error reading package.json: {e}, but assuming Node.js project")
+            build_cmd = 'npm install'
+            start_cmd = 'npm start'
+            default_port = 3000
+            return build_cmd, start_cmd, default_port
     
-    # Check for requirements.txt (Python)
+    # Check for requirements.txt (Python) - only if package.json doesn't exist
     requirements_path = os.path.join(repo_dir, 'requirements.txt')
-    if os.path.exists(requirements_path) and not build_cmd:
+    if os.path.exists(requirements_path):
         try:
             # Check for Flask
             if os.path.exists(os.path.join(repo_dir, 'app.py')):
@@ -105,9 +234,16 @@ async def detect_build_and_start_commands(repo_dir: str) -> Tuple[Optional[str],
                 build_cmd = 'pip install -r requirements.txt'
                 start_cmd = 'python manage.py runserver 0.0.0.0:8000'
                 default_port = 8000
-            else:
+            # Check for main.py (only use if it actually exists)
+            elif os.path.exists(os.path.join(repo_dir, 'main.py')):
                 build_cmd = 'pip install -r requirements.txt'
                 start_cmd = 'python main.py'
+                default_port = 5000
+            else:
+                # requirements.txt exists but no standard entry point found
+                # Don't set start_cmd - let user specify it manually
+                build_cmd = 'pip install -r requirements.txt'
+                start_cmd = None
                 default_port = 5000
         except Exception as e:
             print(f"Error detecting Python project: {e}")
@@ -160,14 +296,16 @@ async def run_process_deployment(
     env_vars: Optional[Dict[str, str]] = None,
     existing_deployment_id: Optional[int] = None,
     parent_project_id: Optional[int] = None,
-    component_type: Optional[str] = None
+    component_type: Optional[str] = None,
+    root_directory: Optional[str] = "./",
+    project_name: Optional[str] = None
 ) -> Optional[Tuple[str, str]]:
     """
-    Deploy a project using direct process execution (no Docker).
+    Deploy a project using VM-based process execution (inside OrbStack VM).
     
     Args:
         git_url: Git repository URL
-        user_id: User ID
+        user_id: User ID (required for VM access)
         build_command: Build command (e.g., "npm install && npm run build")
         start_command: Start command (e.g., "npm run start")
         port: Port number
@@ -175,40 +313,89 @@ async def run_process_deployment(
         existing_deployment_id: Existing deployment ID for redeployment
         parent_project_id: Parent project ID for split repos
         component_type: Component type ('frontend' or 'backend')
+        root_directory: Root directory path (for monorepo or subdirectory deployments)
+        project_name: Project name (for domain generation)
     
     Returns:
         Tuple of (project_id, deployed_url) if successful, None otherwise
     """
+    deployment_id = None  # Initialize early for exception handling
     try:
+        # Validate user_id is provided
+        if not user_id:
+            error_msg = "user_id is required for VM-based deployment"
+            await manager.broadcast(f"❌ {error_msg}")
+            print(f"Validation error: {error_msg}")
+            return None
+        
         # Validate Git URL
         if not validate_git_url(git_url):
-            await manager.broadcast(f"❌ Invalid Git repository URL: {git_url}")
+            error_msg = f"Invalid Git repository URL: {git_url}"
+            await manager.broadcast(f"❌ {error_msg}")
+            print(f"Validation error: {error_msg}")
             return None
+        
+        # Get or create user's VM
+        await manager.broadcast(f"🔧 Getting or creating VM for user {user_id}...")
+        from vm_manager import vm_manager
+        vm_info = await vm_manager.get_or_create_user_vm(user_id)
+        vm_name = vm_info.get("vm_name")
+        vm_ip = vm_info.get("vm_ip", "127.0.0.1")
+        
+        if not vm_name:
+            error_msg = f"Failed to get or create VM for user {user_id}"
+            await manager.broadcast(f"❌ {error_msg}")
+            print(f"VM error: {error_msg}")
+            return None
+        
+        await manager.broadcast(f"✅ Using VM: {vm_name}")
         
         # Extract repository name
         repo_name = extract_repo_name(git_url)
         project_id = f"{repo_name}-{str(uuid.uuid4())[:8]}"
         
-        await manager.broadcast(f"🚀 Starting process-based deployment: {project_id}")
+        await manager.broadcast(f"🚀 Starting VM-based deployment: {project_id}")
         
-        # Create or get persistent project directory
-        projects_base_dir = os.path.join(os.path.dirname(__file__), "projects")
-        os.makedirs(projects_base_dir, exist_ok=True)
-        project_dir = os.path.join(projects_base_dir, project_id)
+        # Project directory inside VM
+        # Use /projects/{project_id} inside the VM
+        vm_project_dir = f"/projects/{project_id}"
+        
+        # Resolve root directory within VM project directory
+        if root_directory and root_directory != "./":
+            # Combine VM project dir with root directory
+            if root_directory.startswith("/"):
+                vm_project_dir = root_directory  # Absolute path in VM
+            else:
+                vm_project_dir = f"{vm_project_dir}/{root_directory.lstrip('./')}"
+        
+        project_dir = vm_project_dir  # Use VM path for all operations
         
         # Handle existing deployment
+        # Store deployment_id early to avoid SQLAlchemy detached instance errors
+        deployment_id = existing_deployment_id
         db_deployment = None
+        
         if existing_deployment_id is not None:
             with Session(engine) as session:
                 db_deployment = session.get(Deployment, existing_deployment_id)
-                if db_deployment and db_deployment.project_dir:
-                    # Use existing project directory
-                    project_dir = db_deployment.project_dir
-                elif db_deployment:
-                    # Create new directory and update
-                    db_deployment.project_dir = project_dir
-                    session.add(db_deployment)
-                    session.commit()
+                if db_deployment:
+                    deployment_id = db_deployment.id  # Store ID for later use
+                    if db_deployment.project_dir:
+                        # Use existing project directory in VM
+                        project_dir = db_deployment.project_dir
+                    else:
+                        # Create new directory and update
+                        db_deployment.project_dir = project_dir
+                        db_deployment.vm_name = vm_name
+                        db_deployment.vm_ip = vm_ip
+                        session.add(db_deployment)
+                        session.commit()
+                    # Update VM info if changed
+                    if db_deployment.vm_name != vm_name:
+                        db_deployment.vm_name = vm_name
+                        db_deployment.vm_ip = vm_ip
+                        session.add(db_deployment)
+                        session.commit()
         elif parent_project_id is not None and component_type is not None:
             # Child component deployment
             with Session(engine) as session:
@@ -221,10 +408,19 @@ async def run_process_deployment(
                 
                 if existing_child:
                     db_deployment = existing_child
+                    deployment_id = db_deployment.id  # Store ID for later use
                     if db_deployment.project_dir:
                         project_dir = db_deployment.project_dir
                     else:
                         db_deployment.project_dir = project_dir
+                        db_deployment.vm_name = vm_name
+                        db_deployment.vm_ip = vm_ip
+                        session.add(db_deployment)
+                        session.commit()
+                    # Update VM info if changed
+                    if db_deployment.vm_name != vm_name:
+                        db_deployment.vm_name = vm_name
+                        db_deployment.vm_ip = vm_ip
                         session.add(db_deployment)
                         session.commit()
                 else:
@@ -236,11 +432,14 @@ async def run_process_deployment(
                         user_id=user_id,
                         parent_project_id=parent_project_id,
                         component_type=component_type,
-                        project_dir=project_dir
+                        project_dir=project_dir,
+                        vm_name=vm_name,
+                        vm_ip=vm_ip
                     )
                     session.add(db_deployment)
                     session.commit()
                     session.refresh(db_deployment)
+                    deployment_id = db_deployment.id  # Store ID for later use
         else:
             # New deployment
             with Session(engine) as session:
@@ -249,120 +448,345 @@ async def run_process_deployment(
                     git_url=git_url,
                     status="starting",
                     user_id=user_id,
-                    project_dir=project_dir
+                    project_dir=project_dir,
+                    vm_name=vm_name,
+                    vm_ip=vm_ip
                 )
+                # Set project name if provided
+                if project_name:
+                    db_deployment.app_name = project_name
                 session.add(db_deployment)
                 session.commit()
                 session.refresh(db_deployment)
+                deployment_id = db_deployment.id  # Store ID for later use
         
-        # Clone or update repository
-        if os.path.exists(project_dir) and os.path.exists(os.path.join(project_dir, '.git')):
-            await manager.broadcast("📥 Updating repository...")
+        # Clone or update repository inside VM
+        await manager.broadcast(f"📥 Cloning repository to VM: {vm_project_dir}...")
+        
+        # Check if repository already exists in VM
+        check_result = await vm_manager.exec_in_vm(
+            vm_name,
+            f"test -d {vm_project_dir}/.git && echo 'exists' || echo 'not_exists'"
+        )
+        
+        repo_exists = "exists" in (check_result.stdout or "")
+        
+        if repo_exists:
+            await manager.broadcast("📥 Updating repository in VM...")
             # Update existing repo
-            update_result = await asyncio.to_thread(
-                subprocess.run,
-                ["git", "pull"],
-                cwd=project_dir,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+            update_result = await vm_manager.exec_in_vm(
+                vm_name,
+                f"cd {vm_project_dir} && git pull",
+                cwd=vm_project_dir
             )
+            
             if update_result.returncode != 0:
                 await manager.broadcast(f"⚠️ Git pull failed: {update_result.stderr}")
         else:
-            await manager.broadcast("📥 Cloning repository...")
-            # Clone new repo
-            if os.path.exists(project_dir):
-                shutil.rmtree(project_dir)
-            os.makedirs(project_dir, exist_ok=True)
+            # Create project directory if it doesn't exist
+            # Extract parent directory from vm_project_dir (e.g., /projects from /projects/project-id)
+            parent_dir = "/".join(vm_project_dir.rstrip("/").split("/")[:-1])
+            if not parent_dir:
+                parent_dir = "/projects"
             
-            clone_result = await asyncio.to_thread(
-                subprocess.run,
-                ["git", "clone", "--depth", "1", git_url, project_dir],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+            await vm_manager.exec_in_vm(
+                vm_name,
+                f"mkdir -p {parent_dir}"
             )
+            
+            # Clone repository inside VM
+            clone_result = await vm_manager.exec_in_vm(
+                vm_name,
+                f"git clone --depth 1 {git_url} {vm_project_dir}",
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"} if os.environ else {}
+            )
+            
             if clone_result.returncode != 0:
-                await manager.broadcast(f"❌ Failed to clone repository: {clone_result.stderr}")
-                with Session(engine) as session:
-                    deployment = session.get(Deployment, db_deployment.id)
-                    if deployment:
-                        deployment.status = "failed"
-                        session.add(deployment)
-                        session.commit()
+                error_msg = f"Failed to clone repository in VM: {clone_result.stderr}"
+                await manager.broadcast(f"❌ {error_msg}")
+                if deployment_id:
+                    with Session(engine) as session:
+                        deployment = session.get(Deployment, deployment_id)
+                        if deployment:
+                            deployment.status = "failed"
+                            session.add(deployment)
+                            session.commit()
                 return None
-        
-        await manager.broadcast("✅ Repository cloned/updated successfully")
+            
+            await manager.broadcast("✅ Repository cloned successfully in VM")
         
         # Auto-detect build and start commands if not provided
+        # Need to check files inside VM
         if not build_command or not start_command:
-            await manager.broadcast("🔍 Auto-detecting build and start commands...")
-            detected_build, detected_start, detected_port = await detect_build_and_start_commands(project_dir)
-            
-            if detected_build:
-                build_command = detected_build
-                await manager.broadcast(f"✅ Detected build command: {build_command}")
-            
-            if detected_start:
-                start_command = detected_start
-                await manager.broadcast(f"✅ Detected start command: {start_command}")
-            
-            if detected_port and not port:
-                port = detected_port
-                await manager.broadcast(f"✅ Detected default port: {port}")
-        
-        # Find free port if not specified
-        if not port:
-            port = find_free_port(3000)
-            await manager.broadcast(f"🎯 Using port: {port}")
-        
-        # Run build command if provided
-        if build_command:
-            await manager.broadcast(f"🔨 Running build command: {build_command}")
-            build_result = await asyncio.to_thread(
-                subprocess.run,
-                build_command.split() if '&&' not in build_command and '|' not in build_command else ['sh', '-c', build_command],
-                cwd=project_dir,
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 minute timeout for builds
-                env={**os.environ, **(env_vars or {})}
+            await manager.broadcast("🔍 Auto-detecting build and start commands in VM...")
+            # List files in project directory to check for package.json, etc.
+            ls_result = await vm_manager.exec_in_vm(
+                vm_name,
+                f"ls -la {vm_project_dir}",
+                cwd=vm_project_dir
             )
             
-            if build_result.returncode != 0:
-                error_msg = f"Build failed: {build_result.stderr}"
+            # For now, use a simple detection by checking for package.json
+            # We'll improve this later with better detection logic
+            check_package_json = await vm_manager.exec_in_vm(
+                vm_name,
+                f"test -f {vm_project_dir}/package.json && echo 'nodejs' || echo 'unknown'"
+            )
+            
+            # Simple detection - can be improved
+            if "nodejs" in (check_package_json.stdout or ""):
+                if not build_command:
+                    build_command = "npm install"
+                if not start_command:
+                    start_command = "npm start"
+                if not port:
+                    port = 3000
+            
+            # If still not detected, use default detection function
+            # We need to copy files temporarily to detect, or run detection inside VM
+            # For now, let's use a basic approach
+            if not build_command or not start_command:
+                # Try to detect by checking for common files
+                # This is a simplified version - full detection would need to read files
+                detected_build, detected_start, detected_port = None, None, None
+                
+                # Check for Node.js
+                check_node = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"test -f {vm_project_dir}/package.json && cat {vm_project_dir}/package.json | grep -q '\"scripts\"' && echo 'nodejs' || echo 'no'"
+                )
+                
+                if "nodejs" in (check_node.stdout or ""):
+                    detected_build = "npm install"
+                    detected_start = "npm start"
+                    detected_port = 3000
+                
+                if detected_build:
+                    build_command = detected_build
+                    await manager.broadcast(f"✅ Detected build command: {build_command}")
+                
+                if detected_start:
+                    start_command = detected_start
+                    await manager.broadcast(f"✅ Detected start command: {start_command}")
+                
+                if detected_port and not port:
+                    port = detected_port
+                    await manager.broadcast(f"✅ Detected default port: {port}")
+        
+        # Find free port if not specified (ports are forwarded from VM to host)
+        if not port:
+            port = 3000  # Default port, can be improved with port detection in VM
+            await manager.broadcast(f"🎯 Using port: {port}")
+        
+        # Run build command inside VM if provided
+        if build_command:
+            await manager.broadcast(f"🔨 Running build command in VM: {build_command}")
+            try:
+                # Execute build command inside VM
+                build_result = await vm_manager.exec_in_vm(
+                    vm_name,
+                    build_command,
+                    cwd=vm_project_dir,
+                    env=env_vars
+                )
+                
+                if build_result.returncode != 0:
+                    error_output = build_result.stderr or build_result.stdout or "Unknown build error"
+                    error_msg = f"Build failed in VM (exit code {build_result.returncode}): {error_output[:500]}"
+                    await manager.broadcast(f"❌ {error_msg}")
+                    # Log build output for debugging
+                    if build_result.stdout:
+                        await manager.broadcast(f"Build stdout: {build_result.stdout[:1000]}")
+                    if build_result.stderr:
+                        await manager.broadcast(f"Build stderr: {build_result.stderr[:1000]}")
+                    if deployment_id:
+                        with Session(engine) as session:
+                            deployment = session.get(Deployment, deployment_id)
+                            if deployment:
+                                deployment.status = "failed"
+                                session.add(deployment)
+                                session.commit()
+                    return None
+                
+                await manager.broadcast("✅ Build completed successfully in VM")
+                # Log build output if available
+                if build_result.stdout:
+                    await manager.broadcast(f"Build output: {build_result.stdout[:500]}")
+            except Exception as e:
+                error_msg = f"Build command failed in VM with error: {str(e)}"
                 await manager.broadcast(f"❌ {error_msg}")
+                if deployment_id:
+                    with Session(engine) as session:
+                        deployment = session.get(Deployment, deployment_id)
+                        if deployment:
+                            deployment.status = "failed"
+                            session.add(deployment)
+                            session.commit()
+                return None
+        
+        # Validate that we have a start command
+        if not start_command:
+            error_msg = "No start command provided or detected. Please specify a start command in the deployment settings."
+            await manager.broadcast(f"❌ {error_msg}")
+            if deployment_id:
                 with Session(engine) as session:
-                    deployment = session.get(Deployment, db_deployment.id)
+                    deployment = session.get(Deployment, deployment_id)
                     if deployment:
                         deployment.status = "failed"
                         session.add(deployment)
                         session.commit()
-                return None
-            
-            await manager.broadcast("✅ Build completed successfully")
+            return None
         
         # Prepare environment variables
         process_env = env_vars or {}
         
-        # Start process
-        await manager.broadcast(f"🚀 Starting application: {start_command}")
-        success, pid, error = await pm.start_process(
-            project_id=project_id,
-            command=start_command,
-            cwd=project_dir,
-            env=process_env,
-            port=port
-        )
-        
-        if not success:
-            error_msg = f"Failed to start process: {error}"
+        # Ensure we have a deployment_id before starting process
+        if not deployment_id:
+            error_msg = "No deployment record found. Cannot start process."
             await manager.broadcast(f"❌ {error_msg}")
+            print(f"Error: {error_msg} - deployment_id is None")
+            return None
+        
+        # Start process inside VM using nohup or PM2 for background execution
+        # Use deployment_id as project_id for process tracking
+        process_project_id = str(deployment_id)
+        await manager.broadcast(f"🚀 Starting application in VM: {start_command}")
+        
+        try:
+            # Prepare environment variables
+            env_vars_full = process_env.copy() if process_env else {}
+            if port:
+                env_vars_full['PORT'] = str(port)
+                env_vars_full['HOST'] = '0.0.0.0'
+                env_vars_full['HOSTNAME'] = '0.0.0.0'
+            
+            # Use nohup to run process in background inside VM
+            # Format: nohup command > log_file 2>&1 &
+            log_file = f"/tmp/project-{deployment_id}.log"
+            pid_file = f"/tmp/project-{deployment_id}.pid"
+            
+            # Start command in background using nohup
+            # The exec_in_vm function will handle cwd and env variables
+            # Format: nohup command > log 2>&1 & echo $! > pid_file
+            start_cmd = f"nohup {start_command} > {log_file} 2>&1 & echo $! > {pid_file}"
+            
+            # Execute the command with environment variables
+            # The exec_in_vm function will handle setting env vars and cwd
+            start_result = await vm_manager.exec_in_vm(
+                vm_name,
+                start_cmd,
+                cwd=vm_project_dir,
+                env=env_vars_full
+            )
+            
+            if start_result.returncode != 0:
+                error_msg = f"Failed to start process in VM: {start_result.stderr}"
+                await manager.broadcast(f"❌ {error_msg}")
+                print(f"Process start failed: {error_msg}")
+                if start_result.stdout:
+                    await manager.broadcast(f"Output: {start_result.stdout[:500]}")
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment:
+                        deployment.status = "failed"
+                        session.add(deployment)
+                        session.commit()
+                return None
+            
+            # Wait a moment for process to start and PID file to be created
+            await asyncio.sleep(1)
+            
+            # Read PID from file
+            pid_result = await vm_manager.exec_in_vm(
+                vm_name,
+                f"cat {pid_file} 2>/dev/null || echo ''"
+            )
+            
+            pid = None
+            if pid_result.returncode == 0 and pid_result.stdout.strip():
+                try:
+                    pid = int(pid_result.stdout.strip())
+                except ValueError:
+                    pass
+            
+            # If PID file is empty, try to find the process by command
+            if not pid:
+                # Try to find process by command pattern
+                find_pid_result = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"ps aux | grep '{start_command}' | grep -v grep | awk '{{print $2}}' | head -1"
+                )
+                if find_pid_result.returncode == 0 and find_pid_result.stdout.strip():
+                    try:
+                        pid = int(find_pid_result.stdout.strip())
+                    except ValueError:
+                        pass
+            
+            # Verify process is running
+            if pid:
+                check_result = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"ps -p {pid} > /dev/null 2>&1 && echo 'running' || echo 'stopped'"
+                )
+                if "stopped" in (check_result.stdout or ""):
+                    error_msg = "Process started but exited immediately"
+                    await manager.broadcast(f"❌ {error_msg}")
+                    # Read log file for error details
+                    log_result = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"tail -50 {log_file} 2>/dev/null || echo 'No log file'"
+                    )
+                    if log_result.stdout:
+                        await manager.broadcast(f"Log output: {log_result.stdout[:500]}")
+                    with Session(engine) as session:
+                        deployment = session.get(Deployment, deployment_id)
+                        if deployment:
+                            deployment.status = "failed"
+                            session.add(deployment)
+                            session.commit()
+                    return None
+            else:
+                # Process might still be starting, check logs
+                await asyncio.sleep(1)
+                # Check if process is actually running (by checking port or process name)
+                check_process = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"pgrep -f '{start_command.split()[0]}' || echo 'not_found'"
+                )
+                if "not_found" in (check_process.stdout or ""):
+                    error_msg = "Process failed to start - no process found"
+                    await manager.broadcast(f"❌ {error_msg}")
+                    # Read log file
+                    log_result = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"cat {log_file} 2>/dev/null || echo 'No log file'"
+                    )
+                    if log_result.stdout:
+                        await manager.broadcast(f"Process logs: {log_result.stdout[:1000]}")
+                    with Session(engine) as session:
+                        deployment = session.get(Deployment, deployment_id)
+                        if deployment:
+                            deployment.status = "failed"
+                            session.add(deployment)
+                            session.commit()
+                    return None
+                else:
+                    # Extract PID from pgrep output
+                    try:
+                        pid = int(check_process.stdout.strip().split()[0])
+                    except (ValueError, IndexError):
+                        pid = None
+            
+            await manager.broadcast(f"✅ Process started in VM (PID: {pid})")
+            
+        except Exception as e:
+            error_msg = f"Exception while starting process in VM: {str(e)}"
+            await manager.broadcast(f"❌ {error_msg}")
+            print(f"Process start exception: {e}")
+            import traceback
+            traceback.print_exc()
             with Session(engine) as session:
-                deployment = session.get(Deployment, db_deployment.id)
+                deployment = session.get(Deployment, deployment_id)
                 if deployment:
                     deployment.status = "failed"
                     session.add(deployment)
@@ -372,16 +796,72 @@ async def run_process_deployment(
         # Wait a moment for process to start
         await asyncio.sleep(2)
         
-        # Detect actual running port
-        detected_port = await pm.detect_running_port(project_id, port)
-        if detected_port:
-            port = detected_port
+        # Check if process is still running
+        if pid:
+            check_result = await vm_manager.exec_in_vm(
+                vm_name,
+                f"ps -p {pid} > /dev/null 2>&1 && echo 'running' || echo 'stopped'"
+            )
+            if "stopped" in (check_result.stdout or ""):
+                error_msg = "Process exited after startup"
+                await manager.broadcast(f"❌ {error_msg}")
+                # Read log file
+                log_result = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"cat {log_file} 2>/dev/null || echo 'No log file'"
+                )
+                if log_result.stdout:
+                    await manager.broadcast(f"Process logs: {log_result.stdout[:1000]}")
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment:
+                        deployment.status = "failed"
+                        session.add(deployment)
+                        session.commit()
+                return None
         
-        # Update database
-        deployed_url = f"http://localhost:{port}"
-        with Session(engine) as session:
-            deployment = session.get(Deployment, db_deployment.id)
-            if deployment:
+        # Generate deployed URL - use custom domain if available, otherwise use localhost
+        # For VM-based deployment, we'll use the custom domain format
+        deployed_url = None
+        try:
+            with Session(engine) as session:
+                deployment = session.get(Deployment, deployment_id)
+                if not deployment:
+                    error_msg = f"Deployment record {deployment_id} not found in database"
+                    await manager.broadcast(f"❌ {error_msg}")
+                    print(f"Error: {error_msg}")
+                    return None
+                
+                # Generate default domain: project-name.butler.aayush786.xyz
+                # Get butler domain from environment
+                butler_domain = os.getenv("BUTLER_DOMAIN", "butler.aayush786.xyz")
+                
+                # Generate project slug from app_name or container_name
+                if deployment.app_name:
+                    project_slug = re.sub(r"[^a-z0-9]+", "-", deployment.app_name.lower()).strip("-")
+                else:
+                    # Extract from container_name or repo name
+                    repo_name = extract_repo_name(deployment.git_url)
+                    project_slug = re.sub(r"[^a-z0-9]+", "-", repo_name.lower()).strip("-")
+                
+                if not project_slug:
+                    project_slug = f"project-{deployment.id}"
+                
+                # Format: project-name.butler.aayush786.xyz (with dot)
+                default_domain = f"{project_slug}.{butler_domain}"
+                
+                # Check if custom domain is configured
+                if deployment.custom_domain:
+                    # Use custom domain (already configured)
+                    domain_to_use = deployment.custom_domain
+                else:
+                    # Use generated default domain
+                    domain_to_use = default_domain
+                    # Store the generated domain
+                    deployment.custom_domain = default_domain
+                
+                deployed_url = f"https://{domain_to_use}"
+                
                 deployment.status = "running"
                 deployment.deployed_url = deployed_url
                 deployment.build_command = build_command
@@ -389,19 +869,68 @@ async def run_process_deployment(
                 deployment.port = port
                 deployment.process_pid = pid
                 deployment.project_dir = project_dir
+                deployment.vm_name = vm_name
+                deployment.vm_ip = vm_ip
+                deployment.host_port = port  # Port in VM, forwarded to host
+                
+                # Configure Cloudflare tunnel to route domain to localhost:port
+                # For VM-based deployment, OrbStack forwards ports from VM to host
+                # So we use localhost:{port} as the service URL
+                service_url = f"http://localhost:{port}"
+                
+                try:
+                    from cloudflare_manager import ensure_project_hostname
+                    ensure_project_hostname(domain_to_use, service_url)
+                    deployment.domain_status = "active"
+                    deployment.last_domain_sync = datetime.datetime.utcnow()
+                    await manager.broadcast(f"✅ Domain configured: {domain_to_use} → {service_url}")
+                except Exception as cf_error:
+                    # Log error but don't fail deployment
+                    deployment.domain_status = "pending"
+                    await manager.broadcast(f"⚠️ Cloudflare configuration failed (will retry later): {str(cf_error)}")
+                    print(f"Cloudflare configuration error: {cf_error}")
+                
                 session.add(deployment)
                 session.commit()
-        
-        await manager.broadcast(f"🎉 Deployment successful!")
-        await manager.broadcast(f"🌐 Application is running at: {deployed_url}")
-        
-        return (project_id, deployed_url)
+                
+            await manager.broadcast(f"🎉 Deployment successful!")
+            await manager.broadcast(f"🌐 Application is running at: {deployed_url}")
+            await manager.broadcast(f"📍 VM: {vm_name}, Port: {port}")
+            
+            # Return the database ID as string, not the project_id string
+            return (str(deployment_id), deployed_url)
+        except Exception as e:
+            error_msg = f"Failed to update deployment record: {str(e)}"
+            await manager.broadcast(f"❌ {error_msg}")
+            print(f"Database update error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
         
     except Exception as e:
         error_msg = f"Deployment failed: {str(e)}"
         await manager.broadcast(f"❌ {error_msg}")
         print(f"Error in process deployment: {e}")
         import traceback
-        traceback.print_exc()
+        error_trace = traceback.format_exc()
+        print(error_trace)
+        
+        # Update deployment status to failed if we have a deployment_id
+        if deployment_id:
+            try:
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment:
+                        deployment.status = "failed"
+                        session.add(deployment)
+                        session.commit()
+                        print(f"Updated deployment {deployment_id} status to failed")
+            except Exception as db_error:
+                print(f"Failed to update deployment status in database: {db_error}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("Warning: deployment_id is None, cannot update deployment status")
+        
         return None
 

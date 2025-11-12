@@ -126,8 +126,12 @@ class Router {
 
   loadPageData(pageId) {
     switch(pageId) {
+      case 'dashboard':
+        loadVMStatus();
+        break;
       case 'projects':
         loadProjects();
+        loadVMStatus(); // Also show VM status on projects page
         break;
       case 'history':
         loadHistory();
@@ -430,21 +434,27 @@ function setupEventListeners() {
     deployForm.addEventListener('submit', handleDeploy);
   }
   
+  // Setup framework preset handler
+  setupFrameworkPresetHandler();
+  
   // Deploy type toggle
   const deployType = document.getElementById('deploy-type');
   if (deployType) {
     deployType.addEventListener('change', (e) => {
       const singleGroup = document.getElementById('single-repo-group');
-      const splitGroup = document.getElementById('split-repo-group');
+      const gitUrlSection = document.getElementById('git-url-section');
+      const splitLayout = document.getElementById('split-deploy-layout');
       const gitUrlInput = document.getElementById('git-url');
       
       if (e.target.value === 'split') {
-        singleGroup.style.display = 'none';
-        splitGroup.style.display = 'block';
+        if (singleGroup) singleGroup.style.display = 'none';
+        if (gitUrlSection) gitUrlSection.style.display = 'none';
+        if (splitLayout) splitLayout.style.display = 'block';
         if (gitUrlInput) gitUrlInput.removeAttribute('required');
       } else {
-        singleGroup.style.display = 'block';
-        splitGroup.style.display = 'none';
+        if (singleGroup) singleGroup.style.display = 'block';
+        if (gitUrlSection) gitUrlSection.style.display = 'block';
+        if (splitLayout) splitLayout.style.display = 'none';
         if (gitUrlInput) gitUrlInput.setAttribute('required', 'required');
       }
     });
@@ -777,6 +787,153 @@ function loadDomainPage() {
   const page = document.getElementById('page-domain');
   if (!page) return;
   // Nothing dynamic for now; placeholder kept for future enhancements
+}
+
+// VM Status Management
+let vmStatusPollInterval = null;
+
+async function loadVMStatus() {
+  const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+  if (!token) {
+    // Hide VM status card if not logged in
+    const vmStatusCard = document.getElementById('vmStatusCard');
+    if (vmStatusCard) vmStatusCard.style.display = 'none';
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/vm-status', {
+      headers: getAuthHeaders()
+    });
+    
+    if (!response.ok) {
+      // If unauthorized, hide the card
+      if (response.status === 401) {
+        const vmStatusCard = document.getElementById('vmStatusCard');
+        if (vmStatusCard) vmStatusCard.style.display = 'none';
+        return;
+      }
+      throw new Error('Failed to fetch VM status');
+    }
+    
+    const data = await response.json();
+    updateVMStatusUI(data.vm_status, data.message);
+    
+    // If VM is creating, poll every 5 seconds
+    if (data.vm_status === 'creating') {
+      if (!vmStatusPollInterval) {
+        vmStatusPollInterval = setInterval(() => {
+          loadVMStatus();
+        }, 5000); // Poll every 5 seconds
+      }
+    } else {
+      // Stop polling if VM is ready or failed
+      if (vmStatusPollInterval) {
+        clearInterval(vmStatusPollInterval);
+        vmStatusPollInterval = null;
+      }
+    }
+  } catch (error) {
+    console.error('Error loading VM status:', error);
+    // Don't show error, just hide the card
+    const vmStatusCard = document.getElementById('vmStatusCard');
+    if (vmStatusCard) vmStatusCard.style.display = 'none';
+  }
+}
+
+function updateVMStatusUI(status, message) {
+  // Update dashboard VM status card
+  updateVMStatusCard('vmStatusCard', 'vmStatusIcon', 'vmStatusSpinner', 'vmStatusMessage', 
+                     'vmStatusProgress', 'vmProgressFill', 'vmProgressText', 'dashboardActions', 
+                     status, message);
+  
+  // Update projects page VM status card
+  updateVMStatusCard('vmStatusCardProjects', 'vmStatusIconProjects', 'vmStatusSpinnerProjects', 
+                     'vmStatusMessageProjects', 'vmStatusProgressProjects', 'vmProgressFillProjects', 
+                     'vmProgressTextProjects', null, status, message);
+}
+
+function updateVMStatusCard(cardId, iconId, spinnerId, messageId, progressId, fillId, textId, actionsId, status, message) {
+  const vmStatusCard = document.getElementById(cardId);
+  const vmStatusIcon = document.getElementById(iconId);
+  const vmStatusSpinner = document.getElementById(spinnerId);
+  const vmStatusMessage = document.getElementById(messageId);
+  const vmStatusProgress = document.getElementById(progressId);
+  const vmProgressFill = document.getElementById(fillId);
+  const vmProgressText = document.getElementById(textId);
+  const dashboardActions = actionsId ? document.getElementById(actionsId) : null;
+  
+  if (!vmStatusCard) return;
+  
+  // Show the card
+  vmStatusCard.style.display = 'block';
+  
+  // Update message
+  if (vmStatusMessage) {
+    vmStatusMessage.textContent = message;
+  }
+  
+  // Update icon and styling based on status
+  if (status === 'creating') {
+    // Show spinner animation
+    if (vmStatusSpinner) {
+      vmStatusSpinner.textContent = '⏳';
+      vmStatusSpinner.className = 'vm-status-spinner spinning';
+    }
+    if (vmStatusIcon) {
+      vmStatusIcon.className = 'vm-status-icon vm-status-creating';
+    }
+    // Show progress bar
+    if (vmStatusProgress) {
+      vmStatusProgress.style.display = 'block';
+      // Animate progress bar (indeterminate)
+      if (vmProgressFill) {
+        vmProgressFill.style.width = '100%';
+        vmProgressFill.className = 'vm-progress-fill vm-progress-indeterminate';
+      }
+      if (vmProgressText) {
+        vmProgressText.textContent = 'Creating your virtual machine... This may take 2-5 minutes.';
+      }
+    }
+    // Hide actions while creating
+    if (dashboardActions) {
+      dashboardActions.style.display = 'none';
+    }
+  } else if (status === 'ready') {
+    // Show success icon
+    if (vmStatusSpinner) {
+      vmStatusSpinner.textContent = '✅';
+      vmStatusSpinner.className = 'vm-status-spinner';
+    }
+    if (vmStatusIcon) {
+      vmStatusIcon.className = 'vm-status-icon vm-status-ready';
+    }
+    // Hide progress bar
+    if (vmStatusProgress) {
+      vmStatusProgress.style.display = 'none';
+    }
+    // Show actions
+    if (dashboardActions) {
+      dashboardActions.style.display = 'grid';
+    }
+  } else if (status === 'failed') {
+    // Show error icon
+    if (vmStatusSpinner) {
+      vmStatusSpinner.textContent = '❌';
+      vmStatusSpinner.className = 'vm-status-spinner';
+    }
+    if (vmStatusIcon) {
+      vmStatusIcon.className = 'vm-status-icon vm-status-failed';
+    }
+    // Hide progress bar
+    if (vmStatusProgress) {
+      vmStatusProgress.style.display = 'none';
+    }
+    // Show actions but with warning
+    if (dashboardActions) {
+      dashboardActions.style.display = 'grid';
+    }
+  }
 }
 
 function getAuthHeaders() {
@@ -1297,7 +1454,7 @@ function showProjectContent(page) {
   // Show project-specific content based on page
   switch(page) {
     case 'deploy':
-      // Show original deploy page and pre-fill GitHub URL
+      // Show Vercel-style deploy page and populate fields dynamically
       const deployPage = document.getElementById('page-deploy');
       if (deployPage) {
         deployPage.style.display = 'block';
@@ -1313,60 +1470,115 @@ function showProjectContent(page) {
           deploySuccess.style.display = 'none';
         }
         
-        // Hide "Deploy New Application" card if viewing an existing project
-        const deployNewAppCard = deployPage.querySelector('.card h2')?.closest('.card');
+        // Update page title
+        const pageTitle = document.getElementById('deploy-page-title');
+        const cardTitle = document.getElementById('deploy-card-title');
+        const description = document.getElementById('deploy-description');
         
         if (currentProject) {
-          // Show deploy form card when viewing existing project (for redeploying)
-          if (deployNewAppCard) {
-            deployNewAppCard.style.display = 'block';
+          if (pageTitle) pageTitle.textContent = currentProject.name || 'Project';
+          if (cardTitle) cardTitle.textContent = currentProject.name || 'Project';
+          if (description) description.textContent = 'Update deployment settings and redeploy your project.';
+          
+          // Show import info if we have a git URL
+          const importInfo = document.getElementById('import-info');
+          const importRepoName = document.getElementById('import-repo-name');
+          const gitUrl = currentProject.git_url || currentProject.repository_url || '';
+          
+          // Always populate the Git URL input field, even if hidden, for form submission
+          const gitUrlInput = document.getElementById('git-url');
+          if (gitUrlInput && gitUrl) {
+            gitUrlInput.value = gitUrl;
+            console.log('Populated Git URL input in showProjectContent:', gitUrl);
+            // Remove required attribute since it's hidden for existing projects
+            gitUrlInput.removeAttribute('required');
           }
           
-          // Load and display project components if split repo and both deployed
-          const componentsSection = document.getElementById('project-components-section');
-          const projectType = currentProject?.project_type || 
-                            (currentProject?.isSplit ? 'split' : 'single');
-          
-          // Hide components section on deploy page (components now on Status page)
-          if (componentsSection) {
-            componentsSection.style.display = 'none';
+          if (gitUrl && importInfo && importRepoName) {
+            // Parse GitHub URL to extract repo name
+            try {
+              const urlMatch = gitUrl.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git|[/]|$)/);
+              if (urlMatch) {
+                const repoOwner = urlMatch[1];
+                const repoName = urlMatch[2];
+                importRepoName.textContent = `${repoOwner}/${repoName}`;
+                importInfo.style.display = 'flex';
+                
+                // Show branch badge (default to main)
+                const branchBadge = document.getElementById('branch-badge');
+                const branchName = document.getElementById('branch-name');
+                if (branchBadge && branchName) {
+                  branchBadge.style.display = 'flex';
+                  branchName.textContent = 'main'; // Default branch
+                }
+              }
+            } catch (e) {
+              console.warn('Failed to parse GitHub URL:', e);
+            }
+          } else if (importInfo) {
+            importInfo.style.display = 'none';
           }
+          
+          // Log currentProject data for debugging
+          console.log('showProjectContent - currentProject:', {
+            id: currentProject.id,
+            name: currentProject.name,
+            git_url: currentProject.git_url,
+            repository_url: currentProject.repository_url,
+            gitUrl: gitUrl
+          });
+          
+          // Check for monorepo structure
+          checkMonorepoStructure(currentProject.id, gitUrl);
         } else {
-          // Show deploy form when no project is selected (from + New Deploy button)
-          if (deployNewAppCard) {
-            deployNewAppCard.style.display = 'block';
-          }
+          if (pageTitle) pageTitle.textContent = 'New Project';
+          if (cardTitle) cardTitle.textContent = 'New Project';
+          if (description) description.textContent = 'Choose where you want to create the project and give it a name.';
           
-          // Hide any components section that might be visible
-          const componentsSection = document.getElementById('project-components-section');
-          if (componentsSection) {
-            componentsSection.style.display = 'none';
-          }
+          // Hide import info for new projects
+          const importInfo = document.getElementById('import-info');
+          if (importInfo) importInfo.style.display = 'none';
+        }
+        
+        // Hide components section on deploy page
+        const componentsSection = document.getElementById('project-components-section');
+        if (componentsSection) {
+          componentsSection.style.display = 'none';
         }
         
         const deployTypeSelect = document.getElementById('deploy-type');
         const deployTypeGroup = document.getElementById('deploy-type-group');
         const singleGroup = document.getElementById('single-repo-group');
-        const splitGroup = document.getElementById('split-repo-group');
+        const gitUrlSection = document.getElementById('git-url-section');
         const splitLayout = document.getElementById('split-deploy-layout');
         const gitUrlInput = document.getElementById('git-url');
+        const projectNameInput = document.getElementById('project-name');
+        const frameworkPreset = document.getElementById('framework-preset');
+        const rootDirectory = document.getElementById('root-directory');
+        const installCommand = document.getElementById('install-command');
+        const buildCommand = document.getElementById('build-command');
+        const startCommand = document.getElementById('start-command');
+        const portInput = document.getElementById('port');
         const feInput = document.getElementById('frontend-url');
         const beInput = document.getElementById('backend-url');
         const submitBtn = document.getElementById('deploy-submit-default');
+        const editRootDirBtn = document.getElementById('edit-root-directory-btn');
 
-        // Clean any previous dynamic buttons
-        deployPage.querySelectorAll('.dynamic-split-btn').forEach(b => b.remove());
+        // Setup root directory edit button
+        if (editRootDirBtn && rootDirectory) {
+          editRootDirBtn.onclick = () => {
+            rootDirectory.removeAttribute('readonly');
+            rootDirectory.focus();
+            rootDirectory.select();
+          };
+        }
 
-        // Determine project type to show correct deploy layout
-        // Use explicit project_type field if available, otherwise fallback to detection
+        // Determine project type
         let projectType = currentProject?.project_type;
-        
-        // Always double-check git_url format as final source of truth
         const gitUrl = currentProject?.git_url || currentProject?.repository_url || '';
         const hasSplitFormat = gitUrl.startsWith('split::');
         
         if (!projectType) {
-          // Fallback detection: check isSplit flag or git_url format
           if (currentProject?.isSplit || hasSplitFormat) {
             projectType = 'split';
           } else {
@@ -1374,28 +1586,80 @@ function showProjectContent(page) {
           }
         }
         
-        // Override if git_url format contradicts project_type (git_url is always correct)
         if (hasSplitFormat && projectType !== 'split') {
-          console.warn('Project type mismatch detected. git_url indicates split but project_type is', projectType);
           projectType = 'split';
         } else if (!hasSplitFormat && projectType === 'split' && gitUrl) {
-          console.warn('Project type mismatch detected. git_url indicates single but project_type is split');
           projectType = 'single';
         }
         
         if (currentProject) {
-          // Always hide dropdown when viewing an existing project (no type selection needed)
+          // Hide deployment type selector for existing projects
           if (deployTypeGroup) deployTypeGroup.style.display = 'none';
           
+          // Populate project name
+          if (projectNameInput) {
+            projectNameInput.value = currentProject.name || currentProject.app_name || '';
+          }
+          
+          // Populate framework preset (auto-detect from build command or project type)
+          if (frameworkPreset) {
+            // Try to detect framework from build command or project structure
+            const buildCmd = currentProject.buildCommand || currentProject.build_command || '';
+            const startCmd = currentProject.startCommand || currentProject.start_command || '';
+            
+            if (buildCmd.includes('next build') || startCmd.includes('next start')) {
+              frameworkPreset.value = 'nextjs';
+            } else if (buildCmd.includes('react-scripts') || startCmd.includes('react-scripts')) {
+              frameworkPreset.value = 'react';
+            } else if (startCmd.includes('vue') || buildCmd.includes('vue')) {
+              frameworkPreset.value = 'vue';
+            } else if (startCmd.includes('flask') || buildCmd.includes('flask')) {
+              frameworkPreset.value = 'flask';
+            } else if (startCmd.includes('django') || buildCmd.includes('django')) {
+              frameworkPreset.value = 'django';
+            } else if (startCmd.includes('python') || buildCmd.includes('python')) {
+              frameworkPreset.value = 'python';
+            } else if (startCmd.includes('node') || buildCmd.includes('npm')) {
+              frameworkPreset.value = 'nodejs';
+            } else {
+              frameworkPreset.value = 'auto';
+            }
+          }
+          
+          // Populate root directory (default to ./)
+          if (rootDirectory) {
+            rootDirectory.value = './'; // Default, could be stored in project later
+          }
+          
+          // Populate build/start commands and port
+          if (buildCommand) {
+            buildCommand.value = currentProject.buildCommand || currentProject.build_command || '';
+          }
+          if (startCommand) {
+            startCommand.value = currentProject.startCommand || currentProject.start_command || '';
+          }
+          if (portInput) {
+            portInput.value = currentProject.port || '';
+          }
+          
+          // Auto-detect install command based on framework
+          if (installCommand && !installCommand.value) {
+            const framework = frameworkPreset?.value || 'auto';
+            if (['nextjs', 'react', 'vue', 'nodejs'].includes(framework)) {
+              installCommand.placeholder = 'npm install';
+            } else if (['python', 'flask', 'django'].includes(framework)) {
+              installCommand.placeholder = 'pip install -r requirements.txt';
+            }
+          }
+          
           if (projectType === 'split') {
-            // Split repo: show split layout with frontend/backend inputs and Deploy All button
+            // Split repo: show split layout
             if (singleGroup) singleGroup.style.display = 'none';
-            if (splitGroup) splitGroup.style.display = 'none';
             if (splitLayout) splitLayout.style.display = 'block';
             if (feInput) feInput.value = currentProject.frontend_url || '';
             if (beInput) beInput.value = currentProject.backend_url || '';
             if (gitUrlInput) gitUrlInput.removeAttribute('required');
-            if (submitBtn) submitBtn.style.display = 'none'; // Hide default submit, use Deploy All button
+            if (submitBtn) submitBtn.style.display = 'none';
             
             // Wire up the structured layout buttons
             const deployFrontendBtn = document.getElementById('deploy-frontend-btn');
@@ -1658,15 +1922,21 @@ function showProjectContent(page) {
           };
           if (submitBtn) submitBtn.style.display = 'none';
           } else if (projectType === 'single') {
-            // Single repo: show single input with deploy button (no dropdown)
+            // Single repo: show single input with deploy button
             if (singleGroup) singleGroup.style.display = 'block';
-            if (splitGroup) splitGroup.style.display = 'none';
+            if (gitUrlSection) gitUrlSection.style.display = 'none'; // Hide git URL input for existing projects
             if (splitLayout) splitLayout.style.display = 'none';
-            if (gitUrlInput && currentProject && currentProject.repository_url) {
-              gitUrlInput.value = currentProject.repository_url;
+            // Always populate Git URL in the hidden input for form submission
+            if (gitUrlInput && currentProject) {
+              const projectGitUrl = currentProject.git_url || currentProject.repository_url || '';
+              if (projectGitUrl) {
+                gitUrlInput.value = projectGitUrl;
+                // Remove required attribute since it's hidden for existing projects
+                gitUrlInput.removeAttribute('required');
+              }
             }
             if (submitBtn) { 
-              submitBtn.textContent = '🚀 Deploy'; 
+              submitBtn.textContent = 'Deploy'; 
               submitBtn.style.display = ''; 
             }
           }
@@ -2582,6 +2852,106 @@ function openProjectNameModal() {
   document.addEventListener('keydown', handleEscape);
 }
 
+// Deploy page helper functions
+function toggleDeploySection(sectionId) {
+  const content = document.getElementById('content' + sectionId.charAt(0).toUpperCase() + sectionId.slice(1));
+  const icon = document.getElementById('icon' + sectionId.charAt(0).toUpperCase() + sectionId.slice(1));
+  
+  if (content && icon) {
+    content.classList.toggle('active');
+    icon.classList.toggle('active');
+  }
+}
+
+function navigateToEnvVars() {
+  if (currentProject && currentProject.id) {
+    // Navigate to environment variables page for this project
+    if (typeof router !== 'undefined' && router && router.navigate) {
+      router.navigate('/env-vars');
+    } else if (window.router && window.router.navigate) {
+      window.router.navigate('/env-vars');
+    } else {
+      // Fallback: navigate using window location
+      window.location.hash = '#/env-vars';
+    }
+  } else {
+    showToast('Please create a project first before adding environment variables', 'info');
+  }
+}
+
+// Framework preset change handler
+function setupFrameworkPresetHandler() {
+  const frameworkPreset = document.getElementById('framework-preset');
+  const installCommand = document.getElementById('install-command');
+  const buildCommand = document.getElementById('build-command');
+  const startCommand = document.getElementById('start-command');
+  
+  if (frameworkPreset) {
+    frameworkPreset.addEventListener('change', function(e) {
+      const framework = e.target.value;
+      
+      // Auto-fill install command placeholder based on framework
+      if (installCommand) {
+        if (['nextjs', 'react', 'vue', 'nuxt', 'gatsby', 'angular', 'svelte', 'vite', 'nodejs'].includes(framework)) {
+          installCommand.placeholder = 'npm install, yarn install, or pnpm install';
+        } else if (['python', 'flask', 'django'].includes(framework)) {
+          installCommand.placeholder = 'pip install -r requirements.txt';
+        } else {
+          installCommand.placeholder = 'npm install, yarn install, pnpm install, or pip install -r requirements.txt';
+        }
+      }
+      
+      // Auto-fill build command placeholder
+      if (buildCommand) {
+        const buildDefaults = {
+          'nextjs': 'next build',
+          'react': 'npm run build',
+          'vue': 'npm run build',
+          'nuxt': 'nuxt build',
+          'gatsby': 'gatsby build',
+          'angular': 'ng build',
+          'svelte': 'npm run build',
+          'vite': 'vite build',
+          'nodejs': 'npm run build',
+          'python': '',
+          'flask': '',
+          'django': 'python manage.py collectstatic --noinput',
+          'static': ''
+        };
+        if (buildDefaults[framework]) {
+          buildCommand.placeholder = buildDefaults[framework] || 'Leave empty for auto-detect';
+        }
+      }
+      
+      // Auto-fill start command placeholder
+      if (startCommand) {
+        const startDefaults = {
+          'nextjs': 'npm run start',
+          'react': 'npm start',
+          'vue': 'npm run serve',
+          'nuxt': 'nuxt start',
+          'gatsby': 'gatsby serve',
+          'angular': 'ng serve',
+          'svelte': 'npm run dev',
+          'vite': 'vite preview',
+          'nodejs': 'node server.js',
+          'python': 'python app.py',
+          'flask': 'flask run',
+          'django': 'python manage.py runserver',
+          'static': 'python -m http.server'
+        };
+        if (startDefaults[framework]) {
+          startCommand.placeholder = startDefaults[framework] || 'Leave empty for auto-detect';
+        }
+      }
+    });
+  }
+}
+
+// Make functions available globally for onclick handlers
+window.toggleDeploySection = toggleDeploySection;
+window.navigateToEnvVars = navigateToEnvVars;
+
 function updateProjectConfigValues() {
   if (!currentProject) return;
   
@@ -2641,10 +3011,14 @@ function showProjectDomainConfig() {
         <div class="domain-config">
           <div class="config-option">
             <h3>🌐 Use Custom Domain</h3>
-            <p>Configure a custom domain for this project</p>
+            <p>Configure a custom domain for this project. You can use multiple labels in the prefix (e.g., "portfolio.app" or "my.project"). The platform domain is fixed.</p>
             <div class="form-group">
               <label for="customDomain">Custom Domain</label>
-              <input type="text" id="customDomain" placeholder="project-butler.example.com" />
+              <div class="domain-input-wrapper">
+                <input type="text" id="domainPrefix" class="domain-prefix-input" placeholder="project-slug or my.project" />
+                <span class="domain-separator">.</span>
+                <span class="domain-platform" id="platformDomain">butler.example.com</span>
+              </div>
               <p class="domain-hint" id="domainSuggestion"></p>
             </div>
             <div class="domain-actions">
@@ -2717,7 +3091,8 @@ function renderDomainStatus(statusEl, data) {
 async function loadProjectDomainSettings() {
   const suggestionEl = document.getElementById('domainSuggestion');
   const statusEl = document.getElementById('domainStatus');
-  const domainInput = document.getElementById('customDomain');
+  const domainPrefixInput = document.getElementById('domainPrefix');
+  const platformDomainEl = document.getElementById('platformDomain');
 
   if (!currentProject || !currentProject.id) {
     if (statusEl) {
@@ -2750,16 +3125,45 @@ async function loadProjectDomainSettings() {
     }
 
     const data = await response.json();
+    const platformDomain = data.butler_domain || 'butler.example.com';
 
-    if (domainInput) {
-      domainInput.value = data.custom_domain || data.suggested_domain || '';
-      domainInput.placeholder = data.suggested_domain || `project-${data.butler_domain}`;
+    // Display the platform domain as fixed text
+    if (platformDomainEl) {
+      platformDomainEl.textContent = platformDomain;
+    }
+
+    // Extract the prefix from the custom domain or suggested domain
+    let domainPrefix = '';
+    const fullDomain = data.custom_domain || data.suggested_domain || '';
+    if (fullDomain) {
+      // Remove the platform domain suffix to get just the prefix
+      if (fullDomain.endsWith(platformDomain)) {
+        domainPrefix = fullDomain.slice(0, -(platformDomain.length + 1)); // +1 for the dot
+      } else {
+        // Fallback: try to extract prefix from full domain
+        const parts = fullDomain.split('.');
+        if (parts.length > 0) {
+          domainPrefix = parts[0];
+        }
+      }
+    }
+
+    if (domainPrefixInput) {
+      domainPrefixInput.value = domainPrefix;
+      // Extract suggested prefix
+      const suggestedPrefix = data.suggested_domain && data.suggested_domain.endsWith(platformDomain)
+        ? data.suggested_domain.slice(0, -(platformDomain.length + 1))
+        : '';
+      domainPrefixInput.placeholder = suggestedPrefix || 'project-slug or my.project';
     }
 
     if (suggestionEl) {
-      suggestionEl.textContent = data.suggested_domain
-      ? `Suggested: ${data.suggested_domain} (single label before ${data.butler_domain}). Leave blank to remove. Domains become active after a successful deploy.`
-      : `Format: project-slug-${data.butler_domain}`;
+      const suggestedPrefix = data.suggested_domain && data.suggested_domain.endsWith(platformDomain)
+        ? data.suggested_domain.slice(0, -(platformDomain.length + 1))
+        : '';
+      suggestionEl.textContent = suggestedPrefix
+        ? `Suggested: ${suggestedPrefix} (you can use multiple labels like "my.project" or "portfolio.app"). Leave blank to remove. Domains become active after a successful deploy.`
+        : `Enter a subdomain prefix (can be multiple labels like "my.project" or "portfolio"). The platform domain ${platformDomain} is fixed and cannot be changed.`;
     }
 
     renderDomainStatus(statusEl, data);
@@ -2788,12 +3192,47 @@ async function saveProjectDomain() {
     return;
   }
 
-  const domainInput = document.getElementById('customDomain');
-  const enteredDomain = domainInput ? domainInput.value.trim() : '';
+  const domainPrefixInput = document.getElementById('domainPrefix');
+  const platformDomainEl = document.getElementById('platformDomain');
+  let domainPrefix = domainPrefixInput ? domainPrefixInput.value.trim() : '';
+  const platformDomain = platformDomainEl ? platformDomainEl.textContent.trim() : '';
+
+  // Construct the full domain from prefix + platform domain
+  let enteredDomain = '';
+  if (domainPrefix) {
+    // Validate prefix (allow multiple labels separated by dots)
+    // Remove leading/trailing dots
+    domainPrefix = domainPrefix.trim().replace(/^\.+|\.+$/g, '');
+    
+    if (!domainPrefix) {
+      showToast('Please enter a subdomain prefix.', 'error');
+      return;
+    }
+    
+    // Validate format: letters, numbers, hyphens, and dots allowed
+    if (!/^[a-z0-9.-]+$/i.test(domainPrefix)) {
+      showToast('Subdomain prefix can only contain letters, numbers, hyphens, and dots.', 'error');
+      return;
+    }
+    
+    // Check for consecutive dots
+    if (domainPrefix.includes('..')) {
+      showToast('Subdomain prefix cannot contain consecutive dots.', 'error');
+      return;
+    }
+    
+    // Check for dots at start or end
+    if (domainPrefix.startsWith('.') || domainPrefix.endsWith('.')) {
+      showToast('Subdomain prefix cannot start or end with a dot.', 'error');
+      return;
+    }
+    
+    enteredDomain = `${domainPrefix}.${platformDomain}`;
+  }
 
   if (!enteredDomain) {
     if (!currentProject.custom_domain) {
-      showToast('Enter a domain to save, or keep the suggested value.', 'info');
+      showToast('Enter a subdomain prefix to save, or leave blank to remove the domain.', 'info');
       return;
     }
 
@@ -2825,7 +3264,20 @@ async function saveProjectDomain() {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const message = errorData.detail || 'Failed to save domain';
-      throw new Error(message);
+      const statusCode = response.status;
+      
+      // Handle 409 Conflict (domain already taken)
+      if (statusCode === 409) {
+        showToast(message, 'error');
+        // Show error in domain status area
+        const statusEl = document.getElementById('domainStatus');
+        if (statusEl) {
+          statusEl.innerHTML = `<span class="status-error">${escapeHtml(message)}</span>`;
+        }
+      } else {
+        throw new Error(message);
+      }
+      return;
     }
 
     const data = await response.json();
@@ -2835,6 +3287,11 @@ async function saveProjectDomain() {
   } catch (error) {
     console.error('Failed to save domain:', error);
     showToast(error.message || 'Failed to save domain', 'error');
+    // Show error in domain status area
+    const statusEl = document.getElementById('domainStatus');
+    if (statusEl && error.message) {
+      statusEl.innerHTML = `<span class="status-error">${escapeHtml(error.message)}</span>`;
+    }
   }
 }
 
@@ -3008,6 +3465,71 @@ function formatPorts(portsString) {
   return Array.from(portMappings).sort().join(', ');
 }
 
+// Monorepo detection and folder selection
+async function checkMonorepoStructure(projectId, gitUrl) {
+  const monorepoSection = document.getElementById('monorepo-section');
+  const frontendFolderSelect = document.getElementById('frontend-folder');
+  const backendFolderSelect = document.getElementById('backend-folder');
+  
+  if (!monorepoSection || !frontendFolderSelect || !backendFolderSelect) {
+    return;
+  }
+  
+  try {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    if (!token) return;
+    
+    const url = projectId 
+      ? `/api/detect-monorepo?project_id=${projectId}`
+      : `/api/detect-monorepo?git_url=${encodeURIComponent(gitUrl)}`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      
+      if (data.is_monorepo) {
+        // Show monorepo section
+        monorepoSection.style.display = 'block';
+        
+        // Populate frontend folder select
+        if (data.frontend_folder) {
+          frontendFolderSelect.innerHTML = `<option value="">None (skip frontend)</option>`;
+          const frontendOption = document.createElement('option');
+          frontendOption.value = data.frontend_folder;
+          frontendOption.textContent = data.frontend_folder;
+          frontendOption.selected = true;
+          frontendFolderSelect.appendChild(frontendOption);
+        } else {
+          frontendFolderSelect.innerHTML = `<option value="">None (skip frontend)</option>`;
+        }
+        
+        // Populate backend folder select
+        if (data.backend_folder) {
+          backendFolderSelect.innerHTML = `<option value="">None (skip backend)</option>`;
+          const backendOption = document.createElement('option');
+          backendOption.value = data.backend_folder;
+          backendOption.textContent = data.backend_folder;
+          backendOption.selected = true;
+          backendFolderSelect.appendChild(backendOption);
+        } else {
+          backendFolderSelect.innerHTML = `<option value="">None (skip backend)</option>`;
+        }
+      } else {
+        // Hide monorepo section
+        monorepoSection.style.display = 'none';
+      }
+    }
+  } catch (error) {
+    console.error('Error detecting monorepo structure:', error);
+    monorepoSection.style.display = 'none';
+  }
+}
+
 // Legacy loadDashboard for compatibility
 async function loadDashboard() {
   await loadProjects();
@@ -3058,9 +3580,6 @@ async function handleDeploy(e) {
 
   const form = e.target;
   const deployType = document.getElementById('deploy-type')?.value || 'single';
-  const gitUrl = document.getElementById('git-url')?.value.trim();
-  const frontendUrl = document.getElementById('frontend-url')?.value.trim();
-  const backendUrl = document.getElementById('backend-url')?.value.trim();
   const deployStatus = document.getElementById('deploy-status');
   const deploySuccess = document.getElementById('deploy-success');
 
@@ -3068,20 +3587,50 @@ async function handleDeploy(e) {
   deploySuccess.style.display = 'none';
   deployStatus.textContent = '';
 
-  // Warn if no custom domain is configured
-  const customDomain = currentProject?.custom_domain;
-  const domainStatus = currentProject?.domain_status ? currentProject.domain_status.toLowerCase() : null;
-  const hasActiveDomain = customDomain && domainStatus === 'active';
-
-  if (!customDomain) {
-    showToast('No custom domain configured. Configure one so end-users can reach the deployment.', 'warning');
-    showDomainWarningModal();
-    deployStatus.textContent = 'Domain configuration required before deploy.';
-    deployStatus.style.color = 'var(--error)';
-    return;
+  // Get Git URL - prioritize currentProject for existing projects
+  let gitUrl = '';
+  if (currentProject && currentProject.id) {
+    // Existing project: use stored Git URL from project
+    gitUrl = currentProject.git_url || currentProject.repository_url || '';
+    console.log('Deploying existing project:', {
+      projectId: currentProject.id,
+      projectName: currentProject.name,
+      gitUrl: gitUrl,
+      hasGitUrl: !!gitUrl
+    });
+    
+    // Ensure hidden input has the value for form submission
+    const gitUrlInput = document.getElementById('git-url');
+    if (gitUrlInput && gitUrl) {
+      gitUrlInput.value = gitUrl;
+      console.log('Populated hidden Git URL input with:', gitUrl);
+    }
+    
+    // If still no Git URL, try to get from input field (fallback)
+    if (!gitUrl) {
+      if (gitUrlInput) {
+        gitUrl = gitUrlInput.value.trim();
+        console.log('Got Git URL from input field (fallback):', gitUrl);
+      }
+    }
+  } else {
+    // New project: get from input field
+    const gitUrlInput = document.getElementById('git-url');
+    gitUrl = gitUrlInput ? gitUrlInput.value.trim() : '';
+    console.log('Deploying new project, Git URL from input:', gitUrl);
   }
 
-  if (customDomain && domainStatus !== 'active') {
+  const frontendUrl = document.getElementById('frontend-url')?.value.trim();
+  const backendUrl = document.getElementById('backend-url')?.value.trim();
+
+  // Don't block deployment if no domain is configured - just inform user
+  const customDomain = currentProject?.custom_domain;
+  const domainStatus = currentProject?.domain_status ? currentProject.domain_status.toLowerCase() : null;
+
+  if (!customDomain) {
+    // Show info message but don't block deployment
+    console.log('No custom domain configured - deployment will use internal URL');
+  } else if (customDomain && domainStatus !== 'active') {
     showToast('Domain saved. It will activate after this deployment.', 'info');
   }
 
@@ -3089,16 +3638,24 @@ async function handleDeploy(e) {
   if (deployType === 'split') {
     if (!frontendUrl || !frontendUrl.startsWith('http') || !backendUrl || !backendUrl.startsWith('http')) {
       deployStatus.textContent = 'Please enter valid Frontend and Backend repository URLs';
-    deployStatus.style.color = 'var(--error)';
-    return;
-    }
-  } else {
-    if (!gitUrl || !gitUrl.startsWith('http')) {
-      deployStatus.textContent = 'Please enter a valid Git repository URL';
       deployStatus.style.color = 'var(--error)';
       return;
     }
+  } else {
+    // For single deployment, we must have a Git URL
+    if (!gitUrl || !gitUrl.startsWith('http')) {
+      deployStatus.textContent = `Please enter a valid Git repository URL. Current project: ${currentProject?.name || 'unknown'}, Git URL: ${gitUrl || 'missing'}`;
+      deployStatus.style.color = 'var(--error)';
+      console.error('Git URL validation failed:', {
+        currentProject: currentProject,
+        gitUrl: gitUrl,
+        gitUrlInput: document.getElementById('git-url')?.value
+      });
+      return;
+    }
   }
+  
+  console.log('Git URL validation passed:', gitUrl);
 
   deployStatus.textContent = '🚀 Deploying...';
   deployStatus.style.color = 'var(--primary)';
@@ -3117,6 +3674,31 @@ async function handleDeploy(e) {
     if (typeof currentProject === 'object' && currentProject && currentProject.id) {
       formData.append('project_id', String(currentProject.id));
     }
+    
+    // Add project name if provided
+    const projectName = document.getElementById('project-name')?.value.trim();
+    if (projectName) {
+      formData.append('project_name', projectName);
+    }
+    
+    // Add root directory if provided (defaults to ./)
+    const rootDirectory = document.getElementById('root-directory')?.value.trim() || './';
+    if (rootDirectory) {
+      formData.append('root_directory', rootDirectory);
+    }
+    
+    // Add framework preset
+    const frameworkPreset = document.getElementById('framework-preset')?.value;
+    if (frameworkPreset && frameworkPreset !== 'auto') {
+      formData.append('framework_preset', frameworkPreset);
+    }
+    
+    // Add install command if provided
+    const installCommand = document.getElementById('install-command')?.value.trim();
+    if (installCommand) {
+      formData.append('install_command', installCommand);
+    }
+    
     // Add optional build/start commands and port
     const buildCommand = document.getElementById('build-command')?.value.trim();
     const startCommand = document.getElementById('start-command')?.value.trim();
@@ -3129,6 +3711,20 @@ async function handleDeploy(e) {
     }
     if (port) {
       formData.append('port', port);
+    }
+    
+    // Add monorepo information if detected
+    const monorepoSection = document.getElementById('monorepo-section');
+    const frontendFolder = document.getElementById('frontend-folder')?.value.trim();
+    const backendFolder = document.getElementById('backend-folder')?.value.trim();
+    if (monorepoSection && monorepoSection.style.display !== 'none' && (frontendFolder || backendFolder)) {
+      formData.append('is_monorepo', 'true');
+      if (frontendFolder) {
+        formData.append('frontend_folder', frontendFolder);
+      }
+      if (backendFolder) {
+        formData.append('backend_folder', backendFolder);
+      }
     }
     
     const response = await fetch('/deploy', {
@@ -3165,12 +3761,21 @@ async function handleDeploy(e) {
         }, 2000);
       }
       } else {
-      deployStatus.textContent = `❌ Error: ${result.detail || 'Deployment failed'}`;
-      deployStatus.style.color = 'var(--error)';
+      // Handle VM creation status (423)
+      if (response.status === 423) {
+        deployStatus.textContent = `⏳ ${result.detail || 'Your virtual machine is being created. Please wait a few moments and try again.'}`;
+        deployStatus.style.color = 'var(--warning)';
+        showToast(result.detail || 'Your virtual machine is being created. Please wait a few moments and try again.', 'warning');
+      } else {
+        deployStatus.textContent = `❌ Error: ${result.detail || 'Deployment failed'}`;
+        deployStatus.style.color = 'var(--error)';
+        showToast(result.detail || 'Deployment failed', 'error');
+      }
     }
   } catch (error) {
     deployStatus.textContent = '❌ Network error. Please try again.';
     deployStatus.style.color = 'var(--error)';
+    showToast('Network error. Please try again.', 'error');
   }
 }
 
@@ -3727,7 +4332,12 @@ async function importSplitRepositories(frontendUrl, backendUrl, projectName) {
         searchRepositories();
       }
     } else {
-      showToast(data.detail || 'Failed to import multi-repository', 'error');
+      // Handle VM creation status (423)
+      if (response.status === 423) {
+        showToast(data.detail || 'Your virtual machine is being created. Please wait a few moments and try again.', 'warning');
+      } else {
+        showToast(data.detail || 'Failed to import multi-repository', 'error');
+      }
     }
   } catch (error) {
     console.error('Error importing multi-repositories:', error);
@@ -3776,7 +4386,12 @@ async function importRepository(repoUrl, repoName) {
         loadProjects();
       }
     } else {
-      showToast(data.detail || 'Failed to import repository', 'error');
+      // Handle VM creation status (423)
+      if (response.status === 423) {
+        showToast(data.detail || 'Your virtual machine is being created. Please wait a few moments and try again.', 'warning');
+      } else {
+        showToast(data.detail || 'Failed to import repository', 'error');
+      }
     }
   } catch (error) {
     console.error('Error importing repository:', error);
@@ -4446,6 +5061,169 @@ function setupSettingsListeners() {
       await loadSettings(); // Reload original values
     });
   }
+  
+  // Delete Account button
+  const deleteAccountBtn = document.getElementById('deleteAccountBtn');
+  if (deleteAccountBtn) {
+    deleteAccountBtn.addEventListener('click', async () => {
+      await handleDeleteAccount();
+    });
+  }
+}
+
+async function handleDeleteAccount() {
+  // Show confirmation dialog
+  const confirmed = await showDeleteAccountConfirmation();
+  if (!confirmed) {
+    return;
+  }
+  
+  try {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    if (!token) {
+      showToast('You must be logged in to delete your account', 'error');
+      return;
+    }
+    
+    // Disable button during deletion
+    const deleteAccountBtn = document.getElementById('deleteAccountBtn');
+    if (deleteAccountBtn) {
+      deleteAccountBtn.disabled = true;
+      deleteAccountBtn.textContent = 'Deleting Account...';
+    }
+    
+    const response = await fetch('/api/user/account', {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showToast('Account deleted successfully', 'success');
+      
+      // Clear all local storage
+      localStorage.clear();
+      
+      // Redirect to login page after a short delay
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 2000);
+    } else {
+      showToast(data.detail || data.message || 'Failed to delete account', 'error');
+      
+      // Re-enable button on error
+      if (deleteAccountBtn) {
+        deleteAccountBtn.disabled = false;
+        deleteAccountBtn.textContent = 'Delete Account';
+      }
+    }
+  } catch (error) {
+    console.error('Error deleting account:', error);
+    showToast('Network error. Please try again.', 'error');
+    
+    // Re-enable button on error
+    const deleteAccountBtn = document.getElementById('deleteAccountBtn');
+    if (deleteAccountBtn) {
+      deleteAccountBtn.disabled = false;
+      deleteAccountBtn.textContent = 'Delete Account';
+    }
+  }
+}
+
+function showDeleteAccountConfirmation() {
+  return new Promise((resolve) => {
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    `;
+    
+    // Create modal content
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      background: white;
+      border-radius: 12px;
+      padding: 2rem;
+      max-width: 480px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    `;
+    
+    modal.innerHTML = `
+      <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">
+        Delete Account
+      </h2>
+      <p style="font-size: 0.9375rem; color: var(--text-secondary); margin-bottom: 1.5rem; line-height: 1.6;">
+        Are you sure you want to delete your account? This action cannot be undone.
+      </p>
+      <div style="background: var(--color-error-bg); border: 1px solid var(--color-error); border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem;">
+        <p style="font-size: 0.875rem; color: var(--color-error); margin: 0; line-height: 1.6;">
+          <strong>Warning:</strong> This will permanently delete:
+        </p>
+        <ul style="font-size: 0.875rem; color: var(--color-error); margin: 0.5rem 0 0 1.5rem; padding: 0;">
+          <li>All your projects and deployments</li>
+          <li>All environment variables</li>
+          <li>Your virtual machine</li>
+          <li>All account data</li>
+        </ul>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+        <button id="cancelDeleteBtn" class="btn-secondary" style="cursor: pointer;">
+          Cancel
+        </button>
+        <button id="confirmDeleteBtn" class="btn-danger" style="cursor: pointer;">
+          Delete Account
+        </button>
+      </div>
+    `;
+    
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    
+    // Handle cancel
+    const cancelBtn = modal.querySelector('#cancelDeleteBtn');
+    cancelBtn.addEventListener('click', () => {
+      document.body.removeChild(overlay);
+      resolve(false);
+    });
+    
+    // Handle confirm
+    const confirmBtn = modal.querySelector('#confirmDeleteBtn');
+    confirmBtn.addEventListener('click', () => {
+      document.body.removeChild(overlay);
+      resolve(true);
+    });
+    
+    // Close on overlay click
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        document.body.removeChild(overlay);
+        resolve(false);
+      }
+    });
+    
+    // Close on Escape key
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') {
+        document.body.removeChild(overlay);
+        document.removeEventListener('keydown', handleEscape);
+        resolve(false);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+  });
 }
 
 async function handlePasswordUpdate() {

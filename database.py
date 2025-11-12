@@ -54,6 +54,19 @@ def create_db_and_tables():
                 conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN process_pid INTEGER NULL"))
             if 'project_dir' not in existing_cols:
                 conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN project_dir TEXT NULL"))
+            # Add VM-based deployment fields (OrbStack)
+            if 'vm_name' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN vm_name TEXT NULL"))
+            if 'vm_ip' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN vm_ip TEXT NULL"))
+            if 'host_port' not in existing_cols:
+                conn.execute(sa.text("ALTER TABLE deployment ADD COLUMN host_port INTEGER NULL"))
+            
+            # Add vm_status to user table
+            user_cols = conn.execute(sa.text("PRAGMA table_info('user')")).fetchall()
+            existing_user_cols = {row[1] for row in user_cols}
+            if 'vm_status' not in existing_user_cols:
+                conn.execute(sa.text("ALTER TABLE user ADD COLUMN vm_status TEXT NULL"))
     except Exception:
         # Never block startup on a migration error; logs will capture details elsewhere
         pass

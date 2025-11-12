@@ -1,5 +1,6 @@
 import os
 import secrets
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from passlib.context import CryptContext
@@ -180,4 +181,52 @@ def create_user(username: str, email: str, password: str) -> Optional[User]:
         session.add(user)
         session.commit()
         session.refresh(user)
-        return user 
+        return user
+
+async def create_user_vm(user_id: int) -> bool:
+    """
+    Create an OrbStack VM for a user.
+    This is called asynchronously after user creation.
+    Updates user.vm_status to track creation progress.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        from vm_manager import vm_manager
+        
+        # Update user status to 'creating'
+        with Session(engine) as session:
+            user = session.exec(select(User).where(User.id == user_id)).first()
+            if user:
+                user.vm_status = 'creating'
+                session.add(user)
+                session.commit()
+        
+        logger.info(f"Creating VM for user {user_id}")
+        vm_info = await vm_manager.get_or_create_user_vm(user_id)
+        logger.info(f"VM created successfully for user {user_id}: {vm_info.get('vm_name')}")
+        
+        # Update user status to 'ready'
+        with Session(engine) as session:
+            user = session.exec(select(User).where(User.id == user_id)).first()
+            if user:
+                user.vm_status = 'ready'
+                session.add(user)
+                session.commit()
+        
+        return True
+    except Exception as e:
+        # Log error and update status to 'failed'
+        logger.error(f"Failed to create VM for user {user_id}: {str(e)}", exc_info=True)
+        
+        # Update user status to 'failed'
+        try:
+            with Session(engine) as session:
+                user = session.exec(select(User).where(User.id == user_id)).first()
+                if user:
+                    user.vm_status = 'failed'
+                    session.add(user)
+                    session.commit()
+        except Exception as db_error:
+            logger.error(f"Failed to update VM status in database for user {user_id}: {str(db_error)}")
+        
+        return False 

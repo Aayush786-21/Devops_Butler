@@ -125,7 +125,8 @@ def _default_project_domain(deployment: Deployment) -> str:
     base_domain = _get_butler_domain()
     fallback = f"project-{deployment.id}" if deployment.id else "project"
     slug = _slugify_project_name(deployment.app_name, fallback)
-    return f"{slug}-{base_domain}"
+    # Format: project-name.butler.aayush786.xyz (with dot, not hyphen)
+    return f"{slug}.{base_domain}"
 
 
 def _derive_service_url(deployed_url: str) -> str:
@@ -371,6 +372,24 @@ async def register(user_data: UserRegister):
                 status_code=400,
                 detail="Username or email already exists"
             )
+        
+        # Create VM for the new user asynchronously (don't block registration)
+        # This runs in the background so user registration completes quickly
+        try:
+            from auth import create_user_vm
+            # Create VM in background task - this runs after response is sent
+            # Since we're in an async function, we can use create_task directly
+            asyncio.create_task(create_user_vm(user.id))
+            global_logger.log_user_action(
+                user_id=str(user.id),
+                action="vm_creation_started",
+                details={"username": user.username, "vm_name": f"butler-user-{user.id}"}
+            )
+        except Exception as vm_error:
+            # Log VM creation error but don't fail user registration
+            global_logger.log_error(f"Failed to start VM creation for user {user.id}: {vm_error}")
+            # User registration still succeeds even if VM creation fails
+            # VM will be created on first deployment attempt
         
         global_logger.log_user_action(
             user_id=str(user.id),
@@ -761,12 +780,62 @@ async def deploy(
     backend_url: Optional[str] = Form(None),
     project_id: Optional[int] = Form(None),
     component_type: Optional[str] = Form(None),
+    project_name: Optional[str] = Form(None),
+    root_directory: Optional[str] = Form("./"),
+    framework_preset: Optional[str] = Form(None),
+    install_command: Optional[str] = Form(None),
     build_command: Optional[str] = Form(None),
     start_command: Optional[str] = Form(None),
     port: Optional[int] = Form(None),
+    frontend_folder: Optional[str] = Form(None),
+    backend_folder: Optional[str] = Form(None),
+    is_monorepo: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user)
 ):
     """Deploy a Git repository (single or split frontend/backend)"""
+    # Check VM status first
+    with Session(engine) as session:
+        user = session.exec(select(User).where(User.id == current_user.id)).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        vm_status = user.vm_status or 'creating'
+        
+        # If VM is being created, return error message
+        if vm_status == 'creating':
+            raise HTTPException(
+                status_code=423,
+                detail="Your virtual machine is being created. Please wait a few moments and try again."
+            )
+        
+        # If VM creation failed, try to create it again
+        if vm_status == 'failed':
+            try:
+                from auth import create_user_vm
+                import asyncio
+                asyncio.create_task(create_user_vm(user.id))
+                raise HTTPException(
+                    status_code=423,
+                    detail="Your virtual machine creation failed. We're retrying. Please wait a few moments and try again."
+                )
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+    
+    # If git_url is not provided but project_id is, get git_url from database
+    if not git_url and project_id is not None:
+        with Session(engine) as session:
+            existing = session.exec(
+                select(Deployment).where(
+                    Deployment.id == project_id,
+                    Deployment.user_id == current_user.id
+                )
+            ).first()
+            if existing and existing.git_url:
+                git_url = existing.git_url
+                await manager.broadcast(f"📝 Using stored Git URL from project: {git_url}")
+    
     # Determine which URL(s) to use
     if deploy_type == "split":
         if not frontend_url or not backend_url:
@@ -776,7 +845,7 @@ async def deploy(
         git_url = frontend_url  # Use frontend URL as primary for logging
     else:
         if not git_url:
-            raise HTTPException(status_code=422, detail="git_url is required for single repository deployment.")
+            raise HTTPException(status_code=422, detail="git_url is required for single repository deployment. Please provide a Git URL or select an existing project.")
         if not validate_git_url(git_url):
             raise HTTPException(status_code=422, detail="Invalid or unsupported repository URL.")
     # Environment sanity checks (Docker is optional now - we use direct process execution)
@@ -833,11 +902,53 @@ async def deploy(
                 env_vars_dict = {var.key: var.value for var in env_vars}
             
             if deploy_type == "split":
-                # Handle split frontend/backend deployment
+                # Handle split frontend/backend deployment (separate repos)
                 await manager.broadcast("🚀 Deploying split repositories (Frontend + Backend) using process-based deployment")
-                # TODO: Implement split deployment with process-based approach
-                # For now, deploy backend first, then frontend
-                raise HTTPException(status_code=501, detail="Split deployment with process-based approach is not yet implemented. Use single deployment for now.")
+                
+                # Deploy backend first
+                await manager.broadcast("🔧 Deploying backend repository...")
+                backend_result = await run_process_deployment(
+                    git_url=backend_url,
+                    user_id=current_user.id,
+                    build_command=build_command,
+                    start_command=start_command,
+                    port=port or 8000,
+                    env_vars=env_vars_dict,
+                    existing_deployment_id=existing_id,
+                    parent_project_id=parent_id,
+                    component_type="backend",
+                    project_name=project_name
+                )
+                
+                if not backend_result:
+                    raise HTTPException(status_code=500, detail="Backend deployment failed")
+                
+                backend_url_deployed = backend_result[1] if isinstance(backend_result, tuple) else None
+                
+                # Deploy frontend with backend URL as environment variable
+                await manager.broadcast("🎨 Deploying frontend repository...")
+                frontend_env_vars = env_vars_dict.copy()
+                if backend_url_deployed:
+                    # Add backend URL to frontend environment variables
+                    frontend_env_vars['REACT_APP_API_URL'] = backend_url_deployed
+                    frontend_env_vars['VITE_API_URL'] = backend_url_deployed
+                    frontend_env_vars['NEXT_PUBLIC_API_URL'] = backend_url_deployed
+                    frontend_env_vars['API_URL'] = backend_url_deployed
+                    frontend_env_vars['BACKEND_URL'] = backend_url_deployed
+                    await manager.broadcast(f"🔗 Connected frontend to backend at: {backend_url_deployed}")
+                
+                result = await run_process_deployment(
+                    git_url=frontend_url,
+                    user_id=current_user.id,
+                    build_command=build_command,
+                    start_command=start_command,
+                    port=port or 3000,
+                    env_vars=frontend_env_vars,
+                    existing_deployment_id=existing_id,
+                    parent_project_id=parent_id,
+                    component_type="frontend",
+                    project_name=project_name
+                )
             else:
                 # Handle single deployment - either standalone or as a component of split repo
                 existing_id: Optional[int] = None
@@ -862,18 +973,95 @@ async def deploy(
                             # Regular redeployment - reuse existing deployment record
                             existing_id = existing.id
                 
-                # Use process-based deployment
-                result = await run_process_deployment(
-                    git_url=git_url,
-                    user_id=current_user.id,
-                    build_command=build_command,
-                    start_command=start_command,
-                    port=port,
-                    env_vars=env_vars_dict,
-                    existing_deployment_id=existing_id,
-                    parent_project_id=parent_id,
-                    component_type=component_type
-                )
+                # Check if this is a monorepo deployment
+                # Convert is_monorepo from string to boolean if needed
+                is_monorepo_bool = False
+                if is_monorepo:
+                    if isinstance(is_monorepo, str):
+                        is_monorepo_bool = is_monorepo.lower() in ('true', '1', 'yes')
+                    else:
+                        is_monorepo_bool = bool(is_monorepo)
+                
+                if is_monorepo_bool and (frontend_folder or backend_folder):
+                    # Deploy monorepo (frontend + backend in same repo)
+                    await manager.broadcast("📦 Detected monorepo structure, deploying frontend and backend separately...")
+                    
+                    # Create parent project if it doesn't exist
+                    if not existing_id and not parent_id:
+                        with Session(engine) as session:
+                            parent_deployment = Deployment(
+                                container_name=f"{extract_repo_name(git_url)}-parent",
+                                git_url=git_url,
+                                status="starting",
+                                user_id=current_user.id
+                            )
+                            session.add(parent_deployment)
+                            session.commit()
+                            session.refresh(parent_deployment)
+                            parent_id = parent_deployment.id
+                    
+                    # Deploy backend first if specified
+                    backend_result = None
+                    if backend_folder:
+                        await manager.broadcast(f"🔧 Deploying backend from folder: {backend_folder}")
+                        backend_result = await run_process_deployment(
+                            git_url=git_url,
+                            user_id=current_user.id,
+                            build_command=build_command,
+                            start_command=start_command,
+                            port=port or 8000,
+                            env_vars=env_vars_dict,
+                            existing_deployment_id=None,
+                            parent_project_id=parent_id,
+                            component_type="backend",
+                            root_directory=backend_folder,
+                            project_name=project_name
+                        )
+                    
+                    # Deploy frontend with backend URL as environment variable
+                    if frontend_folder:
+                        await manager.broadcast(f"🎨 Deploying frontend from folder: {frontend_folder}")
+                        # Add backend URL to frontend env vars if backend was deployed
+                        frontend_env_vars = env_vars_dict.copy()
+                        if backend_result and isinstance(backend_result, tuple):
+                            backend_url = backend_result[1]  # deployed_url
+                            frontend_env_vars['REACT_APP_API_URL'] = backend_url
+                            frontend_env_vars['VITE_API_URL'] = backend_url
+                            frontend_env_vars['NEXT_PUBLIC_API_URL'] = backend_url
+                            frontend_env_vars['API_URL'] = backend_url
+                            frontend_env_vars['BACKEND_URL'] = backend_url
+                            await manager.broadcast(f"🔗 Connected frontend to backend at: {backend_url}")
+                        
+                        result = await run_process_deployment(
+                            git_url=git_url,
+                            user_id=current_user.id,
+                            build_command=build_command,
+                            start_command=start_command,
+                            port=port or 3000,
+                            env_vars=frontend_env_vars,
+                            existing_deployment_id=None,
+                            parent_project_id=parent_id,
+                            component_type="frontend",
+                            root_directory=frontend_folder,
+                            project_name=project_name
+                        )
+                    else:
+                        result = backend_result
+                else:
+                    # Regular single deployment
+                    result = await run_process_deployment(
+                        git_url=git_url,
+                        user_id=current_user.id,
+                        build_command=build_command,
+                        start_command=start_command,
+                        port=port,
+                        env_vars=env_vars_dict,
+                        existing_deployment_id=existing_id,
+                        parent_project_id=parent_id,
+                        component_type=component_type,
+                        root_directory=root_directory,
+                        project_name=project_name
+                    )
             
             # Check if deployment was successful
             if result is not None:
@@ -967,6 +1155,56 @@ async def deploy(
         raise HTTPException(status_code=500, detail="Deployment failed. Check logs for details.")
 
 
+@app.get("/api/vm-status")
+async def get_vm_status(
+    current_user: User = Depends(get_current_user)
+):
+    """Get VM status for current user"""
+    try:
+        with Session(engine) as session:
+            user = session.exec(select(User).where(User.id == current_user.id)).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            vm_status = user.vm_status
+            
+            # If status is None, try to create VM
+            if vm_status is None:
+                try:
+                    from auth import create_user_vm
+                    import asyncio
+                    asyncio.create_task(create_user_vm(user.id))
+                    vm_status = 'creating'
+                except Exception:
+                    vm_status = 'creating'
+            # If status is 'failed', check if VM actually exists (might have been created but status wasn't updated)
+            elif vm_status == 'failed':
+                try:
+                    from vm_manager import vm_manager
+                    vm_name = f"butler-user-{user.id}"
+                    vm_exists = await vm_manager._check_vm_exists(vm_name)
+                    if vm_exists:
+                        # VM exists, update status to ready
+                        user.vm_status = 'ready'
+                        session.add(user)
+                        session.commit()
+                        vm_status = 'ready'
+                except Exception as e:
+                    # If check fails, keep status as failed but log the error
+                    global_logger.log_error(f"Failed to verify VM existence: {str(e)}")
+            
+            return {
+                "vm_status": vm_status or 'creating',
+                "message": {
+                    "creating": "Your virtual machine is being created. Please wait...",
+                    "ready": "Virtual machine is ready!",
+                    "failed": "Virtual machine creation failed. Please check that OrbStack is installed and running, then try again."
+                }.get(vm_status or 'creating', "Unknown status")
+            }
+    except Exception as e:
+        global_logger.log_error(f"Failed to get VM status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get VM status")
+
 @app.post("/api/import")
 async def import_repository(
     git_url: str = Form(...),
@@ -975,6 +1213,36 @@ async def import_repository(
 ):
     """Import a repository without deploying it - just create a project record"""
     try:
+        # Check VM status first
+        with Session(engine) as session:
+            user = session.exec(select(User).where(User.id == current_user.id)).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            vm_status = user.vm_status or 'creating'
+            
+            # If VM is being created, return error message
+            if vm_status == 'creating':
+                raise HTTPException(
+                    status_code=423,
+                    detail="Your virtual machine is being created. Please wait a few moments and try again."
+                )
+            
+            # If VM creation failed, try to create it again
+            if vm_status == 'failed':
+                try:
+                    from auth import create_user_vm
+                    import asyncio
+                    asyncio.create_task(create_user_vm(user.id))
+                    raise HTTPException(
+                        status_code=423,
+                        detail="Your virtual machine creation failed. We're retrying. Please wait a few moments and try again."
+                    )
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass
+        
         # Validate git URL
         if not validate_git_url(git_url):
             raise HTTPException(status_code=422, detail="Invalid or unsupported repository URL.")
@@ -1015,7 +1283,9 @@ async def import_repository(
                 "app_name": app_name,
                 "git_url": git_url
             }
-            
+    except HTTPException:
+        # Re-raise HTTPException (like 423 for VM status) without logging as error
+        raise
     except Exception as e:
         global_logger.log_error(f"Import failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to import repository: {str(e)}")
@@ -1031,6 +1301,36 @@ async def import_split_repository(
 ):
     """Import two repositories as a split project without deploying them."""
     try:
+        # Check VM status first
+        with Session(engine) as session:
+            user = session.exec(select(User).where(User.id == current_user.id)).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            vm_status = user.vm_status or 'creating'
+            
+            # If VM is being created, return error message
+            if vm_status == 'creating':
+                raise HTTPException(
+                    status_code=423,
+                    detail="Your virtual machine is being created. Please wait a few moments and try again."
+                )
+            
+            # If VM creation failed, try to create it again
+            if vm_status == 'failed':
+                try:
+                    from auth import create_user_vm
+                    import asyncio
+                    asyncio.create_task(create_user_vm(user.id))
+                    raise HTTPException(
+                        status_code=423,
+                        detail="Your virtual machine creation failed. We're retrying. Please wait a few moments and try again."
+                    )
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass
+        
         # Basic validation
         if not validate_git_url(frontend_url) or not validate_git_url(backend_url):
             raise HTTPException(status_code=422, detail="Invalid repository URL(s).")
@@ -1074,8 +1374,8 @@ async def import_split_repository(
                 "frontend_url": frontend_url,
                 "backend_url": backend_url
             }
-
     except HTTPException:
+        # Re-raise HTTPException (like 423 for VM status) without logging as error
         raise
     except Exception as e:
         global_logger.log_error(f"Split import failed: {str(e)}")
@@ -1127,6 +1427,68 @@ async def update_project_name(
     except Exception as e:
         global_logger.log_error(f"Failed to update project name: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update project name: {str(e)}")
+
+@app.get("/api/detect-monorepo")
+async def detect_monorepo(
+    git_url: str = None,
+    project_id: Optional[int] = None,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Detect if a repository has monorepo structure (frontend + backend folders)"""
+    from dockerfile_parser import detect_monorepo_structure
+    import tempfile
+    import shutil
+    
+    # Get git_url from project if project_id provided
+    if project_id and not git_url:
+        deployment = session.exec(
+            select(Deployment).where(
+                Deployment.id == project_id,
+                Deployment.user_id == current_user.id
+            )
+        ).first()
+        if deployment:
+            git_url = deployment.git_url
+    
+    if not git_url:
+        raise HTTPException(status_code=400, detail="git_url or project_id required")
+    
+    # Clone repo temporarily to detect structure
+    temp_dir = tempfile.mkdtemp(prefix="butler-monorepo-detect-")
+    try:
+        clone_result = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "clone", "--depth", "1", git_url, temp_dir],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        )
+        
+        if clone_result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Failed to clone repository: {clone_result.stderr}")
+        
+        # Detect monorepo structure
+        monorepo_info = detect_monorepo_structure(temp_dir)
+        
+        if monorepo_info:
+            return {
+                "is_monorepo": True,
+                "frontend_folder": monorepo_info.get('frontend_dir'),
+                "backend_folder": monorepo_info.get('backend_dir')
+            }
+        else:
+            return {
+                "is_monorepo": False,
+                "frontend_folder": None,
+                "backend_folder": None
+            }
+    finally:
+        # Cleanup
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 @app.get("/deployments")
 def list_deployments(
@@ -1315,29 +1677,52 @@ def configure_project_domain(
     if desired == base_domain:
         raise HTTPException(status_code=400, detail="Please choose a subdomain instead of the platform root domain")
 
-    # Prevent multi-label prefixes (e.g., project.foo.base)
-    if desired.count('.') > base_domain.count('.'):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Only a single label is allowed before the platform domain. "
-                f"Use a format like project-{base_domain}."
-            )
-        )
+    # Validate that the domain has at least one label before the platform domain
+    # Extract the prefix (everything before the platform domain)
+    if desired.endswith('.' + base_domain):
+        prefix = desired[:-len(base_domain)-1]  # Remove '.' + base_domain
+    elif desired.endswith(base_domain):
+        prefix = desired[:-len(base_domain)]  # Remove base_domain
+        if prefix and prefix.endswith('.'):
+            prefix = prefix[:-1]  # Remove trailing dot if present
+    else:
+        prefix = ''
+    
+    if not prefix or prefix == '':
+        raise HTTPException(status_code=400, detail="Domain must have at least one subdomain label before the platform domain")
+    
+    # Validate prefix format (no consecutive dots, no leading/trailing dots)
+    if '..' in prefix:
+        raise HTTPException(status_code=400, detail="Invalid domain prefix format. Cannot have consecutive dots.")
+    
+    if prefix.startswith('.') or prefix.endswith('.'):
+        raise HTTPException(status_code=400, detail="Invalid domain prefix format. Cannot have leading or trailing dots.")
 
-    # Ensure domain is not already used by another deployment
+    # Ensure domain is not already used by another deployment (check across all users)
     existing_domain = session.exec(
         select(Deployment).where(
             Deployment.custom_domain.is_not(None),
-            func.lower(Deployment.custom_domain) == desired
+            func.lower(Deployment.custom_domain) == desired,
+            Deployment.id != deployment.id  # Exclude current deployment
         )
     ).first()
 
-    if existing_domain and existing_domain.id != deployment.id:
+    if existing_domain:
+        # Check if it's used by another user
         if existing_domain.user_id != current_user.id:
-            raise HTTPException(status_code=409, detail="This domain is already in use by another account")
+            # Get the user who owns this domain
+            domain_owner = session.get(User, existing_domain.user_id)
+            owner_name = domain_owner.username if domain_owner else "another user"
+            raise HTTPException(
+                status_code=409, 
+                detail=f"This domain is already in use by {owner_name}. Please choose a different domain."
+            )
         else:
-            raise HTTPException(status_code=409, detail="This domain is already linked to another project. Remove it there first.")
+            # Same user but different project
+            raise HTTPException(
+                status_code=409, 
+                detail=f"This domain is already linked to project '{existing_domain.app_name or existing_domain.container_name}'. Remove it there first or choose a different domain."
+            )
 
     # Determine if we can sync with Cloudflare now or after deployment
     service_url: Optional[str] = None
@@ -1688,6 +2073,184 @@ async def delete_project(
     except Exception as e:
         global_logger.log_error(f"Error deleting project: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to delete project")
+
+
+@app.delete("/api/user/account")
+async def delete_user_account(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete user account and all associated data:
+    - All deployments (stop processes, delete directories)
+    - All environment variables
+    - VM
+    - User account
+    """
+    try:
+        from vm_manager import vm_manager
+        
+        with Session(engine) as session:
+            # Get all deployments for the user
+            deployments = session.exec(
+                select(Deployment).where(Deployment.user_id == current_user.id)
+            ).all()
+            
+            # Expected VM name for this user
+            expected_vm_name = f"butler-user-{current_user.id}"
+            vm_name = None
+            vm_exists = False
+            
+            # Check if VM exists (even if no deployments reference it)
+            try:
+                vm_exists = await vm_manager._check_vm_exists(expected_vm_name)
+                if vm_exists:
+                    vm_name = expected_vm_name
+            except Exception as e:
+                global_logger.log_error(f"Error checking VM existence: {e}")
+            
+            # Process each deployment
+            for deployment in deployments:
+                try:
+                    # Use deployment's VM name if set, otherwise use expected VM name
+                    deployment_vm_name = deployment.vm_name or expected_vm_name
+                    
+                    # Stop process if running (inside VM)
+                    if deployment.process_pid:
+                        try:
+                            # Stop the process inside the VM using kill
+                            await vm_manager.exec_in_vm(
+                                deployment_vm_name,
+                                f"kill -9 {deployment.process_pid} 2>/dev/null || true",
+                                cwd=deployment.project_dir if deployment.project_dir else None
+                            )
+                        except Exception as e:
+                            global_logger.log_error(f"Error stopping process {deployment.process_pid} in VM: {e}")
+                    
+                    # Remove Cloudflare DNS records if domain exists
+                    if deployment.custom_domain:
+                        try:
+                            await remove_project_hostname(deployment.custom_domain)
+                        except Exception as e:
+                            global_logger.log_error(f"Error removing Cloudflare hostname {deployment.custom_domain}: {e}")
+                    
+                    # Delete project directory inside VM if it exists
+                    if deployment.project_dir:
+                        try:
+                            # Remove project directory inside VM
+                            await vm_manager.exec_in_vm(
+                                deployment_vm_name,
+                                f"rm -rf {deployment.project_dir} 2>/dev/null || true"
+                            )
+                        except Exception as e:
+                            global_logger.log_error(f"Error removing project directory {deployment.project_dir} from VM: {e}")
+                    
+                    # Also try to remove from host if it exists (legacy deployments)
+                    if deployment.project_dir and os.path.exists(deployment.project_dir):
+                        try:
+                            shutil.rmtree(deployment.project_dir, ignore_errors=True)
+                        except Exception as e:
+                            global_logger.log_error(f"Error removing project directory {deployment.project_dir} from host: {e}")
+                    
+                    # Delete related environment variables
+                    env_vars = session.exec(
+                        select(EnvironmentVariable).where(
+                            EnvironmentVariable.user_id == current_user.id,
+                            EnvironmentVariable.project_id == deployment.id
+                        )
+                    ).all()
+                    for ev in env_vars:
+                        session.delete(ev)
+                    
+                    # Delete child deployments if this is a parent project
+                    child_deployments = session.exec(
+                        select(Deployment).where(
+                            Deployment.parent_project_id == deployment.id,
+                            Deployment.user_id == current_user.id
+                        )
+                    ).all()
+                    
+                    for child in child_deployments:
+                        # Use child's VM name if set, otherwise use expected VM name
+                        child_vm_name = child.vm_name or expected_vm_name
+                        
+                        # Stop child process
+                        if child.process_pid:
+                            try:
+                                await vm_manager.exec_in_vm(
+                                    child_vm_name,
+                                    f"kill -9 {child.process_pid} 2>/dev/null || true",
+                                    cwd=child.project_dir if child.project_dir else None
+                                )
+                            except Exception:
+                                pass
+                        
+                        # Remove child project directory
+                        if child.project_dir:
+                            try:
+                                await vm_manager.exec_in_vm(
+                                    child_vm_name,
+                                    f"rm -rf {child.project_dir} 2>/dev/null || true"
+                                )
+                            except Exception:
+                                pass
+                        
+                        # Delete child's environment variables
+                        child_env_vars = session.exec(
+                            select(EnvironmentVariable).where(
+                                EnvironmentVariable.user_id == current_user.id,
+                                EnvironmentVariable.project_id == child.id
+                            )
+                        ).all()
+                        for ev in child_env_vars:
+                            session.delete(ev)
+                        
+                        # Delete child deployment record
+                        session.delete(child)
+                    
+                    # Delete deployment record
+                    session.delete(deployment)
+                        
+                except Exception as e:
+                    global_logger.log_error(f"Error processing deployment {deployment.id} for deletion: {e}")
+                    # Continue with other deployments even if one fails
+            
+            # Delete all remaining environment variables (safety net)
+            remaining_env_vars = session.exec(
+                select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
+            ).all()
+            for ev in remaining_env_vars:
+                session.delete(ev)
+            
+            # Delete VM if it exists
+            if vm_exists and vm_name:
+                try:
+                    vm_deleted = await vm_manager.delete_vm(vm_name, current_user.id)
+                    if vm_deleted:
+                        global_logger.log_user_action(
+                            user_id=str(current_user.id),
+                            action="vm_deleted",
+                            details={"vm_name": vm_name}
+                        )
+                except Exception as e:
+                    global_logger.log_error(f"Error deleting VM {vm_name}: {e}")
+                    # Continue with user deletion even if VM deletion fails
+            
+            # Delete user account
+            session.delete(current_user)
+            session.commit()
+            
+            global_logger.log_user_action(
+                user_id=str(current_user.id),
+                action="account_deleted",
+                details={"username": current_user.username, "email": current_user.email}
+            )
+            
+            return {"message": "Account deleted successfully"}
+            
+    except Exception as e:
+        global_logger.log_error(f"Error deleting user account: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to delete account")
+
 
 # WebSocket endpoint for real-time updates
 @app.websocket("/ws/{client_id}")

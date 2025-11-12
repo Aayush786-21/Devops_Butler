@@ -3,16 +3,39 @@
 
 ## Recent Updates (Latest Session)
 
+### MAJOR ARCHITECTURE CHANGE - VM-Based Deployment with OrbStack
+- **New Deployment Model**: Each user gets an isolated OrbStack VM for deployments
+- **Rationale**: Prevents excessive file creation on Mac host, provides isolation between users, cleaner file system
+- **VM Management**: `vm_manager.py` - Creates and manages OrbStack VMs per user
+- **VM Creation**: Automatically created when user registers (asynchronous, non-blocking)
+- **VM Setup**: VMs are Ubuntu-based and automatically configured with dependencies (git, nodejs, python3, npm, etc.)
+- **Deployment Flow**: 
+  1. User registers → VM created automatically (`butler-user-{user_id}`)
+  2. User imports repo → Repo cloned inside VM (`/projects/{project_id}`)
+  3. Build command executed inside VM
+  4. Start command executed inside VM (background process with nohup)
+  5. Domain configured: `project-name.butler.aayush786.xyz` → `localhost:{port}` (via Cloudflare tunnel)
+- **Database Changes**: Added VM fields to `Deployment` model:
+  - `vm_name` (TEXT) - OrbStack VM name (e.g., "butler-user-1")
+  - `vm_ip` (TEXT) - VM IP address
+  - `host_port` (INTEGER) - Host port (forwarded from VM)
+- **VM Lifecycle**: VMs are created on user registration, persist across deployments, and can be deleted when user is deleted
+- **Domain Format**: `project-name.butler.aayush786.xyz` (with dot, not hyphen)
+- **Cloudflare Integration**: Domains automatically configured in Cloudflare tunnel after deployment
+- **Location**: `vm_manager.py`, `auth.py` (user registration), `orchestrator.py` (registration endpoint), `process_deployment.py` (VM-based deployment), `login.py` (Deployment model), `database.py` (migrations)
+
 ### MAJOR ARCHITECTURE CHANGE - Process-Based Deployment (Like Vercel/Netlify)
 - **New Deployment Model**: Replaced Docker containerization with direct process execution
 - **Rationale**: Simpler UX, faster deployments, more flexible (users specify commands), feels like Vercel/Netlify
+- **Note**: This is now combined with VM-based deployment - processes run inside user VMs, not on host Mac
 - **Removed Files**:
   - `docker_build.py` - Docker image building (removed)
   - `docker_run.py` - Docker container management (removed)
   - `dockerfile_templates/` - Dockerfile templates directory (removed)
 - **New Files**:
-  - `process_manager.py` - Manages processes (start, stop, restart, logs, health checks)
-  - `process_deployment.py` - Process-based deployment handler (replaces Docker deployment)
+  - `vm_manager.py` - Manages OrbStack VMs for user isolation (creates, starts, stops, executes commands in VMs)
+  - `process_manager.py` - Manages processes (start, stop, restart, logs, health checks) - NOW RUNS INSIDE VMs
+  - `process_deployment.py` - Process-based deployment handler (replaces Docker deployment) - NOW DEPLOYS TO VMs
 - **Database Changes**: Added fields to `Deployment` model:
   - `build_command` (TEXT) - Build command (e.g., "npm install && npm run build")
   - `start_command` (TEXT) - Start command (e.g., "npm run start")
@@ -120,9 +143,12 @@
   - **Auto-refresh**: Refreshes after successful deployment for multi-repos
   - **Key Fix**: Function checks `deployPage.style.display !== 'none'` before showing components section
   - **Configuration Page**: Explicitly hides components section (line ~1581-1584)
-- **Settings Management**: `frontend/src/js/app.js` - `loadSettings()`, `setupSettingsListeners()`, `handleProfileUpdate()`, `handlePasswordUpdate()`
+- **Settings Management**: `frontend/src/js/app.js` - `loadSettings()`, `setupSettingsListeners()`, `handleProfileUpdate()`, `handlePasswordUpdate()`, `handleDeleteAccount()`, `showDeleteAccountConfirmation()`
   - **Password Modal**: Change password with real-time strength indicator (red/orange/green)
   - **Avatar Upload/Remove**: Profile picture management in `uploads/avatars/`
+  - **Delete Account**: Delete account button with confirmation modal (shows warning about permanent deletion)
+  - **Delete Account Modal**: Confirmation dialog with warning about what will be deleted (projects, deployments, environment variables, VM, account data)
+  - **Account Deletion Flow**: Shows confirmation modal → Calls `DELETE /api/user/account` → Clears localStorage → Redirects to login page
   - **Toast Notifications**: Success/error/info messages for actions
 - **Environment Variables Management**: `frontend/src/js/app.js` - `loadEnvVars()`, `saveEnvVars()`, `setupEnvVarsListeners()`
   - **No Project Selector**: Removed dropdown - uses `currentProject.id` exclusively
@@ -171,7 +197,13 @@
 - **Main FastAPI App**: `orchestrator.py` - Entry point, routes, WebSocket handlers
 - **Database Models**: `login.py` - User, Deployment, EnvironmentVariable models
 - **Database Setup**: `database.py` - Database engine, migrations, session management
-- **Deployment Pipeline**: `simple_pipeline.py` - Core deployment logic
+- **VM Management**: `vm_manager.py` - OrbStack VM lifecycle management (create, start, stop, delete, exec commands)
+- **Deployment Pipeline**: `simple_pipeline.py` - Core deployment logic (legacy, for reference)
+- **Process Deployment**: `process_deployment.py` - VM-based process deployment (clones to VM, builds/runs inside VM)
+- **VM Management**: `vm_manager.py` - OrbStack VM lifecycle management (create, start, stop, delete, exec commands)
+- **Process Management**: `process_manager.py` - Process lifecycle management (legacy, processes now run directly in VMs)
+- **Authentication**: `auth.py` - User authentication, registration, and VM creation on user registration
+- **Cloudflare Manager**: `cloudflare_manager.py` - Cloudflare tunnel and DNS management for domain routing
 
 ### API Endpoints (orchestrator.py)
 - **Health Check**: `GET /health` - Line ~252
@@ -198,16 +230,26 @@
   - **Response**: Returns `{"access_token": "...", "token_type": "bearer", "username": "..."}`
   - **Token Expiry**: 30 minutes (line 299)
   - **Auth**: No authentication required (public endpoint)
-- **Authentication - Register**: `POST /api/auth/register` - Line ~316
+- **Authentication - Register**: `POST /api/auth/register` - Line ~358
   - **Request Format**: JSON body with Pydantic model `UserRegister` (username, email, password)
   - **Request Body**: `{"username": "string", "email": "string", "password": "string"}`
   - **Response**: Returns `{"message": "User created successfully"}`
   - **Auth**: No authentication required (public endpoint)
+  - **VM Creation**: Automatically creates OrbStack VM for new user (asynchronous, non-blocking)
+  - **VM Name**: Format `butler-user-{user_id}` (e.g., "butler-user-1")
+  - **VM Setup**: Installs dependencies (git, nodejs, python3, etc.) in VM after creation
+  - **Error Handling**: User registration succeeds even if VM creation fails (VM will be created on first deployment)
 - **User Profile**: `GET /api/user/profile` - Line ~462 (returns user data including avatar_url)
 - **Update Profile**: `PUT /api/user/profile` - Line ~473 (handles avatar upload, password change, profile updates)
   - **Avatar Storage**: Saves to `uploads/avatars/` (NOT `static/avatars/` to prevent deletion on build)
   - **Avatar URL**: Returns `/avatars/{user_id}_{random}.{ext}` format
   - **Avatar Serving**: FastAPI mounts `/avatars` from `uploads/avatars/` directory
+- **Delete Account**: `DELETE /api/user/account` - Line ~2078 (deletes user account and all associated data)
+  - **Deletion Process**: Stops all processes in user's deployments (inside VM), removes Cloudflare DNS records, deletes project directories, deletes all environment variables, deletes all deployments (including child deployments), deletes the user's OrbStack VM, and finally deletes the user account
+  - **VM Deletion**: Checks if VM exists before deletion (even if no deployments reference it), stops VM, then deletes it
+  - **Error Handling**: Continues with deletion even if individual steps fail (logs errors but doesn't stop)
+  - **Response**: Returns `{"message": "Account deleted successfully"}` on success
+  - **Authentication**: Requires Bearer token (`current_user: User = Depends(get_current_user)`)
 - **Environment Variables API**: `GET /api/env-vars` - Line ~383 (get vars for current project)
 - **Environment Variables API**: `POST /api/env-vars` - Line ~409 (save vars for current project)
 - **Environment Variable Detection**: `GET /api/env-vars/detect` - Line ~461
@@ -225,30 +267,28 @@
   - **Response**: `{"suggestions": {"VAR_NAME": {"detected_from": "file", "source": "process.env", "component": "frontend", "priority": 10}}}`
   - **Error Handling**: Returns empty suggestions dict on error (doesn't fail deployment)
 
-### Deployment Logic (simple_pipeline.py)
-- **Main Pipeline**: `run_deployment_pipeline()` - Line ~778 (handles single deployments)
-- **Split Deployment**: `run_split_deployment()` - Line ~1096 (deploys frontend + backend)
-- **Node.js Deployment**: `handle_node_project_deployment()` - Line ~609 (auto-generates Dockerfile for Node/Next.js)
-  - **Detection**: Checks for package.json, detects framework (Next.js vs generic Node)
-  - **Env Var Validation**: Lines 667-683 - Collects vars from next.config, warns if missing but doesn't fail
-  - **Dockerfile Generation**: Creates multi-stage Dockerfile for Next.js or single-stage for generic Node
-  - **Build Strategy**: Uses npm run build or npx next build
-  - **Start Command**: Uses npm run start or npx next start
-  - **Key Fix**: No longer fails when env vars are missing - warns and continues (line 683)
-- **Parent Project Creation**: Inside `run_split_deployment()` - Line ~1114 (creates parent if `parent_project_id` is None)
-  - **Naming**: Uses `{fe_name}-{be_name}` from extracted repo names
-  - **Git URL**: Creates `split::{frontend_url}|{backend_url}` format (line 1119)
-  - **Database Fields**: Sets `parent_project_id=None`, `component_type=None` (line 1131)
-  - **Commit**: Immediately commits and refreshes to get parent ID (lines 1133-1136)
-- **Child Deployment**: Calls `run_deployment_pipeline()` with `parent_project_id` and `component_type` (lines 1141, 1148)
-- **Child Lookup/Update**: Inside `run_deployment_pipeline()` - Lines 831-861
-  - **When `parent_project_id` + `component_type` provided**: Searches for existing child by parent + type
-  - **If found**: Reuses existing child deployment, updates git_url and status
-  - **If not found**: Creates new child deployment linked to parent
-  - **Key Fix**: Allows individual Frontend/Backend redeployment without losing parent relationship
-- **Deployment Order**: Backend first (line 1141), then frontend (line 1148)
-- **URL Validation**: `validate_git_url()` - Line ~27
-- **Repo Name Extraction**: `extract_repo_name()` - Line ~63
+### Deployment Logic (process_deployment.py)
+- **Main Pipeline**: `run_process_deployment()` - Line ~222 (handles VM-based deployments)
+  - **VM-Based**: Gets or creates user's VM, clones repo inside VM, builds/runs inside VM
+  - **VM Paths**: Projects stored in `/projects/{project_id}` inside VM
+  - **Process Management**: Starts processes in background using `nohup` inside VM
+  - **Domain Generation**: Auto-generates domain as `project-name.butler.aayush786.xyz`
+  - **Cloudflare Integration**: Automatically configures Cloudflare tunnel after deployment
+- **VM Operations**: 
+  - **Clone**: `vm_manager.exec_in_vm()` to clone repo inside VM
+  - **Build**: `vm_manager.exec_in_vm()` to execute build commands inside VM
+  - **Start**: `vm_manager.exec_in_vm()` to start process in background inside VM
+  - **Process Tracking**: PID stored in `/tmp/project-{id}.pid`, logs in `/tmp/project-{id}.log`
+- **Domain Configuration**: 
+  - **Format**: `project-name.butler.aayush786.xyz` (extracted from project name or repo name)
+  - **Service URL**: `http://localhost:{port}` (OrbStack forwards VM ports to host)
+  - **Cloudflare**: Automatically configures tunnel ingress and DNS records
+- **Monorepo Support**: Detects frontend/backend folders, deploys separately with environment variable linking
+- **Split Repo Support**: Deploys frontend and backend from separate repos, connects via environment variables
+- **Command Auto-Detection**: Detects build/start commands from Dockerfile, docker-compose, package.json, etc.
+- **URL Validation**: `validate_git_url()` - Line ~27 (from simple_pipeline.py)
+- **Repo Name Extraction**: `extract_repo_name()` - Line ~63 (from simple_pipeline.py)
+- **Legacy**: `simple_pipeline.py` - Old Docker-based deployment logic (kept for reference, not used)
 
 ### Database Models (login.py)
 - **User Model**: Line ~6 - Authentication, profile, tokens
@@ -257,7 +297,7 @@
 
 ### Database Migrations (database.py)
 - **Table Creation**: `create_db_and_tables()` - Line ~14
-- **Column Migrations**: Lines ~25-39 - Adds app_name, updated_at, user_id, parent_project_id, component_type
+- **Column Migrations**: Lines ~25-63 - Adds app_name, updated_at, user_id, parent_project_id, component_type, build_command, start_command, port, process_pid, project_dir, vm_name, vm_ip, host_port
 
 ## Split Repository Feature
 
@@ -453,4 +493,14 @@ Devops_Butler/
    - Deletes all child env vars
    - Deletes all child DB records
    - Then deletes parent
+7. **User deletes account** → `DELETE /api/user/account`:
+   - Stops all processes in user's deployments (inside VM)
+   - Removes all Cloudflare DNS records for user's domains
+   - Deletes all project directories inside VM
+   - Deletes all project directories on host (legacy deployments)
+   - Deletes all environment variables
+   - Deletes all deployments (including child deployments)
+   - Deletes the user's OrbStack VM
+   - Deletes the user account from database
+   - Redirects to login page after successful deletion
 

@@ -80,14 +80,82 @@
 
       <!-- Page Content Container -->
       <div class="page-content" id="pageContent">
-        <!-- Dashboard Page (removed cards as requested) -->
-        <div class="page" id="page-dashboard" style="display: none;"></div>
+        <!-- Dashboard Page -->
+        <div class="page" id="page-dashboard" style="display: none;">
+          <div class="page-header">
+            <h2>Dashboard</h2>
+          </div>
+          
+          <!-- VM Status Card -->
+          <div class="vm-status-card" id="vmStatusCard" style="display: none;">
+            <div class="vm-status-header">
+              <div class="vm-status-icon" id="vmStatusIcon">
+                <span class="vm-status-spinner" id="vmStatusSpinner">⏳</span>
+              </div>
+              <div class="vm-status-content">
+                <h3>Virtual Machine Status</h3>
+                <p class="vm-status-message" id="vmStatusMessage">Checking VM status...</p>
+              </div>
+            </div>
+            <div class="vm-status-progress" id="vmStatusProgress" style="display: none;">
+              <div class="vm-progress-bar">
+                <div class="vm-progress-fill" id="vmProgressFill"></div>
+              </div>
+              <p class="vm-progress-text" id="vmProgressText">Creating your virtual machine...</p>
+            </div>
+          </div>
+          
+          <!-- Quick Actions -->
+          <div class="dashboard-actions" id="dashboardActions" style="display: none;">
+            <div class="action-card" onclick="if(window.router){window.router.navigate('/deploy');}">
+              <div class="action-icon">🚀</div>
+              <div class="action-content">
+                <h3>Deploy Project</h3>
+                <p>Deploy a new application</p>
+              </div>
+            </div>
+            <div class="action-card" onclick="if(window.router){window.router.navigate('/repositories');}">
+              <div class="action-icon">🐙</div>
+              <div class="action-content">
+                <h3>Import Repository</h3>
+                <p>Import from GitHub</p>
+              </div>
+            </div>
+            <div class="action-card" onclick="if(window.router){window.router.navigate('/projects');}">
+              <div class="action-icon">📊</div>
+              <div class="action-content">
+                <h3>View Projects</h3>
+                <p>Manage your projects</p>
+              </div>
+            </div>
+          </div>
+        </div>
           
         <!-- Projects Page -->
         <div class="page" id="page-projects" style="display: none;">
           <div class="page-header">
             <h2>Your Projects</h2>
           </div>
+          
+          <!-- VM Status Card (also shown on projects page) -->
+          <div class="vm-status-card" id="vmStatusCardProjects" style="display: none;">
+            <div class="vm-status-header">
+              <div class="vm-status-icon" id="vmStatusIconProjects">
+                <span class="vm-status-spinner" id="vmStatusSpinnerProjects">⏳</span>
+              </div>
+              <div class="vm-status-content">
+                <h3>Virtual Machine Status</h3>
+                <p class="vm-status-message" id="vmStatusMessageProjects">Checking VM status...</p>
+              </div>
+            </div>
+            <div class="vm-status-progress" id="vmStatusProgressProjects" style="display: none;">
+              <div class="vm-progress-bar">
+                <div class="vm-progress-fill" id="vmProgressFillProjects"></div>
+              </div>
+              <p class="vm-progress-text" id="vmProgressTextProjects">Creating your virtual machine...</p>
+            </div>
+          </div>
+          
           <div class="applications-grid" id="projectsGrid">
             <div class="empty-state">
               <p>No projects found</p>
@@ -98,110 +166,196 @@
 
         <!-- Deploy Page -->
         <div class="page" id="page-deploy" style="display: none;">
-          <div class="card">
-            <h2>Deploy New Application</h2>
-            <form class="deploy-form" id="deployForm">
-              <div class="form-group" id="deploy-type-group">
-                <label for="deploy-type">Deployment Type</label>
-                <select id="deploy-type" name="deploy_type" style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9375rem;">
-                  <option value="single">Single Repository (Full-stack)</option>
-                  <option value="split">Multi-Repository (Frontend + Backend)</option>
-                </select>
-              </div>
-              <div class="form-group" id="single-repo-group">
-                <label for="git-url">Git Repository URL</label>
-                <input type="text" id="git-url" name="git_url" placeholder="https://github.com/username/repo" required />
-                <small style="color: var(--text-secondary); font-size: 0.875rem; display: block; margin-top: 0.25rem;">
-                  Commands will be auto-detected, or specify them below
-                </small>
+          <div class="deploy-page-container">
+            <div class="deploy-page-header">
+              <h1 id="deploy-page-title">New Project</h1>
+            </div>
+            
+            <div class="deploy-card">
+              <h2 class="card-title" id="deploy-card-title">New Project</h2>
+              
+              <!-- Repository Import Info -->
+              <div class="import-info" id="import-info" style="display: none;">
+                <svg viewBox="0 0 16 16" fill="currentColor" class="github-icon">
+                  <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                </svg>
+                <div class="import-details">
+                  <span>Importing from GitHub</span>
+                  <strong id="import-repo-name">username/repo</strong>
+                  <span class="branch-badge" id="branch-badge" style="display: none;">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                      <path fill-rule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z"/>
+                    </svg>
+                    <span id="branch-name">main</span>
+                  </span>
+                </div>
               </div>
               
-              <!-- Optional build/start commands and port -->
-              <div class="form-group" id="deploy-commands-group" style="margin-top: 1rem;">
-                <details style="border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem;">
-                  <summary style="cursor: pointer; font-weight: 600; margin-bottom: 0.5rem;">⚙️ Advanced Options (Optional)</summary>
-                  <div style="margin-top: 0.75rem;">
-                    <div class="form-group">
-                      <label for="build-command">Build Command (optional)</label>
-                      <input type="text" id="build-command" name="build_command" placeholder="e.g., npm install && npm run build" />
-                      <small style="color: var(--text-secondary); font-size: 0.875rem;">Leave empty to auto-detect</small>
+              <p class="section-description" id="deploy-description">Choose where you want to create the project and give it a name.</p>
+              
+              <form class="deploy-form" id="deployForm">
+                <!-- Deployment Type (hidden when viewing existing project) -->
+                <div class="form-row" id="deploy-type-group" style="display: none;">
+                  <div class="form-section full-width">
+                    <label for="deploy-type" class="form-label">Deployment Type</label>
+                    <select id="deploy-type" name="deploy_type" class="form-select">
+                      <option value="single">Single Repository (Full-stack)</option>
+                      <option value="split">Multi-Repository (Frontend + Backend)</option>
+                    </select>
+                  </div>
+                </div>
+                
+                <!-- Single Repository Group -->
+                <div class="form-row" id="single-repo-group">
+                  <div class="form-section" id="git-url-section" style="display: none;">
+                    <label for="git-url" class="form-label">Git Repository URL</label>
+                    <input type="text" id="git-url" name="git_url" class="form-input" placeholder="https://github.com/username/repo" />
+                  </div>
+                  
+                  <div class="form-section">
+                    <label for="project-name" class="form-label">Project Name</label>
+                    <input type="text" id="project-name" name="project_name" class="form-input" placeholder="my-project" />
+                  </div>
+                </div>
+                
+                <!-- Framework Preset -->
+                <div class="form-section">
+                  <label for="framework-preset" class="form-label">Framework Preset</label>
+                  <select id="framework-preset" name="framework_preset" class="form-select">
+                    <option value="auto">Auto-detect</option>
+                    <option value="nextjs">Next.js</option>
+                    <option value="react">Create React App</option>
+                    <option value="vue">Vue.js</option>
+                    <option value="nuxt">Nuxt.js</option>
+                    <option value="gatsby">Gatsby</option>
+                    <option value="angular">Angular</option>
+                    <option value="svelte">SvelteKit</option>
+                    <option value="vite">Vite</option>
+                    <option value="nodejs">Node.js</option>
+                    <option value="python">Python</option>
+                    <option value="flask">Flask</option>
+                    <option value="django">Django</option>
+                    <option value="static">Static</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                
+                <!-- Root Directory -->
+                <div class="form-section">
+                  <label for="root-directory" class="form-label">Root Directory</label>
+                  <div class="input-with-button">
+                    <input type="text" id="root-directory" name="root_directory" class="form-input" value="./" placeholder="./" />
+                    <button type="button" class="edit-btn" id="edit-root-directory-btn">Edit</button>
+                  </div>
+                </div>
+                
+                <!-- Monorepo Detection (Hidden by default) -->
+                <div class="form-section" id="monorepo-section" style="display: none;">
+                  <div style="background: var(--bg-secondary); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                      <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M2 2a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V2zm2 1a1 1 0 000 2h8a1 1 0 100-2H4z"/>
+                      </svg>
+                      <strong>Monorepo Detected</strong>
                     </div>
-                    <div class="form-group">
-                      <label for="start-command">Start Command (optional)</label>
-                      <input type="text" id="start-command" name="start_command" placeholder="e.g., npm run start" />
-                      <small style="color: var(--text-secondary); font-size: 0.875rem;">Leave empty to auto-detect</small>
+                    <p style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                      This repository contains both frontend and backend. Select the folders to deploy them separately.
+                    </p>
+                    <div class="form-section" style="margin-bottom: 0.75rem;">
+                      <label for="frontend-folder" class="form-label">Frontend Folder</label>
+                      <select id="frontend-folder" name="frontend_folder" class="form-select">
+                        <option value="">None (skip frontend)</option>
+                      </select>
                     </div>
-                    <div class="form-group">
-                      <label for="port">Port (optional)</label>
-                      <input type="number" id="port" name="port" placeholder="e.g., 3000" min="1" max="65535" />
-                      <small style="color: var(--text-secondary); font-size: 0.875rem;">Leave empty to auto-detect</small>
+                    <div class="form-section">
+                      <label for="backend-folder" class="form-label">Backend Folder</label>
+                      <select id="backend-folder" name="backend_folder" class="form-select">
+                        <option value="">None (skip backend)</option>
+                      </select>
                     </div>
                   </div>
-                </details>
+                </div>
+                
+                <!-- Build and Output Settings (Collapsible) -->
+                <div class="collapsible-section">
+                  <div class="collapsible-header" onclick="toggleDeploySection('buildOutput')">
+                    <span class="collapsible-title">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z"/>
+                      </svg>
+                      Build and Output Settings
+                    </span>
+                    <span class="collapsible-icon" id="iconBuildOutput">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </span>
+                  </div>
+                  <div class="collapsible-content" id="contentBuildOutput">
+                    <div class="collapsible-inner">
+                      <div class="form-section">
+                        <label for="install-command" class="form-label">Install Command</label>
+                        <input type="text" id="install-command" name="install_command" class="form-input" placeholder="npm install, yarn install, pnpm install, or pip install -r requirements.txt" />
+                      </div>
+                      <div class="form-section">
+                        <label for="build-command" class="form-label">Build Command</label>
+                        <input type="text" id="build-command" name="build_command" class="form-input" placeholder="npm run build, next build, or leave empty for auto-detect" />
+                      </div>
+                      <div class="form-section">
+                        <label for="start-command" class="form-label">Start Command</label>
+                        <input type="text" id="start-command" name="start_command" class="form-input" placeholder="npm run start, npm start, python app.py, or leave empty for auto-detect" />
+                      </div>
+                      <div class="form-section">
+                        <label for="port" class="form-label">Port</label>
+                        <input type="number" id="port" name="port" class="form-input" placeholder="3000, 8000, or leave empty for auto-detect" min="1" max="65535" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <!-- Environment Variables (Collapsible - navigates to env vars page) -->
+                <div class="collapsible-section">
+                  <div class="collapsible-header" onclick="navigateToEnvVars()">
+                    <span class="collapsible-title">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path fill-rule="evenodd" d="M8 1a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0v-1.5A.75.75 0 018 1zM3.5 8a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM8 4a4 4 0 100 8 4 4 0 000-8zm0 1.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zM1.75 8a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5A.75.75 0 011.75 8zm10 0a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75zM8 12.25a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0V13a.75.75 0 01.75-.75zM3.404 3.404a.75.75 0 011.06 0l1.061 1.06a.75.75 0 11-1.06 1.061l-1.061-1.06a.75.75 0 010-1.061zm9.192 0a.75.75 0 010 1.06l-1.06 1.061a.75.75 0 01-1.061-1.06l1.06-1.061a.75.75 0 011.061 0zM3.404 12.596a.75.75 0 011.06 0l1.061-1.06a.75.75 0 11-1.06-1.061l-1.061 1.06a.75.75 0 010 1.061zm9.192 0a.75.75 0 01-1.06 0l-1.061-1.06a.75.75 0 111.06-1.061l1.061 1.06a.75.75 0 010 1.061z"/>
+                      </svg>
+                      Environment Variables
+                    </span>
+                    <span class="collapsible-icon">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </span>
+                  </div>
+                </div>
+                
+                <!-- Split Repository Layout (Hidden by default) -->
+                <div id="split-deploy-layout" style="display: none;">
+                  <div class="form-section" style="margin-top: 1.5rem;">
+                    <label for="frontend-url" class="form-label">Frontend Repository URL</label>
+                    <input type="text" id="frontend-url" name="frontend_url" class="form-input" placeholder="https://github.com/username/frontend-repo" />
+                  </div>
+                  <div class="form-section">
+                    <label for="backend-url" class="form-label">Backend Repository URL</label>
+                    <input type="text" id="backend-url" name="backend_url" class="form-input" placeholder="https://github.com/username/backend-repo" />
+                  </div>
+                </div>
+                
+                <!-- Submit Button -->
+                <div class="button-group">
+                  <button type="submit" class="btn btn-primary" id="deploy-submit-default">
+                    Deploy
+                  </button>
+                </div>
+              </form>
+              
+              <!-- Status Messages -->
+              <div id="deploy-status" class="deploy-status"></div>
+              <div id="deploy-success" class="deploy-success" style="display: none;">
+                <h3>✅ Deployment Successful!</h3>
+                <a id="openAppBtn" class="btn-primary" target="_blank">Open Application</a>
               </div>
-
-              <!-- New structured split layout -->
-              <div id="split-deploy-layout" style="display: none;">
-                <div class="card" style="margin-bottom: 1rem;">
-                  <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem;">
-                    <div style="font-size:1.25rem;">🌐</div>
-                    <div>
-                      <div style="font-weight:600;">Frontend</div>
-                      <div style="color:var(--text-secondary); font-size:0.875rem;">Client-side application</div>
-                    </div>
-                  </div>
-                  <div class="form-group" style="margin-bottom:0.75rem;">
-                    <label for="frontend-url">Repository URL</label>
-                    <input type="text" id="frontend-url" name="frontend_url" placeholder="https://github.com/username/frontend-repo" />
-                  </div>
-                  <button type="button" id="deploy-frontend-btn" class="btn-dark btn-block">Deploy Frontend</button>
-                </div>
-
-                <div class="card" style="margin-bottom: 1rem;">
-                  <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem;">
-                    <div style="font-size:1.25rem;">💻</div>
-                    <div>
-                      <div style="font-weight:600;">Backend</div>
-                      <div style="color:var(--text-secondary); font-size:0.875rem;">Server-side application</div>
-                    </div>
-                  </div>
-                  <div class="form-group" style="margin-bottom:0.75rem;">
-                    <label for="backend-url">Repository URL</label>
-                    <input type="text" id="backend-url" name="backend_url" placeholder="https://github.com/username/backend-repo" />
-                  </div>
-                  <button type="button" id="deploy-backend-btn" class="btn-dark btn-block">Deploy Backend</button>
-                </div>
-
-                <div class="card" style="background:#faf5ff; border-color:#e9d5ff;">
-                  <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem;">
-                    <div>
-                      <div style="font-weight:600; margin-bottom:0.25rem;">Deploy Full Stack</div>
-                      <div style="color:#6b7280; font-size:0.875rem;">Deploy both frontend and backend together</div>
-                    </div>
-                    <button type="button" id="deploy-both-btn" class="btn-primary">🚀 Deploy All</button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Legacy split group kept for non-structured mode toggle -->
-              <div id="split-repo-group" style="display: none;">
-                <div class="form-group">
-                  <label for="frontend-url">Frontend Repository URL</label>
-                  <input type="text" id="frontend-url" name="frontend_url" placeholder="https://github.com/username/frontend-repo" />
-                </div>
-                <div class="form-group">
-                  <label for="backend-url">Backend Repository URL</label>
-                  <input type="text" id="backend-url" name="backend_url" placeholder="https://github.com/username/backend-repo" />
-                </div>
-                <button type="submit" class="btn-primary btn-large">🚀 Deploy Both</button>
-              </div>
-
-              <button type="submit" class="btn-primary btn-large" id="deploy-submit-default">🚀 Deploy</button>
-            </form>
-            <div id="deploy-status" class="deploy-status"></div>
-            <div id="deploy-success" class="deploy-success" style="display: none;">
-              <h3>✅ Deployment Successful!</h3>
-              <a id="openAppBtn" class="btn-primary" target="_blank">Open Application</a>
             </div>
           </div>
         </div>
@@ -396,7 +550,7 @@
           </div>
 
           <!-- Security Section -->
-          <div class="card">
+          <div class="card" style="margin-bottom: 1.5rem;">
             <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-light);">Security</h3>
             
             <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -407,6 +561,22 @@
               </div>
               <button class="btn-secondary" id="changePasswordBtn" style="cursor: pointer;">Change Password</button>
             </div>
+          </div>
+
+          <!-- Delete Account Section -->
+          <div class="card delete-account-card">
+            <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-light);">Delete Account</h3>
+            <p style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.6;">
+              Permanently remove your account and all of its contents from the DevOps Butler platform. This action is not reversible, so please continue with caution.
+            </p>
+            <div class="delete-account-warning" style="background: var(--color-error-bg); border: 1px solid var(--color-error); border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem;">
+              <p style="font-size: 0.875rem; color: var(--color-error); margin: 0; line-height: 1.6;">
+                <strong>Warning:</strong> This will delete all your projects, deployments, environment variables, virtual machine, and account data. This action cannot be undone.
+              </p>
+            </div>
+            <button class="btn-danger" id="deleteAccountBtn" style="cursor: pointer;">
+              Delete Account
+            </button>
           </div>
 
           <!-- Password Change Modal -->

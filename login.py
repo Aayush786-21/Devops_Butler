@@ -17,6 +17,8 @@ class User(SQLModel, table=True):
     avatar_url: Optional[str] = Field(default=None)
     is_active: bool = Field(default=True)
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
+    # VM status: 'creating', 'ready', 'failed', or None (not started)
+    vm_status: Optional[str] = Field(default=None)
 
 # This class defines the structure of our 'deployment' table in the database.
 class Deployment(SQLModel, table=True):
@@ -71,6 +73,10 @@ class Deployment(SQLModel, table=True):
     port: Optional[int] = Field(default=None)  # Port number (e.g., 3000, 8080)
     process_pid: Optional[int] = Field(default=None)  # Process ID for tracking running process
     project_dir: Optional[str] = Field(default=None)  # Directory where project is cloned (persistent)
+    # VM-based deployment fields (OrbStack)
+    vm_name: Optional[str] = Field(default=None)  # OrbStack VM name (e.g., "butler-user-1")
+    vm_ip: Optional[str] = Field(default=None)  # VM IP address
+    host_port: Optional[int] = Field(default=None)  # Host port (forwarded from VM)
 
 class EnvironmentVariable(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
