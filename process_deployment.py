@@ -28,6 +28,7 @@ from process_manager import process_manager as pm
 from database import engine
 from login import Deployment
 from sqlmodel import Session, select
+from sqlalchemy import func
 from dockerfile_parser import parse_dockerfile, parse_docker_compose, detect_monorepo_structure
 
 
@@ -1063,9 +1064,15 @@ async def run_process_deployment(
         # So we need to find the next available port and make the service bind to it
         await manager.broadcast(f"🔌 Assigning host port...")
         
-        # Find next available host port (check existing deployments)
+        # Find next available host port (check globally across all users and VMs)
+        # IMPORTANT: Ports are forwarded from VMs to Mac host (localhost:port)
+        # Since all VMs forward to the same Mac host, ports must be unique globally
+        # Example: User 1's VM port 6001 → Mac localhost:6001
+        #          User 2's VM port 6002 → Mac localhost:6002 (6001 already taken)
+        # This prevents port collisions on the Mac host across all users/VMs
         with Session(engine) as check_session:
             existing_ports = set()
+            # Check ALL deployments across ALL users and ALL VMs (no user_id filter)
             existing_deployments = check_session.exec(
                 select(Deployment.host_port).where(
                     Deployment.host_port.is_not(None),
@@ -1078,7 +1085,8 @@ async def run_process_deployment(
         host_port = None
         for candidate_port in range(6001, 6999):
             if candidate_port not in existing_ports:
-                # Also check if port is actually free on the host
+                # Also verify port is actually free on the Mac host machine
+                # This double-checks in case something else is using the port
                 import socket
                 try:
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -1086,7 +1094,7 @@ async def run_process_deployment(
                         host_port = candidate_port
                         break
                 except OSError:
-                    continue  # Port in use, try next
+                    continue  # Port in use on host, try next
         
         if not host_port:
             error_msg = "Failed to find free host port (6001-6999 range exhausted)"
@@ -1115,6 +1123,99 @@ async def run_process_deployment(
         
         # Update port to host_port for the service
         port = host_port
+        
+        # CRITICAL: Stop the SPECIFIC project's existing process before starting a new one
+        # IMPORTANT: Only stop THIS project's process, NOT other projects
+        # This ensures clean redeployment without affecting other running projects
+        await manager.broadcast(f"🛑 Stopping existing process for this project...")
+        old_port = None
+        old_pid = None
+        
+        try:
+            # Get the existing deployment record to find its OLD port and PID
+            if deployment_id:
+                with Session(engine) as session:
+                    existing_deployment = session.get(Deployment, deployment_id)
+                    if existing_deployment:
+                        # Get the OLD port (from existing deployment, not the new one)
+                        old_port = existing_deployment.host_port or existing_deployment.port
+                        old_pid = existing_deployment.process_pid
+                        
+                        if old_port or old_pid:
+                            await manager.broadcast(f"📋 Found existing deployment: port={old_port}, pid={old_pid}")
+                        
+                        # Method 1: Stop process by PID (specific to this deployment)
+                        if old_pid:
+                            try:
+                                kill_result = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"kill -9 {old_pid} 2>/dev/null || true"
+                                )
+                                logger.info(f"Stopped process {old_pid} for deployment {deployment_id}")
+                                await manager.broadcast(f"✅ Stopped process {old_pid}")
+                            except Exception as e:
+                                logger.warning(f"Error killing process by PID {old_pid}: {e}")
+                        
+                        # Method 2: Kill process using the OLD port (specific to this deployment)
+                        # CRITICAL: Use OLD port, not the new port (new port might be used by another project!)
+                        # If port is the same, we still need to kill the old process on that port
+                        if old_port:
+                            try:
+                                # Kill any process using the OLD port (this project's old process)
+                                # This is safe because:
+                                # - If port changed: We're killing the old port (this project's old process)
+                                # - If port is same: We're killing this project's process on the same port (needed for redeploy)
+                                kill_old_port_result = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"lsof -ti :{old_port} 2>/dev/null | while read pid; do kill -9 $pid 2>/dev/null; done || "
+                                    f"fuser -k {old_port}/tcp 2>/dev/null || "
+                                    f"true"
+                                )
+                                logger.info(f"Cleaned up old port {old_port} for deployment {deployment_id}")
+                                await manager.broadcast(f"✅ Cleaned up old port {old_port}")
+                            except Exception as e:
+                                logger.warning(f"Error killing process on old port {old_port}: {e}")
+                        
+                        # Method 3: Kill process by log file (specific to this deployment)
+                        log_file = f"/tmp/project-{deployment_id}.log"
+                        try:
+                            # Kill any process that might be writing to THIS deployment's log file
+                            kill_log_result = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"lsof {log_file} 2>/dev/null | awk 'NR>1 {{print $2}}' | while read pid; do kill -9 $pid 2>/dev/null; done || true"
+                            )
+                            logger.info(f"Cleaned up processes using log file for deployment {deployment_id}")
+                        except Exception as e:
+                            logger.warning(f"Error cleaning up log file processes: {e}")
+            
+            # Wait a moment for processes to fully stop
+            await asyncio.sleep(1)
+            
+            # Verify the NEW port is free before starting (check if it's actually available)
+            if port:
+                port_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo 'FREE'"
+                )
+                if port_check.stdout and 'FREE' not in port_check.stdout and port_check.stdout.strip():
+                    # NEW port is in use - this shouldn't happen if port assignment worked correctly
+                    # But if it does, we need to handle it
+                    error_msg = f"New port {port} is already in use. This may indicate a port assignment issue."
+                    logger.error(error_msg)
+                    await manager.broadcast(f"⚠️ {error_msg}")
+                    # Don't fail - the port assignment should have prevented this
+                    # But log it as a warning
+                else:
+                    logger.info(f"New port {port} is free - ready to start")
+                    await manager.broadcast(f"✅ New port {port} verified free")
+            
+            await manager.broadcast(f"✅ Cleanup complete for deployment {deployment_id} - ready to start new process")
+        except Exception as e:
+            error_msg = f"Error during process cleanup for deployment {deployment_id}: {e}"
+            logger.error(error_msg)
+            await manager.broadcast(f"⚠️ {error_msg} (continuing anyway)")
+            # Don't fail completely - try to continue, but log the error
+            # The process might still start successfully
         
         # Start process inside VM using nohup or PM2 for background execution
         # Use deployment_id as project_id for process tracking
@@ -1146,9 +1247,13 @@ async def run_process_deployment(
             # Use a wrapper that properly captures the PID of the actual process
             # Format: (cd dir && nohup command > log 2>&1 &) && sleep 1 && pgrep -f 'command' | head -1 > pid_file
             # Better: Just start the process and find PID by port/process name afterwards
-            # Use simpler command without sh -c wrapper to avoid issues
-            # The --bind flag needs to be passed directly, not through sh -c
-            start_cmd = f"cd {vm_project_dir} && nohup {start_command} > {log_file} 2>&1 &"
+            # Use nohup with proper detaching to ensure process survives shell exit
+            # The key is to use 'nohup' with 'exec' or ensure the process is truly backgrounded
+            # Using 'nohup' with '&' and then 'disown' or using 'setsid' to detach from parent
+            # For maximum compatibility, we use: nohup sh -c "command" > log 2>&1 &
+            # But we need to ensure the process doesn't get killed when shell exits
+            # Solution: Use 'nohup' with proper redirection and ensure it's backgrounded correctly
+            start_cmd = f"cd {vm_project_dir} && nohup sh -c '{start_command}' > {log_file} 2>&1 & sleep 1"
             
             # Execute the command with environment variables
             # Note: env vars are exported in exec_in_vm, so they should be available
@@ -1208,7 +1313,7 @@ async def run_process_deployment(
                     # Try to extract PID from port check
                     if not pid or pid <= 0:
                         try:
-                            # Try lsof first (most reliable)
+                            # Method 1: Try lsof first (if installed)
                             pid_check = await vm_manager.exec_in_vm(
                                 vm_name,
                                 f"lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
@@ -1217,19 +1322,50 @@ async def run_process_deployment(
                                 pid = int(pid_check.stdout.strip())
                                 logger.info(f"✅ Found PID from port check (lsof): {pid}")
                             else:
-                                # Try netstat
-                                pid_line = port_check.stdout.strip().split('\n')[0]
+                                # Method 2: Extract PID from port_check output (works with ss, netstat, or lsof)
+                                # ss format: users:(("python3",pid=4307,fd=3))
+                                # netstat format: tcp 0 0 0.0.0.0:6001 0.0.0.0:* LISTEN 4307/python3
                                 import re
-                                pid_match = re.search(r'\b(\d+)\b', pid_line)
+                                port_output = port_check.stdout.strip()
+                                # Try to extract PID from ss format: pid=4307
+                                pid_match = re.search(r'pid=(\d+)', port_output)
                                 if pid_match:
                                     pid = int(pid_match.group(1))
-                                    logger.info(f"✅ Extracted PID from port check (netstat): {pid}")
+                                    logger.info(f"✅ Extracted PID from port check (ss format): {pid}")
                                 else:
-                                    pid = -1  # PID unknown but process is running
-                                    logger.info(f"✅ Process is running on port {port} (PID unknown)")
+                                    # Try to extract PID from netstat format: last number before process name
+                                    # Pattern: ... LISTEN 4307/python3
+                                    pid_match = re.search(r'\b(\d+)/(?:python|node|npm|java|go)\w*\b', port_output)
+                                    if pid_match:
+                                        pid = int(pid_match.group(1))
+                                        logger.info(f"✅ Extracted PID from port check (netstat format): {pid}")
+                                    else:
+                                        # Method 3: Use pgrep as fallback (most reliable)
+                                        pgrep_check = await vm_manager.exec_in_vm(
+                                            vm_name,
+                                            f"pgrep -f 'http.server {port}' 2>/dev/null | head -1 || pgrep -f ':{port}' 2>/dev/null | head -1 || echo ''"
+                                        )
+                                        if pgrep_check.stdout and pgrep_check.stdout.strip():
+                                            pid = int(pgrep_check.stdout.strip())
+                                            logger.info(f"✅ Found PID from pgrep: {pid}")
+                                        else:
+                                            pid = -1  # PID unknown but process is running
+                                            logger.info(f"✅ Process is running on port {port} (PID unknown)")
                         except Exception as e:
                             logger.warning(f"Failed to extract PID from port check: {e}")
-                            pid = -1  # PID unknown but process is running
+                            # Last resort: try pgrep
+                            try:
+                                pgrep_check = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"pgrep -f 'http.server {port}' 2>/dev/null | head -1 || echo ''"
+                                )
+                                if pgrep_check.stdout and pgrep_check.stdout.strip():
+                                    pid = int(pgrep_check.stdout.strip())
+                                    logger.info(f"✅ Found PID via pgrep fallback: {pid}")
+                                else:
+                                    pid = -1  # PID unknown but process is running
+                            except Exception:
+                                pid = -1  # PID unknown but process is running
             
             # PRIORITY 2: Check log file to see if process started successfully
             log_file_exists = False
@@ -1321,16 +1457,29 @@ async def run_process_deployment(
                     process_running = True
                     logger.info(f"✅ Port {port} is now listening - process started")
                     
-                    # Try to get PID from port
+                    # Try to get PID from port (use multiple methods since lsof might not be installed)
                     try:
+                        # Method 1: Try lsof
                         pid_from_port = await vm_manager.exec_in_vm(
                             vm_name,
                             f"lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
                         )
                         if pid_from_port.stdout and pid_from_port.stdout.strip():
                             pid = int(pid_from_port.stdout.strip())
-                            logger.info(f"✅ Found PID from port (after wait): {pid}")
-                    except Exception:
+                            logger.info(f"✅ Found PID from port (after wait, lsof): {pid}")
+                        else:
+                            # Method 2: Use pgrep (more reliable, doesn't require lsof)
+                            pgrep_result = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"pgrep -f 'http.server {port}' 2>/dev/null | head -1 || pgrep -f ':{port}' 2>/dev/null | head -1 || echo ''"
+                            )
+                            if pgrep_result.stdout and pgrep_result.stdout.strip():
+                                pid = int(pgrep_result.stdout.strip())
+                                logger.info(f"✅ Found PID from port (after wait, pgrep): {pid}")
+                            else:
+                                pid = None
+                    except Exception as e:
+                        logger.warning(f"Failed to get PID after wait: {e}")
                         pid = None
             
             # Final verification: If process is not running by port check, check log for fatal errors
@@ -1585,10 +1734,29 @@ async def run_process_deployment(
                     # Use custom domain (already configured)
                     domain_to_use = deployment.custom_domain
                 else:
-                    # Use generated default domain
+                    # Check if generated domain is already taken globally (across all users)
+                    # If taken, append a number suffix (e.g., project-name-2.aayush786.xyz)
                     domain_to_use = default_domain
+                    counter = 1
+                    while True:
+                        existing_domain = session.exec(
+                            select(Deployment).where(
+                                Deployment.custom_domain.is_not(None),
+                                func.lower(Deployment.custom_domain) == domain_to_use.lower(),
+                                Deployment.id != deployment_id  # Exclude current deployment
+                            )
+                        ).first()
+                        
+                        if not existing_domain:
+                            # Domain is available
+                            break
+                        
+                        # Domain is taken, try with suffix
+                        counter += 1
+                        domain_to_use = f"{project_slug}-{counter}.{butler_domain}"
+                    
                     # Store the generated domain
-                    deployment.custom_domain = default_domain
+                    deployment.custom_domain = domain_to_use
                 
                 deployed_url = f"https://{domain_to_use}"
                 

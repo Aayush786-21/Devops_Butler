@@ -20,6 +20,123 @@
 
 ## Recent Updates (Latest Session)
 
+### Domain Configuration Health Check (2025-11-13)
+- **Issue Fixed**: 502 Bad Gateway errors when accessing domain before service is running
+- **Root Cause**: Domain configuration was setting Cloudflare tunnel to point to `localhost:port` without any verification
+- **Fix**: Added optional health check that logs warnings but does NOT block domain configuration
+- **How It Works**:
+  1. When user saves domain, backend determines service URL (`http://localhost:{host_port}`)
+  2. **NEW**: Performs optional HTTP health check on service URL (3 second timeout) - **informational only**
+  3. If service is accessible (returns HTTP status < 400): Logs info message
+  4. If service is not accessible: Logs warning but **still configures domain** (allows users to configure domain first, then start service)
+  5. Domain is always configured regardless of service status
+  6. Domain will work once the service is started
+- **User Workflow** (Correct Flow):
+  1. User imports project
+  2. User configures domain (works even if service not running) ✅
+  3. User deploys/starts service
+  4. Domain works immediately once service is running ✅
+- **Error Handling**:
+  - Service accessible: Logs info message
+  - Service returning 4xx/5xx status codes: Logs warning but proceeds
+  - Service not accessible: Logs warning but proceeds (domain configured anyway)
+  - Unexpected errors: Logs warning but proceeds (non-fatal)
+- **Key Principle**: Domain configuration is independent of service status - users can configure domain first, then start service
+- **Location**: `orchestrator.py` - `configure_project_domain()` endpoint (line ~2193)
+- **Benefits**:
+  - Users can configure domain before deploying (flexible workflow)
+  - Domain works immediately once service is started
+  - Health check provides useful information without blocking configuration
+  - No fatal errors - domain always configures successfully
+
+### Auto-Restart for Stopped Services (2025-11-13)
+- **Issue Fixed**: Imported projects showing as "running" but service not actually running
+- **Root Cause**: Services can crash or stop, but database still shows "running" status
+- **Fix**: Added auto-restart logic that detects stopped services and restarts them automatically
+- **How It Works**:
+  1. When checking deployment status, verifies service is actually accessible via HTTP
+  2. If deployment is marked "running" but HTTP check fails, automatically restarts the service
+  3. Updates database with new PID after successful restart
+  4. Only restarts VM-based deployments (not container deployments)
+- **Location**: `orchestrator.py` - `/deployments` endpoint (line ~1851)
+- **Restart Endpoint**: Fixed `/projects/{project_id}/restart` to handle VM deployments (line ~2354)
+- **Benefits**:
+  - Services automatically recover from crashes
+  - No manual intervention needed
+  - Status check is accurate (only shows "running" if actually accessible)
+  - Works for all VM-based deployments
+
+### GitHub PAT Support for Rate Limit Bypass (2025-11-13)
+- **Issue Fixed**: GitHub API rate limit exceeded errors when browsing repositories
+- **Root Cause**: Unauthenticated GitHub API calls have very low rate limits (60 requests/hour)
+- **Fix**: Added support for GitHub Personal Access Token (PAT) as fallback authentication
+- **How It Works**:
+  1. **Priority 1**: Uses user's personal GitHub token (if authenticated via OAuth)
+  2. **Priority 2**: Falls back to global PAT from environment variable (`GITHUB_PAT` or `GITHUB_TOKEN`)
+- **Setup**: Add your GitHub PAT to `.env` file:
+  ```
+  GITHUB_PAT=ghp_your_personal_access_token_here
+  ```
+  Or use `GITHUB_TOKEN` (both are supported)
+- **Location**: `repository_tree_api.py` - `get_github_token()` helper function
+- **Endpoints Updated**:
+  - `/api/repository/{owner}/{repo}/contents` - Browse repository files
+  - `/api/repository/{owner}/{repo}/contents/{path}` - Get file content
+  - `/api/repositories/{username}` - List user repositories
+- **Benefits**:
+  - Bypasses rate limits (5000 requests/hour with PAT vs 60 without)
+  - Works for all users (even unauthenticated ones)
+  - No code changes needed - just add PAT to environment variable
+  - Secure (PAT stored in environment, not in code)
+
+### Robust Process Cleanup and Redeployment (2025-11-13)
+- **Issue Fixed**: Redeployments were failing because old processes weren't stopped before starting new ones
+- **Root Cause**: Port conflicts and zombie processes from previous deployments
+- **Fix**: Added targeted process cleanup that ONLY stops the specific project being redeployed
+- **Key Principle**: Only stop THIS project's process, NOT other projects (users can have 10+ projects running)
+- **Cleanup Methods** (executed in order, all specific to the deployment being redeployed):
+  1. **Kill by PID**: Stops process using stored PID from THIS deployment's database record
+  2. **Kill by OLD Port**: Finds and kills process using THIS deployment's OLD port (not the new port)
+     - Uses `existing_deployment.host_port` or `existing_deployment.port` (the OLD port)
+     - CRITICAL: Never kills processes on the NEW port (that might be used by another project)
+  3. **Kill by Log File**: Kills processes associated with THIS deployment's log file (`/tmp/project-{deployment_id}.log`)
+  4. **Port Verification**: Verifies the NEW port is free before starting (should be free due to port assignment)
+- **Safety Features**:
+  - Only targets the specific `deployment_id` being redeployed
+  - Uses OLD port from database (not the newly assigned port)
+  - Never affects other projects running on different ports
+  - Works correctly even if port doesn't change (same port redeployment)
+- **Error Handling**: 
+  - Continues deployment even if cleanup has warnings (non-fatal)
+  - Logs all cleanup actions for debugging
+  - Only fails if critical errors occur
+- **Location**: `process_deployment.py` - Before process start (line ~1127)
+- **Benefits**:
+  - Clean redeployments without port conflicts
+  - No zombie processes from previous deployments
+  - Safe for multi-project environments (doesn't affect other projects)
+  - Robust error handling and recovery
+  - Automatic port cleanup (only for the project being redeployed)
+
+### Robust Service URL Configuration (2025-11-13)
+- **Issue Fixed**: Domain configuration was using VM IP (`http://192.168.x.x:port`) instead of `localhost:port`, causing 502 errors
+- **Root Cause**: Fallback logic prioritized VM IP over `localhost:port`, but Cloudflare tunnel runs on Mac and can ONLY access localhost
+- **Fix**: Reordered service URL determination logic to ALWAYS prefer `localhost` over VM IP
+- **Priority Order**:
+  1. `localhost:{host_port}` (if host_port is set)
+  2. `localhost:{port}` (if port is set - OrbStack auto-forwards)
+  3. `http://{vm_ip}:{port}` (last resort only, with warning logged)
+- **Error Handling**: Added validation to ensure service URL is always valid before configuring Cloudflare
+- **Location**: `orchestrator.py` - Three endpoints updated:
+  - `configure_project_domain()` (line ~2065)
+  - Deployment update logic (line ~1108)
+  - `fix_cloudflare_tunnel()` (line ~2150)
+- **Benefits**:
+  - Eliminates 502 errors from incorrect service URLs
+  - Always uses localhost (Cloudflare tunnel requirement)
+  - Better error messages when configuration fails
+  - Logs warnings when VM IP is used (should never happen)
+
 ### Host Port Forwarding Architecture (2025-11-13)
 - **Change**: Migrated from VM IP-based routing to host port forwarding
 - **Architecture**: 

@@ -3045,7 +3045,7 @@ function showProjectDomainConfig() {
               <div class="domain-input-wrapper">
                 <input type="text" id="domainPrefix" class="domain-prefix-input" placeholder="project-slug or my.project" />
                 <span class="domain-separator">.</span>
-                <span class="domain-platform" id="platformDomain">butler.example.com</span>
+                <span class="domain-platform" id="platformDomain">aayush786.xyz</span>
               </div>
               <p class="domain-hint" id="domainSuggestion"></p>
             </div>
@@ -3153,7 +3153,7 @@ async function loadProjectDomainSettings() {
     }
 
     const data = await response.json();
-    const platformDomain = data.butler_domain || 'butler.example.com';
+    const platformDomain = data.butler_domain || 'aayush786.xyz';
 
     // Display the platform domain as fixed text
     if (platformDomainEl) {
@@ -3685,8 +3685,12 @@ async function handleDeploy(e) {
   
   console.log('Git URL validation passed:', gitUrl);
 
-  deployStatus.textContent = '🚀 Deploying...';
+  deployStatus.textContent = '🚀 Starting deployment...';
   deployStatus.style.color = 'var(--primary)';
+
+  // Show deployment logs page and connect to WebSocket
+  showDeploymentLogsPage();
+  connectDeploymentLogsWebSocket();
 
   try {
     const formData = new FormData();
@@ -3764,46 +3768,29 @@ async function handleDeploy(e) {
     const result = await response.json();
 
     if (response.ok) {
-      deployStatus.textContent = '✅ Deployment successful!';
-      deployStatus.style.color = 'var(--success)';
-      
-      if (result.deployed_url) {
-        deploySuccess.style.display = 'block';
-        document.getElementById('openAppBtn').href = result.deployed_url;
-        document.getElementById('openAppBtn').textContent = `Open ${result.deployed_url}`;
-      }
-      
-      // Clear form
-      form.reset();
-      
-      // For split repos, refresh components and stay on deploy page
-      if (currentProject && currentProject.isSplit) {
-        setTimeout(() => {
-          loadAndDisplayProjectComponents();
-          loadDashboard();
-        }, 1500);
+      // Wait a moment for final logs, then show success page
+      setTimeout(() => {
+        showDeploymentSuccessPage(result);
+      }, 2000);
       } else {
-        setTimeout(() => {
-          loadDashboard();
-          router.navigate('/applications');
-        }, 2000);
-      }
-      } else {
-      // Handle VM creation status (423)
+      // Handle errors - show in logs page
       if (response.status === 423) {
-        deployStatus.textContent = `⏳ ${result.detail || 'Your virtual machine is being created. Please wait a few moments and try again.'}`;
-        deployStatus.style.color = 'var(--warning)';
-        showToast(result.detail || 'Your virtual machine is being created. Please wait a few moments and try again.', 'warning');
+        const errorMsg = result.detail || 'Your virtual machine is being created. Please wait a few moments and try again.';
+        appendDeploymentLog(`⏳ ${errorMsg}`, 'warning');
+        updateDeploymentStatus('warning', 'VM Creating...');
+        showToast(errorMsg, 'warning');
       } else {
-        deployStatus.textContent = `❌ Error: ${result.detail || 'Deployment failed'}`;
-        deployStatus.style.color = 'var(--error)';
-        showToast(result.detail || 'Deployment failed', 'error');
+        const errorMsg = result.detail || 'Deployment failed';
+        appendDeploymentLog(`❌ Error: ${errorMsg}`, 'error');
+        updateDeploymentStatus('error', 'Deployment Failed');
+        showToast(errorMsg, 'error');
       }
     }
   } catch (error) {
-    deployStatus.textContent = '❌ Network error. Please try again.';
-    deployStatus.style.color = 'var(--error)';
-    showToast('Network error. Please try again.', 'error');
+    const errorMsg = 'Network error. Please try again.';
+    appendDeploymentLog(`❌ ${errorMsg}`, 'error');
+    updateDeploymentStatus('error', 'Network Error');
+    showToast(errorMsg, 'error');
   }
 }
 
@@ -5787,7 +5774,212 @@ window.addEventListener('beforeunload', () => {
   if (projectLogsWebSocket) {
     projectLogsWebSocket.close();
   }
+  if (deploymentLogsWebSocket) {
+    deploymentLogsWebSocket.close();
+  }
 });
+
+// Deployment Logs WebSocket
+let deploymentLogsWebSocket = null;
+let deploymentLogsPaused = false;
+let deploymentLogsBuffer = [];
+
+function showDeploymentLogsPage() {
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(page => {
+    page.style.display = 'none';
+  });
+  
+  // Show deployment logs page
+  const logsPage = document.getElementById('page-deployment-logs');
+  if (logsPage) {
+    logsPage.style.display = 'block';
+    document.getElementById('pageTitle').textContent = 'Deployment Logs';
+    
+    // Clear previous logs
+    const logsContent = document.getElementById('deploymentLogsContent');
+    if (logsContent) {
+      logsContent.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 2rem;">Connecting to deployment stream... Logs will appear here.</p>';
+    }
+    
+    // Update status badge
+    const statusBadge = document.getElementById('deployment-status-badge');
+    const statusText = document.getElementById('deployment-status-text');
+    if (statusBadge) {
+      statusBadge.className = 'status-badge status-info';
+    }
+    if (statusText) {
+      statusText.textContent = 'Deploying...';
+    }
+  }
+}
+
+function connectDeploymentLogsWebSocket() {
+  // Close existing connection if any
+  if (deploymentLogsWebSocket) {
+    deploymentLogsWebSocket.close();
+  }
+  
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const clientId = `deploy-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const wsUrl = `${wsProtocol}//${window.location.host}/ws/${clientId}`;
+  
+  deploymentLogsWebSocket = new WebSocket(wsUrl);
+  
+  deploymentLogsWebSocket.onopen = () => {
+    console.log('Deployment logs WebSocket connected');
+    appendDeploymentLog('Connected to deployment stream', 'success');
+  };
+  
+  deploymentLogsWebSocket.onmessage = (event) => {
+    try {
+      // Try to parse as JSON first
+      const data = JSON.parse(event.data);
+      if (data.message) {
+        appendDeploymentLog(data.message, data.type || 'info');
+        
+        // Update status based on log messages
+        if (data.message.includes('Deployment successful') || data.message.includes('🎉')) {
+          updateDeploymentStatus('success', 'Deployment Successful');
+        } else if (data.message.includes('failed') || data.message.includes('❌')) {
+          updateDeploymentStatus('error', 'Deployment Failed');
+        } else if (data.message.includes('Deploying') || data.message.includes('🚀')) {
+          updateDeploymentStatus('info', 'Deploying...');
+        }
+      }
+    } catch (e) {
+      // If not JSON, treat as plain text
+      appendDeploymentLog(event.data, 'info');
+    }
+  };
+  
+  deploymentLogsWebSocket.onerror = (error) => {
+    console.error('Deployment logs WebSocket error:', error);
+    appendDeploymentLog('WebSocket connection error', 'error');
+  };
+  
+  deploymentLogsWebSocket.onclose = () => {
+    console.log('Deployment logs WebSocket disconnected');
+    appendDeploymentLog('Disconnected from deployment stream', 'warning');
+  };
+}
+
+function appendDeploymentLog(message, type = 'info') {
+  const logsContent = document.getElementById('deploymentLogsContent');
+  if (!logsContent) return;
+  
+  // Remove "Connecting..." message if present
+  if (logsContent.querySelector('p[style*="text-align: center"]')) {
+    logsContent.innerHTML = '';
+  }
+  
+  const logEntry = document.createElement('div');
+  logEntry.className = `log-entry log-${type}`;
+  logEntry.style.cssText = 'padding: 0.5rem; border-bottom: 1px solid var(--border-light); font-family: monospace; font-size: 0.875rem;';
+  
+  const timestamp = new Date().toLocaleTimeString();
+  logEntry.innerHTML = `<span style="color: var(--text-secondary); margin-right: 0.5rem;">[${timestamp}]</span><span>${escapeHtml(message)}</span>`;
+  
+  logsContent.appendChild(logEntry);
+  
+  // Auto-scroll to bottom
+  logsContent.scrollTop = logsContent.scrollHeight;
+}
+
+function updateDeploymentStatus(status, text) {
+  const statusBadge = document.getElementById('deployment-status-badge');
+  const statusText = document.getElementById('deployment-status-text');
+  
+  if (statusBadge) {
+    statusBadge.className = `status-badge status-${status}`;
+  }
+  if (statusText) {
+    statusText.textContent = text;
+  }
+}
+
+function showDeploymentSuccessPage(result) {
+  // Close deployment logs WebSocket
+  if (deploymentLogsWebSocket) {
+    deploymentLogsWebSocket.close();
+    deploymentLogsWebSocket = null;
+  }
+  
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(page => {
+    page.style.display = 'none';
+  });
+  
+  // Show success page
+  const successPage = document.getElementById('page-deployment-success');
+  if (successPage) {
+    successPage.style.display = 'block';
+    document.getElementById('pageTitle').textContent = 'Deployment Successful';
+    
+    // Update deployment info
+    const projectName = currentProject?.name || result.project_name || 'Untitled Project';
+    const deployedUrl = result.deployed_url || '';
+    
+    document.getElementById('success-project-name').textContent = projectName;
+    document.getElementById('success-deployed-url').textContent = deployedUrl || 'Not available';
+    document.getElementById('success-status').textContent = 'Running';
+    
+    // Set website preview iframe
+    if (deployedUrl) {
+      const preview = document.getElementById('website-preview');
+      if (preview) {
+        preview.src = deployedUrl;
+      }
+      
+      // Set open site button
+      const openBtn = document.getElementById('open-deployed-site-btn');
+      if (openBtn) {
+        openBtn.onclick = () => {
+          window.open(deployedUrl, '_blank');
+        };
+      }
+    } else {
+      // Hide preview if no URL
+      const previewContainer = document.getElementById('website-preview-container');
+      if (previewContainer) {
+        previewContainer.style.display = 'none';
+      }
+    }
+    
+    // Set view projects button
+    const viewProjectsBtn = document.getElementById('view-projects-btn');
+    if (viewProjectsBtn) {
+      viewProjectsBtn.onclick = () => {
+        router.navigate('/applications');
+        loadProjects();
+      };
+    }
+  }
+  
+  // Setup deployment logs buttons
+  const clearBtn = document.getElementById('clearDeploymentLogsBtn');
+  const toggleBtn = document.getElementById('toggleDeploymentLogsBtn');
+  
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      const logsContent = document.getElementById('deploymentLogsContent');
+      if (logsContent) {
+        logsContent.innerHTML = '';
+      }
+    };
+  }
+  
+  if (toggleBtn) {
+    toggleBtn.onclick = () => {
+      deploymentLogsPaused = !deploymentLogsPaused;
+      toggleBtn.textContent = deploymentLogsPaused ? 'Resume' : 'Pause';
+      if (!deploymentLogsPaused && deploymentLogsBuffer.length > 0) {
+        deploymentLogsBuffer.forEach(log => appendDeploymentLog(log.message, log.type));
+        deploymentLogsBuffer = [];
+      }
+    };
+  }
+}
 
 // Command Palette (Netlify-style)
 function setupCommandPalette() {

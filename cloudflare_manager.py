@@ -67,9 +67,16 @@ def _ensure_fallback_rule(ingress: List[Dict]) -> List[Dict]:
 
 
 def _build_service_entry(hostname: str, service_url: str, origin_request: Optional[Dict] = None) -> Dict:
+    # Force HTTP for Cloudflare Tunnel - Cloudflare handles SSL termination at the edge
+    # Convert any HTTPS URLs to HTTP to avoid SSL cipher mismatch errors
+    if service_url.startswith("https://"):
+        service_url = service_url.replace("https://", "http://", 1)
+    
     entry: Dict[str, object] = {"hostname": hostname, "service": service_url}
     if origin_request is None:
         origin_request = {}
+    # Ensure noSSLVerify is set to handle any SSL issues
+    origin_request.setdefault("noTLSVerify", False)
     entry["originRequest"] = origin_request
     return entry
 
@@ -112,6 +119,11 @@ def _delete_dns_record(zone_id: str, hostname: str, token: str) -> None:
 
 def ensure_project_hostname(hostname: str, service_url: str) -> None:
     """Create or update Cloudflare ingress + DNS so the hostname routes to the service URL."""
+    
+    # Force HTTP for Cloudflare Tunnel - Cloudflare handles SSL termination at the edge
+    # This prevents SSL_ERROR_NO_CYPHER_OVERLAP errors
+    if service_url.startswith("https://"):
+        service_url = service_url.replace("https://", "http://", 1)
 
     account_id = _get_env("CLOUDFLARE_ACCOUNT_ID")
     tunnel_id = _get_env("CLOUDFLARE_TUNNEL_ID")

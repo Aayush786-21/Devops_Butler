@@ -39,7 +39,7 @@ class Deployment(SQLModel, table=True):
     # It's 'Optional' because a deployment might fail before a URL is created.
     deployed_url: Optional[str] = None
 
-    # Optional custom domain (e.g., project.butler.example.com)
+    # Optional custom domain (e.g., project.example.com)
     custom_domain: Optional[str] = Field(default=None, index=True)
 
     # Domain sync status information (e.g., active, pending, error)

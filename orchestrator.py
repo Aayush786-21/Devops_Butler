@@ -1104,14 +1104,22 @@ async def deploy(
                                     if dep.custom_domain:
                                         try:
                                             # Use host_port (port forwarding from VM to Mac) for Cloudflare tunnel
+                                            # IMPORTANT: Cloudflare tunnel runs on Mac and can ONLY access localhost
                                             if dep.host_port:
                                                 service_url = f"http://localhost:{dep.host_port}"
-                                            elif dep.vm_ip and dep.port:
-                                                # Fallback: Use VM IP and port directly (legacy)
-                                                service_url = f"http://{dep.vm_ip}:{dep.port}"
                                             elif dep.port:
-                                                # Fallback: Use localhost with VM port
+                                                # Fallback: Use localhost with VM port (OrbStack auto-forwards)
+                                                # NEVER use VM IP - Cloudflare tunnel can't reach it
                                                 service_url = f"http://localhost:{dep.port}"
+                                            elif dep.vm_ip and dep.port:
+                                                # Last resort: VM IP (should never happen, but try anyway)
+                                                global_logger.log_structured(
+                                                    level=LogLevel.WARNING,
+                                                    category=LogCategory.NETWORK,
+                                                    message=f"Using VM IP for service URL (not recommended): {dep.vm_ip}:{dep.port}",
+                                                    component="deployment"
+                                                )
+                                                service_url = f"http://{dep.vm_ip}:{dep.port}"
                                             else:
                                                 # Fallback to deriving from deployed_url (not ideal)
                                                 service_url = _derive_service_url(deployed_url)
@@ -1803,7 +1811,7 @@ async def detect_monorepo(
 
 
 @app.get("/deployments")
-def list_deployments(
+async def list_deployments(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -1844,6 +1852,73 @@ def list_deployments(
                 except Exception:
                     # If HTTP request fails, service is not running
                     is_running = False
+                    
+                    # AUTO-RESTART: If deployment is marked "running" but service isn't accessible, restart it
+                    if deployment.status == "running" and deployment.start_command and deployment.project_dir:
+                        try:
+                            from vm_manager import vm_manager
+                            vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
+                            port = deployment.host_port or deployment.port
+                            
+                            # Stop any existing process
+                            if deployment.process_pid:
+                                await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"kill -9 {deployment.process_pid} 2>/dev/null || true"
+                                )
+                            if port:
+                                await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"lsof -ti :{port} 2>/dev/null | while read pid; do kill -9 $pid 2>/dev/null; done || true"
+                                )
+                            
+                            await asyncio.sleep(1)
+                            
+                            # Start the service
+                            log_file = f"/tmp/project-{deployment.id}.log"
+                            start_cmd = f"cd {deployment.project_dir} && nohup {deployment.start_command} > {log_file} 2>&1 &"
+                            await vm_manager.exec_in_vm(vm_name, start_cmd)
+                            
+                            await asyncio.sleep(2)
+                            
+                            # Find PID and verify
+                            pid_result = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"pgrep -f 'http.server {port}' | head -1 || lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
+                            )
+                            pid_str = pid_result.stdout.strip() if pid_result.stdout else None
+                            pid = int(pid_str.split()[0]) if pid_str and pid_str.split() else None
+                            
+                            # Verify it's accessible now
+                            try:
+                                service_url = f"http://localhost:{port}"
+                                response = httpx.get(service_url, timeout=2.0, follow_redirects=True)
+                                if response.status_code == 200:
+                                    is_running = True
+                                    # Update database
+                                    with Session(engine) as update_session:
+                                        update_deployment = update_session.get(Deployment, deployment.id)
+                                        if update_deployment:
+                                            update_deployment.process_pid = pid
+                                            update_session.add(update_deployment)
+                                            update_session.commit()
+                                    global_logger.log_structured(
+                                        level=LogLevel.INFO,
+                                        category=LogCategory.DEPLOYMENT,
+                                        message=f"Auto-restarted deployment {deployment.id} - service is now running",
+                                        component="deployment"
+                                    )
+                            except Exception:
+                                pass  # Still not running, will show as stopped
+                        except Exception as e:
+                            global_logger.log_structured(
+                                level=LogLevel.WARNING,
+                                category=LogCategory.DEPLOYMENT,
+                                message=f"Auto-restart failed for deployment {deployment.id}: {e}",
+                                component="deployment"
+                            )
+                            # Don't fail the request, just log the warning
+                            pass
             process_info = {}  # VM processes don't use ProcessManager
         else:
             # For Docker/container deployments, check ProcessManager
@@ -2061,17 +2136,26 @@ def configure_project_domain(
     # Determine if we can sync with Cloudflare now or after deployment
     # Get service URL from deployment using host_port (port forwarding from VM to Mac)
     # deployed_url is the public Cloudflare URL, not the actual service URL
+    # IMPORTANT: Cloudflare tunnel runs on Mac and can ONLY access localhost, never VM IP
     service_url: Optional[str] = None
     if deployment.host_port:
         # Use host_port - this is the Mac port that forwards to VM's port
         # Cloudflare tunnel runs on Mac, so it connects to localhost:host_port
         service_url = f"http://localhost:{deployment.host_port}"
-    elif deployment.vm_ip and deployment.port:
-        # Fallback: Use VM IP and port directly (legacy, for deployments without host_port)
-        service_url = f"http://{deployment.vm_ip}:{deployment.port}"
     elif deployment.port:
-        # Fallback: Use localhost with VM port (assumes automatic port forwarding)
+        # Fallback: Use localhost with VM port (OrbStack automatically forwards VM port to same host port)
+        # NEVER use VM IP - Cloudflare tunnel can't reach it
         service_url = f"http://localhost:{deployment.port}"
+    elif deployment.vm_ip and deployment.port:
+        # Last resort: VM IP (should never happen, but log warning if it does)
+        # This will likely fail, but we try it anyway
+        global_logger.log_structured(
+            level=LogLevel.WARNING,
+            category=LogCategory.NETWORK,
+            message=f"Using VM IP for service URL (not recommended): {deployment.vm_ip}:{deployment.port}",
+            component="cloudflare"
+        )
+        service_url = f"http://{deployment.vm_ip}:{deployment.port}"
     elif deployment.deployed_url:
         # Last resort: try to derive from deployed_url (not ideal)
         try:
@@ -2081,22 +2165,98 @@ def configure_project_domain(
 
     deployment.custom_domain = desired
 
-    if service_url:
-        try:
-            ensure_project_hostname(desired, service_url)
-            deployment.domain_status = "active"
-            deployment.last_domain_sync = datetime.datetime.utcnow()
-            action_name = "domain_configured"
-        except CloudflareError as exc:
-            global_logger.log_error(f"Cloudflare configuration failed: {exc}")
-            deployment.domain_status = "error"
-            session.add(deployment)
-            session.commit()
-            raise HTTPException(status_code=502, detail=f"Failed to configure Cloudflare: {exc}")
-    else:
-        deployment.domain_status = "pending"
+    # Ensure we have a valid service URL before configuring Cloudflare
+    if not service_url:
+        # If we don't have a service URL, we can't configure Cloudflare
+        # This should rarely happen if deployment has port information
+        error_msg = (
+            f"Cannot configure domain '{desired}': No service URL available. "
+            f"Deployment needs port information (host_port={deployment.host_port}, "
+            f"port={deployment.port}, vm_ip={deployment.vm_ip})"
+        )
+        global_logger.log_error(error_msg)
+        deployment.domain_status = "error"
         deployment.last_domain_sync = None
-        action_name = "domain_pending"
+        session.add(deployment)
+        session.commit()
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    # Validate service URL format
+    if not service_url.startswith("http://") and not service_url.startswith("https://"):
+        error_msg = f"Invalid service URL format: {service_url}"
+        global_logger.log_error(error_msg)
+        deployment.domain_status = "error"
+        session.add(deployment)
+        session.commit()
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    # OPTIONAL: Check if service is accessible (for informational purposes only)
+    # NOTE: We allow domain configuration even if service isn't running yet
+    # Users can configure domain first, then start the service later
+    # The domain will work once the service is running
+    try:
+        import httpx
+        response = httpx.get(service_url, timeout=3.0, follow_redirects=True)
+        if response.status_code >= 500:
+            # Service returned server error - might be starting up
+            global_logger.log_structured(
+                level=LogLevel.WARNING,
+                category=LogCategory.NETWORK,
+                message=f"Service at {service_url} returned {response.status_code} - may be starting up",
+                component="cloudflare"
+            )
+        elif response.status_code >= 400:
+            # Client error - service is running but has issues
+            global_logger.log_structured(
+                level=LogLevel.WARNING,
+                category=LogCategory.NETWORK,
+                message=f"Service at {service_url} returned {response.status_code} - service may have issues",
+                component="cloudflare"
+            )
+        else:
+            # Service is accessible (200, 301, 302, etc.)
+            global_logger.log_structured(
+                level=LogLevel.INFO,
+                category=LogCategory.NETWORK,
+                message=f"Service at {service_url} is accessible (status {response.status_code})",
+                component="cloudflare"
+            )
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+        # Service is not accessible - log warning but allow domain configuration
+        # User can start the service later, and the domain will work
+        global_logger.log_structured(
+            level=LogLevel.WARNING,
+            category=LogCategory.NETWORK,
+            message=f"Service at {service_url} is not currently accessible: {e}. Domain will be configured anyway - service can be started later.",
+            component="cloudflare"
+        )
+    except Exception as e:
+        # Unexpected error during health check - log but don't fail
+        global_logger.log_structured(
+            level=LogLevel.WARNING,
+            category=LogCategory.NETWORK,
+            message=f"Health check warning for {service_url}: {e} - proceeding anyway",
+            component="cloudflare"
+        )
+
+    try:
+        ensure_project_hostname(desired, service_url)
+        deployment.domain_status = "active"
+        deployment.last_domain_sync = datetime.datetime.utcnow()
+        action_name = "domain_configured"
+        global_logger.log_structured(
+            level=LogLevel.INFO,
+            category=LogCategory.NETWORK,
+            message=f"Successfully configured domain '{desired}' -> {service_url}",
+            component="cloudflare"
+        )
+    except CloudflareError as exc:
+        error_msg = f"Cloudflare configuration failed for '{desired}': {exc}"
+        global_logger.log_error(error_msg)
+        deployment.domain_status = "error"
+        session.add(deployment)
+        session.commit()
+        raise HTTPException(status_code=502, detail=error_msg)
 
     session.add(deployment)
     session.commit()
@@ -2139,14 +2299,24 @@ def fix_cloudflare_tunnel(
         raise HTTPException(status_code=400, detail="No domain configured for this deployment")
     
     # Use host_port (port forwarding from VM to Mac) for Cloudflare tunnel
+    # IMPORTANT: Cloudflare tunnel runs on Mac and can ONLY access localhost, never VM IP
     if deployment.host_port:
         service_url = f"http://localhost:{deployment.host_port}"
+    elif deployment.port:
+        # Fallback: Use localhost with VM port (OrbStack automatically forwards VM port to same host port)
+        # NEVER use VM IP - Cloudflare tunnel can't reach it
+        service_url = f"http://localhost:{deployment.port}"
     elif deployment.vm_ip and deployment.port:
-        # Fallback: Use VM IP and port directly (legacy)
+        # Last resort: VM IP (should never happen, but log warning if it does)
+        global_logger.log_structured(
+            level=LogLevel.WARNING,
+            category=LogCategory.NETWORK,
+            message=f"Using VM IP for service URL (not recommended): {deployment.vm_ip}:{deployment.port}",
+            component="cloudflare"
+        )
         service_url = f"http://{deployment.vm_ip}:{deployment.port}"
     else:
-        # Fallback: Use localhost with VM port
-        service_url = f"http://localhost:{deployment.port}"
+        raise HTTPException(status_code=400, detail="Cannot determine service URL: missing port information")
     
     try:
         ensure_project_hostname(hostname, service_url)
@@ -2314,48 +2484,128 @@ async def restart_project(
             if not deployment.start_command or not deployment.project_dir:
                 raise HTTPException(status_code=400, detail="Project not properly deployed. Missing start command or project directory.")
             
-            # Restart process using process manager
-            try:
-                # Prepare environment variables
-                env_vars = {}
-                env_vars_list = session.exec(
-                    select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
-                ).all()
-                if env_vars_list:
-                    env_vars = {var.key: var.value for var in env_vars_list}
-                
-                success, pid, error = await pm.restart_process(
-                    project_id=deployment.container_name,
-                    command=deployment.start_command,
-                    cwd=deployment.project_dir,
-                    env=env_vars,
-                    port=deployment.port
-                )
-                
-                if success:
-                    # Update deployment in database
-                    deployment.process_pid = pid
-                    deployment.status = "running"
-                    session.add(deployment)
-                    session.commit()
+            # Check if this is a VM-based deployment
+            is_vm_deployment = deployment.vm_name is not None
+            
+            if is_vm_deployment:
+                # VM-based deployment: restart service in VM
+                try:
+                    from vm_manager import vm_manager
+                    vm_name = deployment.vm_name or f"butler-user-{current_user.id}"
+                    port = deployment.host_port or deployment.port
                     
-                    global_logger.log_user_action(
-                        user_id=str(current_user.id),
-                        action="restart_project",
-                        details={"project_id": project_id, "container_name": deployment.container_name}
+                    # Stop existing process
+                    if deployment.process_pid:
+                        await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"kill -9 {deployment.process_pid} 2>/dev/null || true"
+                        )
+                    
+                    # Kill any process on the port
+                    if port:
+                        await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"lsof -ti :{port} 2>/dev/null | while read pid; do kill -9 $pid 2>/dev/null; done || true"
+                        )
+                    
+                    await asyncio.sleep(1)
+                    
+                    # Start the service
+                    log_file = f"/tmp/project-{deployment.id}.log"
+                    start_cmd = f"cd {deployment.project_dir} && nohup {deployment.start_command} > {log_file} 2>&1 &"
+                    
+                    result = await vm_manager.exec_in_vm(vm_name, start_cmd)
+                    
+                    await asyncio.sleep(2)
+                    
+                    # Find the PID
+                    pid_result = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"pgrep -f 'http.server {port}' | head -1 || lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
                     )
-                    return {
-                        "project_id": project_id,
-                        "container_name": deployment.container_name,
-                        "status": "restarted",
-                        "message": "Project restarted successfully",
-                        "pid": pid
-                    }
-                else:
-                    raise HTTPException(status_code=500, detail=f"Failed to restart process: {error}")
+                    pid_str = pid_result.stdout.strip() if pid_result.stdout else None
+                    pid = int(pid_str.split()[0]) if pid_str and pid_str.split() else None
                     
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error restarting process: {str(e)}")
+                    # Verify service is accessible
+                    service_accessible = False
+                    if port:
+                        try:
+                            service_url = f"http://localhost:{port}"
+                            response = httpx.get(service_url, timeout=2.0, follow_redirects=True)
+                            service_accessible = response.status_code == 200
+                        except Exception:
+                            service_accessible = False
+                    
+                    if service_accessible:
+                        # Update deployment in database
+                        deployment.process_pid = pid
+                        deployment.status = "running"
+                        session.add(deployment)
+                        session.commit()
+                        
+                        global_logger.log_user_action(
+                            user_id=str(current_user.id),
+                            action="restart_project",
+                            details={"project_id": project_id, "vm_name": vm_name}
+                        )
+                        return {
+                            "project_id": project_id,
+                            "container_name": deployment.container_name,
+                            "status": "restarted",
+                            "message": "Project restarted successfully",
+                            "pid": pid
+                        }
+                    else:
+                        raise HTTPException(status_code=500, detail="Service restarted but not accessible. Check logs for errors.")
+                        
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    global_logger.log_error(f"Error restarting VM deployment: {e}")
+                    raise HTTPException(status_code=500, detail=f"Error restarting process: {str(e)}")
+            else:
+                # Docker/container deployment: use ProcessManager
+                try:
+                    # Prepare environment variables
+                    env_vars = {}
+                    env_vars_list = session.exec(
+                        select(EnvironmentVariable).where(EnvironmentVariable.user_id == current_user.id)
+                    ).all()
+                    if env_vars_list:
+                        env_vars = {var.key: var.value for var in env_vars_list}
+                    
+                    success, pid, error = await pm.restart_process(
+                        project_id=deployment.container_name,
+                        command=deployment.start_command,
+                        cwd=deployment.project_dir,
+                        env=env_vars,
+                        port=deployment.port
+                    )
+                    
+                    if success:
+                        # Update deployment in database
+                        deployment.process_pid = pid
+                        deployment.status = "running"
+                        session.add(deployment)
+                        session.commit()
+                        
+                        global_logger.log_user_action(
+                            user_id=str(current_user.id),
+                            action="restart_project",
+                            details={"project_id": project_id, "container_name": deployment.container_name}
+                        )
+                        return {
+                            "project_id": project_id,
+                            "container_name": deployment.container_name,
+                            "status": "restarted",
+                            "message": "Project restarted successfully",
+                            "pid": pid
+                        }
+                    else:
+                        raise HTTPException(status_code=500, detail=f"Failed to restart process: {error}")
+                        
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Error restarting process: {str(e)}")
             
     except HTTPException:
         raise
@@ -2387,6 +2637,7 @@ async def delete_project(
             vm_name = deployment.vm_name or f"butler-user-{current_user.id}"
             
             # Stop process if running (inside VM)
+            # Method 1: Kill by PID if available
             if deployment.process_pid:
                 try:
                     await vm_manager.exec_in_vm(
@@ -2394,15 +2645,63 @@ async def delete_project(
                         f"kill -9 {deployment.process_pid} 2>/dev/null || true",
                         cwd=deployment.project_dir if deployment.project_dir else None
                     )
-                    global_logger.log_info(f"Stopped process {deployment.process_pid} for project {project_id}")
+                    global_logger.log_structured(
+                        level=LogLevel.INFO,
+                        category=LogCategory.DEPLOYMENT,
+                        message=f"Stopped process {deployment.process_pid} for project {project_id}",
+                        component="deployment"
+                    )
                 except Exception as e:
                     global_logger.log_error(f"Error stopping process {deployment.process_pid}: {e}")
+            
+            # Method 2: Kill any process using the port (more reliable - handles cases where PID is wrong/missing)
+            if deployment.port or deployment.host_port:
+                port_to_kill = deployment.host_port or deployment.port
+                try:
+                    # Find and kill any process using the port in the VM
+                    # Use portable approach: find PIDs first, then kill them
+                    find_pids = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"lsof -ti :{port_to_kill} 2>/dev/null || echo ''"
+                    )
+                    pids = (find_pids.stdout or "").strip()
+                    if pids:
+                        # Kill all PIDs found
+                        for pid in pids.split('\n'):
+                            pid = pid.strip()
+                            if pid:
+                                try:
+                                    await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"kill -9 {pid} 2>/dev/null || true"
+                                    )
+                                except Exception:
+                                    pass
+                        global_logger.log_structured(
+                            level=LogLevel.INFO,
+                            category=LogCategory.DEPLOYMENT,
+                            message=f"Killed process(es) using port {port_to_kill} for project {project_id}: {pids}",
+                            component="deployment"
+                        )
+                    else:
+                        # Try alternative method with fuser (if available)
+                        await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"fuser -k {port_to_kill}/tcp 2>/dev/null || true"
+                        )
+                except Exception as e:
+                    global_logger.log_error(f"Error killing process on port {port_to_kill}: {e}")
             
             # Remove Cloudflare DNS record if custom domain exists
             if deployment.custom_domain:
                 try:
                     remove_project_hostname(deployment.custom_domain)
-                    global_logger.log_info(f"Removed Cloudflare DNS record for {deployment.custom_domain}")
+                    global_logger.log_structured(
+                        level=LogLevel.INFO,
+                        category=LogCategory.NETWORK,
+                        message=f"Removed Cloudflare DNS record for {deployment.custom_domain}",
+                        component="cloudflare"
+                    )
                 except Exception as e:
                     global_logger.log_error(f"Error removing Cloudflare DNS record: {e}")
                     # Continue with deletion even if Cloudflare removal fails
@@ -2430,16 +2729,31 @@ async def delete_project(
                         )
                         
                         if "deleted" in (verify_result.stdout or "").strip():
-                            global_logger.log_info(f"Successfully removed project directory {deployment.project_dir} from VM {vm_name}")
+                            global_logger.log_structured(
+                                level=LogLevel.INFO,
+                                category=LogCategory.DEPLOYMENT,
+                                message=f"Successfully removed project directory {deployment.project_dir} from VM {vm_name}",
+                                component="deployment"
+                            )
                         else:
-                            global_logger.log_warning(f"Project directory {deployment.project_dir} may still exist in VM {vm_name}")
+                            global_logger.log_structured(
+                                level=LogLevel.WARNING,
+                                category=LogCategory.DEPLOYMENT,
+                                message=f"Project directory {deployment.project_dir} may still exist in VM {vm_name}",
+                                component="deployment"
+                            )
                             # Try again with force
                             await vm_manager.exec_in_vm(
                                 vm_name,
                                 f"sudo rm -rf {deployment.project_dir} 2>&1 || rm -rf {deployment.project_dir} 2>&1 || true"
                             )
                     else:
-                        global_logger.log_info(f"Project directory {deployment.project_dir} does not exist in VM {vm_name}, skipping deletion")
+                        global_logger.log_structured(
+                            level=LogLevel.INFO,
+                            category=LogCategory.DEPLOYMENT,
+                            message=f"Project directory {deployment.project_dir} does not exist in VM {vm_name}, skipping deletion",
+                            component="deployment"
+                        )
                 except Exception as e:
                     global_logger.log_error(f"Error removing project directory {deployment.project_dir} from VM: {e}")
                     # Try to remove anyway as a fallback
@@ -2455,7 +2769,12 @@ async def delete_project(
                 if os.path.exists(deployment.project_dir):
                     try:
                         shutil.rmtree(deployment.project_dir, ignore_errors=True)
-                        global_logger.log_info(f"Removed legacy project directory {deployment.project_dir} from host")
+                        global_logger.log_structured(
+                            level=LogLevel.INFO,
+                            category=LogCategory.DEPLOYMENT,
+                            message=f"Removed legacy project directory {deployment.project_dir} from host",
+                            component="deployment"
+                        )
                     except Exception as e:
                         global_logger.log_error(f"Error removing legacy project directory {deployment.project_dir} from host: {e}")
 
@@ -2514,16 +2833,31 @@ async def delete_project(
                             )
                             
                             if "deleted" in (verify_result.stdout or "").strip():
-                                global_logger.log_info(f"Successfully removed child project directory {child.project_dir} from VM {child_vm_name}")
+                                global_logger.log_structured(
+                                    level=LogLevel.INFO,
+                                    category=LogCategory.DEPLOYMENT,
+                                    message=f"Successfully removed child project directory {child.project_dir} from VM {child_vm_name}",
+                                    component="deployment"
+                                )
                             else:
-                                global_logger.log_warning(f"Child project directory {child.project_dir} may still exist in VM {child_vm_name}")
+                                global_logger.log_structured(
+                                    level=LogLevel.WARNING,
+                                    category=LogCategory.DEPLOYMENT,
+                                    message=f"Child project directory {child.project_dir} may still exist in VM {child_vm_name}",
+                                    component="deployment"
+                                )
                                 # Try again with force
                                 await vm_manager.exec_in_vm(
                                     child_vm_name,
                                     f"sudo rm -rf {child.project_dir} 2>&1 || rm -rf {child.project_dir} 2>&1 || true"
                                 )
                         else:
-                            global_logger.log_info(f"Child project directory {child.project_dir} does not exist in VM {child_vm_name}, skipping deletion")
+                            global_logger.log_structured(
+                                level=LogLevel.INFO,
+                                category=LogCategory.DEPLOYMENT,
+                                message=f"Child project directory {child.project_dir} does not exist in VM {child_vm_name}, skipping deletion",
+                                component="deployment"
+                            )
                     except Exception as e:
                         global_logger.log_error(f"Error removing child project directory {child.project_dir} from VM: {e}")
                         # Try to remove anyway as a fallback

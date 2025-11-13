@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer
 from typing import List, Optional
 import httpx
+import os
 from auth import get_current_user, verify_token
 from login import User
 
@@ -17,6 +18,24 @@ router_repos = APIRouter(prefix="/api/repositories", tags=["repositories"])
 
 # Security scheme for optional authentication
 security = HTTPBearer(auto_error=False)
+
+def get_github_token(current_user: Optional[User] = None) -> Optional[str]:
+    """
+    Get GitHub token for API authentication.
+    Priority: 1) User's token, 2) Global PAT from environment variable
+    
+    Args:
+        current_user: Current authenticated user (optional)
+    
+    Returns:
+        GitHub token string or None
+    """
+    # Priority 1: User's personal GitHub token
+    if current_user and hasattr(current_user, 'github_access_token') and current_user.github_access_token:
+        return current_user.github_access_token
+    
+    # Priority 2: Global PAT from environment variable
+    return os.getenv("GITHUB_PAT") or os.getenv("GITHUB_TOKEN")
 
 async def get_optional_current_user(request: Request) -> Optional[User]:
     """
@@ -63,9 +82,10 @@ async def get_repository_contents(
                 "Accept": "application/vnd.github.v3+json"
             }
             
-            # Add authorization if user is authenticated and has GitHub token
-            if current_user and hasattr(current_user, 'github_access_token') and current_user.github_access_token:
-                headers["Authorization"] = f"token {current_user.github_access_token}"
+            # Add authorization: prefer user's token, fallback to global PAT
+            github_token = get_github_token(current_user)
+            if github_token:
+                headers["Authorization"] = f"token {github_token}"
             params = {"ref": branch}
             
             response = await client.get(url, headers=headers, params=params)
@@ -107,9 +127,10 @@ async def get_file_content(
                 "Accept": "application/vnd.github.v3+json"
             }
             
-            # Add authorization if user is authenticated and has GitHub token
-            if current_user and hasattr(current_user, 'github_access_token') and current_user.github_access_token:
-                headers["Authorization"] = f"token {current_user.github_access_token}"
+            # Add authorization: prefer user's token, fallback to global PAT
+            github_token = get_github_token(current_user)
+            if github_token:
+                headers["Authorization"] = f"token {github_token}"
             params = {"ref": branch}
             
             response = await client.get(url, headers=headers, params=params)
@@ -162,9 +183,10 @@ async def get_user_repositories(
                 "Accept": "application/vnd.github.v3+json"
             }
             
-            # Add authorization if user is authenticated and has GitHub token
-            if current_user and hasattr(current_user, 'github_access_token') and current_user.github_access_token:
-                headers["Authorization"] = f"token {current_user.github_access_token}"
+            # Add authorization: prefer user's token, fallback to global PAT
+            github_token = get_github_token(current_user)
+            if github_token:
+                headers["Authorization"] = f"token {github_token}"
             
             params = {
                 "type": "public",
