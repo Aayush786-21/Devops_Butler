@@ -71,7 +71,8 @@ def parse_readme_for_commands(readme_path: str) -> Tuple[Optional[str], Optional
             if not build_cmd:
                 build_cmd = 'pip install -r requirements.txt'
             if 'python app.py' in content or 'flask run' in content:
-                start_cmd = 'python app.py'
+                # Flask - prefer flask run with --host 0.0.0.0
+                start_cmd = 'flask run --host 0.0.0.0 --port 5000 || python app.py'
                 default_port = 5000
             elif 'python manage.py runserver' in content or 'django' in content.lower():
                 start_cmd = 'python manage.py runserver 0.0.0.0:8000'
@@ -229,7 +230,8 @@ async def detect_build_and_start_commands(repo_dir: str) -> Tuple[Optional[str],
             # Check for Flask
             if os.path.exists(os.path.join(repo_dir, 'app.py')):
                 build_cmd = 'pip install -r requirements.txt'
-                start_cmd = 'python app.py'
+                # Flask - prefer flask run with --host 0.0.0.0
+                start_cmd = 'flask run --host 0.0.0.0 --port 5000 || python app.py'
                 default_port = 5000
             # Check for Django
             elif os.path.exists(os.path.join(repo_dir, 'manage.py')):
@@ -283,7 +285,7 @@ async def detect_build_and_start_commands(repo_dir: str) -> Tuple[Optional[str],
     if not build_cmd and any(f.endswith('.html') for f in os.listdir(repo_dir) if os.path.isfile(os.path.join(repo_dir, f))):
         # Simple static server
         build_cmd = None  # No build needed
-        start_cmd = 'python3 -m http.server 8080'
+        start_cmd = 'python3 -m http.server 8080 --bind 0.0.0.0'
         default_port = 8080
     
     return build_cmd, start_cmd, default_port
@@ -621,7 +623,7 @@ async def run_process_deployment(
                         build_command = None  # No build needed for static sites
                         if not start_command:
                             # Use Python's built-in HTTP server for static sites
-                            start_command = "python3 -m http.server 8080"
+                            start_command = "python3 -m http.server 8080 --bind 0.0.0.0"
                             await manager.broadcast(f"✅ Detected start command for static site: {start_command}")
                         if not port:
                             port = 8080
@@ -857,9 +859,9 @@ async def run_process_deployment(
                             build_command = "pip install -r requirements.txt"
                         
                         if python_file == 'app.py':
-                            # Flask project
+                            # Flask project - try flask run first (binds to 0.0.0.0), fallback to python app.py
                             if not start_command:
-                                start_command = "python app.py"
+                                start_command = "flask run --host 0.0.0.0 --port 5000 || python app.py"
                             if not port:
                                 port = 5000
                             await manager.broadcast(f"✅ Detected Python Flask project")
@@ -993,7 +995,7 @@ async def run_process_deployment(
                 
                 if "found" in (html_check.stdout or "").strip():
                     # Static HTML site detected - use Python HTTP server
-                    start_command = "python3 -m http.server 8080"
+                    start_command = "python3 -m http.server 8080 --bind 0.0.0.0"
                     if not port:
                         port = 8080
                     if not build_command:
@@ -1004,7 +1006,7 @@ async def run_process_deployment(
                     logger.warning(f"⚠️ No start command detected and not a static site. Using safe fallback.")
                     await manager.broadcast(f"⚠️ No start command detected. Using fallback: python3 -m http.server 8080")
                     # Use static server as fallback (works for most projects)
-                    start_command = "python3 -m http.server 8080"
+                    start_command = "python3 -m http.server 8080 --bind 0.0.0.0"
                     if not port:
                         port = 8080
                     if not build_command:
@@ -1017,7 +1019,7 @@ async def run_process_deployment(
                 await manager.broadcast(f"⚠️ Error checking project type, using safe fallback")
                 # Use static server as fallback (works for most projects)
                 if not start_command:
-                    start_command = "python3 -m http.server 8080"
+                    start_command = "python3 -m http.server 8080 --bind 0.0.0.0"
                     if not port:
                         port = 8080
                     if not build_command:
@@ -1056,10 +1058,68 @@ async def run_process_deployment(
                 await manager.broadcast(f"❌ Critical error: Cannot find deployment record: {str(e)}")
                 return None
         
+        # Assign unique host port starting from 6001 BEFORE starting the service
+        # OrbStack automatically forwards VM ports to the same port on the host
+        # So we need to find the next available port and make the service bind to it
+        await manager.broadcast(f"🔌 Assigning host port...")
+        
+        # Find next available host port (check existing deployments)
+        with Session(engine) as check_session:
+            existing_ports = set()
+            existing_deployments = check_session.exec(
+                select(Deployment.host_port).where(
+                    Deployment.host_port.is_not(None),
+                    Deployment.id != deployment_id  # Exclude current deployment
+                )
+            ).all()
+            existing_ports.update([p for p in existing_deployments if p])
+        
+        # Find free port starting from 6001
+        host_port = None
+        for candidate_port in range(6001, 6999):
+            if candidate_port not in existing_ports:
+                # Also check if port is actually free on the host
+                import socket
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.bind(('localhost', candidate_port))
+                        host_port = candidate_port
+                        break
+                except OSError:
+                    continue  # Port in use, try next
+        
+        if not host_port:
+            error_msg = "Failed to find free host port (6001-6999 range exhausted)"
+            await manager.broadcast(f"❌ {error_msg}")
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        # Update start_command to use the assigned host port
+        # This ensures the service in VM binds to the correct port
+        original_port = port  # Save original port before updating
+        if start_command and original_port and str(original_port) in start_command:
+            # Replace the port in start_command with host_port
+            import re
+            # For python3 -m http.server, replace port number
+            if "python3 -m http.server" in start_command:
+                start_command = re.sub(r'http\.server\s+\d+', f'http.server {host_port}', start_command)
+            else:
+                # Generic replacement for other commands
+                start_command = start_command.replace(str(original_port), str(host_port))
+            logger.info(f"Updated start_command to use port {host_port}: {start_command}")
+            await manager.broadcast(f"✅ Port {host_port} assigned (updated start command)")
+        else:
+            # If port not in command, we'll use environment variables
+            logger.info(f"Port {host_port} assigned (will use environment variables)")
+            await manager.broadcast(f"✅ Port {host_port} assigned")
+        
+        # Update port to host_port for the service
+        port = host_port
+        
         # Start process inside VM using nohup or PM2 for background execution
         # Use deployment_id as project_id for process tracking
         process_project_id = str(deployment_id)
-        await manager.broadcast(f"🚀 Starting application in VM: {start_command}")
+        await manager.broadcast(f"🚀 Starting application in VM on port {port}: {start_command}")
         
         try:
             # Prepare environment variables
@@ -1068,6 +1128,9 @@ async def run_process_deployment(
                 env_vars_full['PORT'] = str(port)
                 env_vars_full['HOST'] = '0.0.0.0'
                 env_vars_full['HOSTNAME'] = '0.0.0.0'
+                # Flask-specific environment variables
+                env_vars_full['FLASK_RUN_HOST'] = '0.0.0.0'
+                env_vars_full['FLASK_RUN_PORT'] = str(port)
             
             # Use nohup to run process in background inside VM
             # Format: nohup command > log_file 2>&1 &
@@ -1083,7 +1146,9 @@ async def run_process_deployment(
             # Use a wrapper that properly captures the PID of the actual process
             # Format: (cd dir && nohup command > log 2>&1 &) && sleep 1 && pgrep -f 'command' | head -1 > pid_file
             # Better: Just start the process and find PID by port/process name afterwards
-            start_cmd = f"cd {vm_project_dir} && nohup sh -c '{escaped_start_command}' > {log_file} 2>&1 &"
+            # Use simpler command without sh -c wrapper to avoid issues
+            # The --bind flag needs to be passed directly, not through sh -c
+            start_cmd = f"cd {vm_project_dir} && nohup {start_command} > {log_file} 2>&1 &"
             
             # Execute the command with environment variables
             # Note: env vars are exported in exec_in_vm, so they should be available
@@ -1495,22 +1560,24 @@ async def run_process_deployment(
                     print(f"Error: {error_msg}")
                     return None
                 
-                # Generate default domain: project-name.butler.aayush786.xyz
+                # Generate default domain: project-name.aayush786.xyz
                 # Get butler domain from environment
-                butler_domain = os.getenv("BUTLER_DOMAIN", "butler.aayush786.xyz")
+                butler_domain = os.getenv("BUTLER_DOMAIN", "aayush786.xyz")
                 
                 # Generate project slug from app_name or container_name
+                # Import re at function level to avoid any scoping issues
+                import re as re_module
                 if deployment.app_name:
-                    project_slug = re.sub(r"[^a-z0-9]+", "-", deployment.app_name.lower()).strip("-")
+                    project_slug = re_module.sub(r"[^a-z0-9]+", "-", deployment.app_name.lower()).strip("-")
                 else:
                     # Extract from container_name or repo name
                     repo_name = extract_repo_name(deployment.git_url)
-                    project_slug = re.sub(r"[^a-z0-9]+", "-", repo_name.lower()).strip("-")
+                    project_slug = re_module.sub(r"[^a-z0-9]+", "-", repo_name.lower()).strip("-")
                 
                 if not project_slug:
                     project_slug = f"project-{deployment.id}"
                 
-                # Format: project-name.butler.aayush786.xyz (with dot)
+                # Format: project-name.aayush786.xyz (with dot)
                 default_domain = f"{project_slug}.{butler_domain}"
                 
                 # Check if custom domain is configured
@@ -1525,11 +1592,14 @@ async def run_process_deployment(
                 
                 deployed_url = f"https://{domain_to_use}"
                 
-                deployment.status = "running"
+                # Update deployment fields (but NOT status yet - wait for Cloudflare)
                 deployment.deployed_url = deployed_url
-                deployment.build_command = build_command
-                deployment.start_command = start_command
-                deployment.port = port
+                if build_command:
+                    deployment.build_command = build_command
+                if start_command:
+                    deployment.start_command = start_command
+                if port:
+                    deployment.port = port
                 # Only set PID if we have a valid one (not None, not -1)
                 if pid and pid > 0:
                     deployment.process_pid = pid
@@ -1540,23 +1610,45 @@ async def run_process_deployment(
                 deployment.project_dir = project_dir
                 deployment.vm_name = vm_name
                 deployment.vm_ip = vm_ip
-                deployment.host_port = port  # Port in VM, forwarded to host
+                deployment.updated_at = datetime.datetime.utcnow()  # Update timestamp
                 
-                # Configure Cloudflare tunnel to route domain to localhost:port
-                # For VM-based deployment, OrbStack forwards ports from VM to host
-                # So we use localhost:{port} as the service URL
+                # Store host port (already assigned before service started)
+                # Port was already updated to host_port before service started
+                deployment.host_port = port  # port is now the host_port
+                deployment.port = port  # VM port matches host port for OrbStack forwarding
+                deployment.start_command = start_command  # Save updated start_command
+                logger.info(f"✅ Using host port: {port} (OrbStack auto-forwards)")
+                
+                # Configure Cloudflare tunnel to route domain to the service
+                # Use localhost:port since OrbStack automatically forwards VM port to same host port
                 service_url = f"http://localhost:{port}"
+                logger.info(f"Using host port for Cloudflare tunnel: {service_url}")
                 
+                # Configure Cloudflare Tunnel via API - tunnel runs on host, we just configure ingress
                 try:
                     from cloudflare_manager import ensure_project_hostname
+                    
+                    # With Cloudflare Tunnel, we use HTTP for the origin
+                    # Cloudflare handles SSL termination at the edge automatically
+                    # No SSL certificates needed - Cloudflare provides SSL/TLS automatically
+                    # Tunnel is already running on host, we just configure ingress rules via API
+                    await manager.broadcast(f"🌐 Configuring Cloudflare Tunnel...")
+                    
+                    # Configure Cloudflare tunnel ingress via API
+                    # service_url uses VM IP so tunnel on host can reach the service
+                    # Cloudflare will automatically provide SSL/TLS at the edge
                     ensure_project_hostname(domain_to_use, service_url)
                     deployment.domain_status = "active"
                     deployment.last_domain_sync = datetime.datetime.utcnow()
+                    # Only set status to "running" if Cloudflare configuration succeeded
+                    deployment.status = "running"
                     await manager.broadcast(f"✅ Domain configured: {domain_to_use} → {service_url}")
+                    logger.info(f"✅ Cloudflare configured successfully - setting deployment {deployment_id} status to 'running'")
                 except Exception as cf_error:
-                    # Log error but don't fail deployment
+                    # Cloudflare failed - keep status as "imported" or current status
                     deployment.domain_status = "pending"
-                    await manager.broadcast(f"⚠️ Cloudflare configuration failed (will retry later): {str(cf_error)}")
+                    await manager.broadcast(f"⚠️ Cloudflare configuration failed - deployment not marked as running: {str(cf_error)}")
+                    logger.warning(f"⚠️ Cloudflare configuration failed - keeping deployment {deployment_id} status as '{deployment.status}'")
                     print(f"Cloudflare configuration error: {cf_error}")
                 
                 session.add(deployment)

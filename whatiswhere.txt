@@ -1,37 +1,83 @@
 # DevOps Butler - Codebase Location Guide
-# Last Updated: 2025-01-XX
+# Last Updated: 2025-11-12
+
+## SSL/HTTPS Configuration (2025-11-12)
+- **Architecture**: All SSL/TLS is handled by Cloudflare at the edge - no SSL certificates needed on origin
+- **Solution**: Cloudflare Tunnel connects to origin via HTTP, Cloudflare provides SSL/TLS automatically
+- **Location**: `cloudflare_manager.py` - `ensure_project_hostname()` and `_build_service_entry()` functions
+- **Changes**:
+  - All service URLs are automatically converted from HTTPS to HTTP before configuring Cloudflare Tunnel
+  - This ensures Cloudflare connects to origin via HTTP while providing SSL/TLS at the edge for end users
+  - **Completely removed**: `ssl_manager.py` deleted - no SSL certificate generation code
+  - **Completely removed**: certbot installation from VM setup
+  - **Completely removed**: nginx SSL proxy configuration
+- **Benefits**:
+  - Faster deployments (no certificate generation delays)
+  - Simpler setup (no certbot/nginx needed)
+  - No SSL errors (Cloudflare handles everything)
+  - Still secure (Cloudflare provides SSL certificates automatically)
+- **Note**: Users can still access sites via HTTPS - Cloudflare automatically provides SSL certificates and handles encryption
 
 ## Recent Updates (Latest Session)
 
-### AI-Powered Project Analysis with Gemini (Enhanced)
-- **New Feature**: AI analysis of imported projects using Google Gemini AI
-- **Location**: `project_analyzer.py` - Analyzes project structure to detect build/start commands, ports, frameworks, etc.
+### Host Port Forwarding Architecture (2025-11-13)
+- **Change**: Migrated from VM IP-based routing to host port forwarding
+- **Architecture**: 
+  - Cloudflare tunnel runs on Mac host
+  - Each deployment gets a unique host port (6001, 6002, etc.)
+  - OrbStack forwards host port → VM port automatically
+  - Cloudflare tunnel connects to `localhost:<host_port>` on Mac
+- **Benefits**:
+  - No need to track VM IPs (if VM IP changes, port forwarding still works)
+  - Stable host ports per project
+  - Simpler configuration (Cloudflare always uses localhost)
+- **Implementation**:
+  - `vm_manager.py` - `find_free_host_port()` and `setup_port_forwarding()` functions
+  - `process_deployment.py` - Automatically finds free host port and sets up forwarding
+  - `orchestrator.py` - All Cloudflare configs use `localhost:<host_port>`
+- **Port Range**: 6001-6999 (automatically finds free port)
+- **Location**: `vm_manager.py` (lines 574-618), `process_deployment.py` (lines 1557-1580), `orchestrator.py` (multiple endpoints)
+
+### Domain Pattern Change - Single-Level Subdomain (2025-11-13)
+- **Change**: Updated domain pattern from `project-name.butler.aayush786.xyz` to `project-name.aayush786.xyz`
+- **Reason**: Single-level subdomains are covered by `*.aayush786.xyz` wildcard certificate, eliminating SSL errors
+- **Location**: 
+  - `process_deployment.py` - Default domain generation (line 1507)
+  - `orchestrator.py` - `_default_project_domain()` and `_get_butler_domain()` functions (lines 116-118, 133)
+  - `login.py` - Comment update (line 42)
+  - `frontend/src/js/app.js` - Domain display in UI (lines 3048, 3156)
+- **Environment Variable**: `BUTLER_DOMAIN` now defaults to `aayush786.xyz` (was `butler.aayush786.xyz`)
+- **Database**: Updated existing deployment records to use new domain pattern
+- **Cloudflare**: Removed old tunnel entries and configured new domain pattern in Cloudflare tunnel
+- **Impact**: All new deployments will use the single-level subdomain pattern automatically
+- **Verification**: All configurations verified - .env, database, Cloudflare tunnel, and frontend all updated
+
+### Simple and Robust Project Analyzer (Replaced AI-based Analysis)
+- **Major Change**: Replaced complex AI-based analysis with simple, robust file-based detection
+- **Location**: `project_analyzer.py` - Simple file detection to identify project types
+- **Why**: Simpler, faster, more reliable - no AI dependencies, immediate results
+- **Detection Priority**:
+  1. **Static HTML sites** (index.html or multiple .html files) → `build_command=None`, `start_command=python3 -m http.server 8080`, `port=8080`
+  2. **Python projects** (requirements.txt + Python entry points) → Detects Django, Flask, FastAPI, or generic Python
+  3. **JavaScript/Node projects** (package.json) → Detects React, Next.js, Vue.js, Express.js, NestJS, or generic Node.js
+  4. **Docker projects** (Dockerfile) → Detected but not supported (process-based deployment only)
+  5. **Unknown** → Safe defaults
+- **Framework Detection**:
+  - **Static**: Detects pure HTML sites (no build needed)
+  - **Python**: Detects Django (manage.py), Flask (requirements.txt contains Flask), FastAPI (requirements.txt contains fastapi/uvicorn), or generic Python
+  - **JavaScript**: Detects Next.js, React, Vue.js, Express.js, NestJS from package.json dependencies
 - **Integration**: 
-  - Triggered automatically in background after repository is cloned during import
-  - Reads Gemini API key from `.env` file (`GEMINI_API_KEY`)
-  - Updates deployment record with detected build_command, start_command, and port
-  - Runs asynchronously so import doesn't block
-  - **Deployment Integration**: AI analysis results are used by `process_deployment.py` as the second priority (after static site detection, but before Docker/file-based detection) when detecting build and start commands during deployment.
-- **Enhanced Static Site Detection**:
-  - **Priority 1**: Checks for static HTML files FIRST before AI analysis
-  - **AI Prompt Enhancement**: Explicitly instructs AI to detect static sites and never suggest `pip install -r requirements.txt` for static sites
-  - **Validation**: Validates AI suggestions - if AI suggests `pip install -r requirements.txt`, verifies that `requirements.txt` exists AND Python entry points exist
-  - **Override Logic**: If static site detected (via HTML files or AI framework detection), forces `build_command=None`, `start_command=python3 -m http.server 8080`, `port=8080`
-  - **Fallback**: If AI analysis fails or provides incorrect results, uses file-based detection as fallback
-- **Analysis Results**: 
-  - Framework/Technology Stack (validated)
-  - Build Command (validated - never suggests requirements.txt if file doesn't exist)
-  - Start Command (validated)
-  - Install Command (validated)
-  - Port Number (validated - default 8080 if invalid)
-  - Root Directory
-  - Environment Variables
-  - Additional Notes
-- **Dependencies**: `google-generativeai` package (added to requirements.txt)
-- **Error Handling**: Analysis failures don't block import - gracefully handles errors with fallbacks
-- **Location**: `project_analyzer.py`, `orchestrator.py` (import endpoint), `process_deployment.py` (deployment logic), `requirements.txt`
-- **Command Detection Priority**: The deployment logic now follows this priority order: 1) Static HTML site detection (highest priority), 2) User-provided commands, 3) AI analysis results from database (validated), 4) Docker-based detection (docker-compose.yml, Dockerfile), 5) File-based detection (package.json, requirements.txt, etc.). Static site detection always overrides AI results to prevent misclassification.
-- **Robustness**: Deployment never fails completely - always uses fallbacks (static HTTP server) if detection fails or commands are invalid.
+  - Runs **synchronously** during import (not background) - user gets immediate feedback
+  - Updates deployment record immediately with detected build_command, start_command, and port
+  - Broadcasts analysis results in real-time via WebSocket
+- **Benefits**:
+  - **Simple**: No AI API calls, no complex prompts, no JSON parsing
+  - **Fast**: Immediate results, no waiting for AI responses
+  - **Robust**: File-based detection is reliable and predictable
+  - **Effective**: Accurately detects common project types (Static, Python, JavaScript)
+- **Error Handling**: Analysis failures don't block import - gracefully handles errors with safe defaults
+- **Location**: `project_analyzer.py`, `orchestrator.py` (import endpoint at `/api/import`)
+- **Removed**: Complex AI/Gemini integration (no longer needed)
 
 ### MAJOR ARCHITECTURE CHANGE - VM-Based Deployment with OrbStack
 - **New Deployment Model**: Each user gets an isolated OrbStack VM for deployments
@@ -44,7 +90,7 @@
   2. User imports repo → Repo cloned inside VM (`/home/{username}/projects/{deployment_id}`) - dynamically detects VM username
   3. Build command executed inside VM (if needed)
   4. Start command executed inside VM (background process with nohup)
-  5. Domain configured: `project-name.butler.aayush786.xyz` → `localhost:{port}` (via Cloudflare tunnel)
+  5. Domain configured: `project-name.aayush786.xyz` → `localhost:{port}` (via Cloudflare tunnel)
 - **Project Directory Format**: `/home/{username}/projects/{deployment_id}` (dynamically detected username, e.g., `/home/ubuntu/projects/1` or `/home/aayush/projects/1`)
 - **Migration**: Old deployments with `/projects/{deployment_id}` are automatically migrated to `/home/{username}/projects/{deployment_id}` during deployment
 - **Database Changes**: Added VM fields to `Deployment` model:
@@ -52,7 +98,7 @@
   - `vm_ip` (TEXT) - VM IP address
   - `host_port` (INTEGER) - Host port (forwarded from VM)
 - **VM Lifecycle**: VMs are created on user registration, persist across deployments, and can be deleted when user is deleted
-- **Domain Format**: `project-name.butler.aayush786.xyz` (with dot, not hyphen)
+- **Domain Format**: `project-name.aayush786.xyz` (with dot, not hyphen)
 - **Cloudflare Integration**: Domains automatically configured in Cloudflare tunnel after deployment
 - **Location**: `vm_manager.py`, `auth.py` (user registration), `orchestrator.py` (registration endpoint), `process_deployment.py` (VM-based deployment), `login.py` (Deployment model), `database.py` (migrations)
 
@@ -303,7 +349,7 @@
   - **VM-Based**: Gets or creates user's VM, clones repo inside VM, builds/runs inside VM
   - **VM Paths**: Projects stored in `/projects/{project_id}` inside VM
   - **Process Management**: Starts processes in background using `nohup` inside VM
-  - **Domain Generation**: Auto-generates domain as `project-name.butler.aayush786.xyz`
+  - **Domain Generation**: Auto-generates domain as `project-name.aayush786.xyz`
   - **Cloudflare Integration**: Automatically configures Cloudflare tunnel after deployment
 - **VM Operations**: 
   - **Clone**: `vm_manager.exec_in_vm()` to clone repo inside VM
@@ -311,7 +357,7 @@
   - **Start**: `vm_manager.exec_in_vm()` to start process in background inside VM
   - **Process Tracking**: PID stored in `/tmp/project-{id}.pid`, logs in `/tmp/project-{id}.log`
 - **Domain Configuration**: 
-  - **Format**: `project-name.butler.aayush786.xyz` (extracted from project name or repo name)
+  - **Format**: `project-name.aayush786.xyz` (extracted from project name or repo name)
   - **Service URL**: `http://localhost:{port}` (OrbStack forwards VM ports to host)
   - **Cloudflare**: Automatically configures tunnel ingress and DNS records
 - **Monorepo Support**: Detects frontend/backend folders, deploys separately with environment variable linking

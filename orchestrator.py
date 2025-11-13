@@ -19,6 +19,7 @@ import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
 from urllib.parse import urlparse
+import httpx
 
 # Import core modules
 from utils import extract_repo_name, validate_git_url
@@ -114,9 +115,7 @@ class DomainConfigRequest(BaseModel):
 
 
 def _get_butler_domain() -> str:
-    domain = os.getenv("BUTLER_DOMAIN")
-    if not domain:
-        raise HTTPException(status_code=500, detail="BUTLER_DOMAIN environment variable is not configured")
+    domain = os.getenv("BUTLER_DOMAIN", "aayush786.xyz")
     return domain.strip().lower()
 
 
@@ -130,7 +129,7 @@ def _default_project_domain(deployment: Deployment) -> str:
     base_domain = _get_butler_domain()
     fallback = f"project-{deployment.id}" if deployment.id else "project"
     slug = _slugify_project_name(deployment.app_name, fallback)
-    # Format: project-name.butler.aayush786.xyz (with dot, not hyphen)
+    # Format: project-name.aayush786.xyz (with dot, not hyphen)
     return f"{slug}.{base_domain}"
 
 
@@ -1104,7 +1103,18 @@ async def deploy(
                                     dep.deployed_url = deployed_url
                                     if dep.custom_domain:
                                         try:
-                                            service_url = _derive_service_url(deployed_url)
+                                            # Use host_port (port forwarding from VM to Mac) for Cloudflare tunnel
+                                            if dep.host_port:
+                                                service_url = f"http://localhost:{dep.host_port}"
+                                            elif dep.vm_ip and dep.port:
+                                                # Fallback: Use VM IP and port directly (legacy)
+                                                service_url = f"http://{dep.vm_ip}:{dep.port}"
+                                            elif dep.port:
+                                                # Fallback: Use localhost with VM port
+                                                service_url = f"http://localhost:{dep.port}"
+                                            else:
+                                                # Fallback to deriving from deployed_url (not ideal)
+                                                service_url = _derive_service_url(deployed_url)
                                             ensure_project_hostname(dep.custom_domain, service_url)
                                             dep.domain_status = "active"
                                             dep.last_domain_sync = datetime.datetime.utcnow()
@@ -1471,28 +1481,83 @@ async def import_repository(
                     session.add(deployment)
                     session.commit()
             
-            # Trigger AI analysis in the background (don't block import)
+            # Analyze project immediately (synchronous, simple file-based detection)
+            await manager.broadcast("🔍 Analyzing project structure...")
             try:
-                from project_analyzer import analyze_project_in_vm
-                # Run analysis in background task
-                asyncio.create_task(
-                    analyze_project_in_vm(
-                        vm_name=vm_name,
-                        project_dir=vm_project_dir,
-                        deployment_id=deployment_id,
-                        vm_manager=vm_manager,
-                        connection_manager=manager
-                    )
+                from project_analyzer import analyze_project_simple
+                
+                analysis_result = await analyze_project_simple(
+                    vm_name=vm_name,
+                    project_dir=vm_project_dir,
+                    vm_manager=vm_manager,
+                    connection_manager=manager
                 )
-                global_logger.log_user_action(
-                    user_id=str(current_user.id),
-                    action="ai_analysis_started",
-                    details={"project_id": deployment_id, "vm_name": vm_name}
-                )
-                await manager.broadcast("🤖 AI analysis started in background...")
+                
+                # Update deployment with analysis results
+                with Session(engine) as session:
+                    deployment = session.get(Deployment, deployment_id)
+                    if deployment and analysis_result:
+                        framework = analysis_result.get("framework", "Unknown")
+                        is_static = analysis_result.get("is_static", False)
+                        is_python = analysis_result.get("is_python", False)
+                        is_javascript = analysis_result.get("is_javascript", False)
+                        
+                        # Update build command
+                        build_cmd = analysis_result.get("build_command")
+                        if build_cmd:
+                            deployment.build_command = build_cmd
+                        
+                        # Update start command
+                        start_cmd = analysis_result.get("start_command")
+                        if start_cmd:
+                            deployment.start_command = start_cmd
+                        
+                        # Update port
+                        port = analysis_result.get("port")
+                        if port:
+                            deployment.port = port
+                        
+                        session.add(deployment)
+                        session.commit()
+                        
+                        # Broadcast analysis results
+                        framework_msg = f"📊 Framework: {framework}"
+                        if is_static:
+                            framework_msg += " (Static Site)"
+                        elif is_python:
+                            framework_msg += " (Python)"
+                        elif is_javascript:
+                            framework_msg += " (JavaScript/Node.js)"
+                        
+                        await manager.broadcast(framework_msg)
+                        
+                        if build_cmd:
+                            await manager.broadcast(f"🔨 Build: {build_cmd}")
+                        if start_cmd:
+                            await manager.broadcast(f"🚀 Start: {start_cmd}")
+                        if port:
+                            await manager.broadcast(f"🌐 Port: {port}")
+                        
+                        await manager.broadcast("✅ Project analysis completed!")
+                        
+                        global_logger.log_user_action(
+                            user_id=str(current_user.id),
+                            action="project_analyzed",
+                            details={
+                                "project_id": deployment_id,
+                                "framework": framework,
+                                "is_static": is_static,
+                                "is_python": is_python,
+                                "is_javascript": is_javascript
+                            }
+                        )
+                    else:
+                        await manager.broadcast("⚠️ Analysis completed but no results to save")
+                        
             except Exception as e:
-                global_logger.log_error(f"Failed to start AI analysis: {e}")
-                # Don't fail import if analysis fails to start
+                logger.error(f"Failed to analyze project: {e}", exc_info=True)
+                await manager.broadcast(f"⚠️ Analysis failed: {str(e)}")
+                # Don't fail import if analysis fails
                 pass
             
             global_logger.log_user_action(
@@ -1508,7 +1573,7 @@ async def import_repository(
             )
             
             return {
-                "message": "Repository imported and cloned successfully! AI analysis started in background.",
+                "message": "Repository imported, cloned, and analyzed successfully!",
                 "project_id": deployment_id,
                 "app_name": app_name,
                 "git_url": git_url,
@@ -1763,16 +1828,38 @@ def list_deployments(
     deployment_list = []
     for deployment in deployments:
         # Check if process is actually running
-        is_running = deployment.container_name in running_processes and pm.is_process_running(deployment.container_name)
+        # For VM-based deployments, check if vm_name exists (indicates VM deployment)
+        is_vm_deployment = deployment.vm_name is not None
         
-        # Get detailed process info if running
-        process_info = process_details.get(deployment.container_name, {})
+        if is_vm_deployment:
+            # For VM deployments, verify service is actually accessible via HTTP
+            # Only show "running" if HTTP request returns 200 status code
+            is_running = False
+            if deployment.status == "running" and deployment.host_port:
+                try:
+                    # Check if service is accessible on localhost:host_port
+                    service_url = f"http://localhost:{deployment.host_port}"
+                    response = httpx.get(service_url, timeout=2.0, follow_redirects=True)
+                    is_running = response.status_code == 200
+                except Exception:
+                    # If HTTP request fails, service is not running
+                    is_running = False
+            process_info = {}  # VM processes don't use ProcessManager
+        else:
+            # For Docker/container deployments, check ProcessManager
+            is_running = deployment.container_name in running_processes and pm.is_process_running(deployment.container_name)
+            process_info = process_details.get(deployment.container_name, {})
         
         # Determine real status
         if is_running:
             real_status = "running"
         elif deployment.status == "success" or deployment.status == "running":
-            real_status = "stopped"  # Was successful but not currently running
+            # For VM deployments, if curl check failed, mark as stopped
+            # For container deployments, mark as 'stopped' if process isn't running
+            if is_vm_deployment:
+                real_status = "stopped"  # Service not accessible
+            else:
+                real_status = "stopped"  # Was successful but not currently running
         else:
             real_status = deployment.status
         
@@ -1972,12 +2059,25 @@ def configure_project_domain(
             )
 
     # Determine if we can sync with Cloudflare now or after deployment
+    # Get service URL from deployment using host_port (port forwarding from VM to Mac)
+    # deployed_url is the public Cloudflare URL, not the actual service URL
     service_url: Optional[str] = None
-    if deployment.deployed_url:
+    if deployment.host_port:
+        # Use host_port - this is the Mac port that forwards to VM's port
+        # Cloudflare tunnel runs on Mac, so it connects to localhost:host_port
+        service_url = f"http://localhost:{deployment.host_port}"
+    elif deployment.vm_ip and deployment.port:
+        # Fallback: Use VM IP and port directly (legacy, for deployments without host_port)
+        service_url = f"http://{deployment.vm_ip}:{deployment.port}"
+    elif deployment.port:
+        # Fallback: Use localhost with VM port (assumes automatic port forwarding)
+        service_url = f"http://localhost:{deployment.port}"
+    elif deployment.deployed_url:
+        # Last resort: try to derive from deployed_url (not ideal)
         try:
             service_url = _derive_service_url(deployment.deployed_url)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=f"Could not determine service URL: {exc}") from exc
 
     deployment.custom_domain = desired
 
@@ -2012,6 +2112,56 @@ def configure_project_domain(
     )
 
     return _domain_response(deployment)
+
+
+@app.post("/admin/fix-cloudflare-tunnel/{project_id}")
+def fix_cloudflare_tunnel(
+    project_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Fix Cloudflare Tunnel configuration for a specific project to use HTTP."""
+    deployment = session.exec(
+        select(Deployment).where(
+            Deployment.id == project_id,
+            Deployment.user_id == current_user.id
+        )
+    ).first()
+    
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    if not deployment.port:
+        raise HTTPException(status_code=400, detail="Deployment missing port")
+    
+    hostname = deployment.custom_domain or (deployment.deployed_url.replace("https://", "").replace("http://", "").split("/")[0] if deployment.deployed_url else None)
+    if not hostname:
+        raise HTTPException(status_code=400, detail="No domain configured for this deployment")
+    
+    # Use host_port (port forwarding from VM to Mac) for Cloudflare tunnel
+    if deployment.host_port:
+        service_url = f"http://localhost:{deployment.host_port}"
+    elif deployment.vm_ip and deployment.port:
+        # Fallback: Use VM IP and port directly (legacy)
+        service_url = f"http://{deployment.vm_ip}:{deployment.port}"
+    else:
+        # Fallback: Use localhost with VM port
+        service_url = f"http://localhost:{deployment.port}"
+    
+    try:
+        ensure_project_hostname(hostname, service_url)
+        deployment.domain_status = "active"
+        deployment.last_domain_sync = datetime.datetime.utcnow()
+        session.add(deployment)
+        session.commit()
+        return {
+            "success": True,
+            "message": f"Fixed Cloudflare Tunnel configuration for {hostname}",
+            "service_url": service_url
+        }
+    except CloudflareError as exc:
+        global_logger.log_error(f"Cloudflare fix failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Failed to fix Cloudflare configuration: {exc}")
 
 
 @app.delete("/projects/{project_id}/domain")
