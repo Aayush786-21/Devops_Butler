@@ -703,7 +703,8 @@ async def _run_deployment_attempt(
                 
                 # CRITICAL: Always verify Docker files actually exist before using Docker deployment
                 # Don't trust AI - verify the files are really there!
-                if is_docker:
+                # Also check if start_command contains Docker commands - if so, verify files exist
+                if is_docker or (start_command and ("docker" in start_command.lower())):
                     await manager.broadcast("🔍 Verifying Docker files actually exist...")
                     docker_compose_check = await vm_manager.exec_in_vm(
                         vm_name,
@@ -718,13 +719,14 @@ async def _run_deployment_attempt(
                     dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
                     
                     if not docker_compose_exists and not dockerfile_exists:
-                        # AI was wrong - no Docker files exist!
-                        await manager.broadcast("⚠️ AI suggested Docker but no Docker files found - ignoring Docker suggestion")
-                        logger.warning(f"AI incorrectly detected Docker for project without Docker files")
+                        # AI was wrong OR start_command has Docker but no files exist!
+                        await manager.broadcast("⚠️ Docker command detected but no Docker files found - ignoring Docker and using proper deployment method")
+                        logger.warning(f"Docker command detected but no Docker files found - clearing Docker command")
                         # Clear Docker detection to use other deployment methods
                         is_docker = False
                         if start_command and ("docker" in start_command.lower()):
                             start_command = None  # Clear incorrect Docker command
+                            build_command = None  # Also clear build command if it's Docker-related
                             await manager.broadcast("🔄 Clearing incorrect Docker command, will detect proper deployment method")
                     else:
                         # Docker files DO exist - proceed with Docker deployment
@@ -801,9 +803,33 @@ async def _run_deployment_attempt(
                                     await manager.broadcast(f"🤖 Using AI-detected build command: {build_command}")
                             
                             if not start_command and deployment.start_command:
-                                start_command = deployment.start_command
-                                ai_detected = True
-                                await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
+                                proposed_start = deployment.start_command
+                                # If it's a Docker command, verify Docker files still exist
+                                if "docker" in proposed_start.lower():
+                                    docker_compose_check = await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"test -f {vm_project_dir}/docker-compose.yml -o -f {vm_project_dir}/docker-compose.yaml && echo 'exists' || echo 'not_exists'"
+                                    )
+                                    dockerfile_check = await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
+                                    )
+                                    
+                                    docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
+                                    dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
+                                    
+                                    if not docker_compose_exists and not dockerfile_exists:
+                                        await manager.broadcast("⚠️ Existing Docker command found but Docker files no longer exist - will re-detect deployment method")
+                                        logger.warning(f"Existing Docker command '{proposed_start}' invalid - no Docker files found")
+                                        start_command = None  # Clear invalid Docker command - will be re-detected
+                                    else:
+                                        start_command = proposed_start
+                                        ai_detected = True
+                                        await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
+                                else:
+                                    start_command = proposed_start
+                                    ai_detected = True
+                                    await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
                             
                             if not port and deployment.port:
                                 port = deployment.port
@@ -1364,6 +1390,25 @@ async def _run_deployment_attempt(
             # Format: nohup command > log_file 2>&1 &
             log_file = f"/tmp/project-{deployment_id}.log"
             pid_file = f"/tmp/project-{deployment_id}.pid"
+            
+            # CRITICAL: Final check - if start_command contains Docker but no Docker files exist, reject it
+            if start_command and ("docker" in start_command.lower()):
+                docker_compose_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"test -f {vm_project_dir}/docker-compose.yml -o -f {vm_project_dir}/docker-compose.yaml && echo 'exists' || echo 'not_exists'"
+                )
+                dockerfile_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
+                )
+                
+                docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
+                dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
+                
+                if not docker_compose_exists and not dockerfile_exists:
+                    await manager.broadcast("❌ ERROR: Docker command detected but no Docker files found in project!")
+                    logger.error(f"Rejecting Docker command '{start_command}' - no Docker files exist")
+                    raise Exception(f"Cannot use Docker command '{start_command}' - no docker-compose.yml or Dockerfile found in project. This appears to be a static site - please use a simple HTTP server instead.")
             
             # Start command in background using nohup with proper detaching
             # Escape single quotes in start_command for safe shell execution
