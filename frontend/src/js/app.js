@@ -2172,7 +2172,7 @@ async function showProjectFiles() {
           <div class="breadcrumb" id="filesBreadcrumb">
             <span class="breadcrumb-item" onclick="loadFilesPath('')">${escapeHtml(repo)}</span>
           </div>
-          <button class="btn-secondary" id="filesBackButton" onclick="goBackInFiles()" style="display: none;">
+          <button class="btn-secondary" id="filesBackButton" style="display: none;">
             ← Back
           </button>
         </div>
@@ -2201,6 +2201,21 @@ async function showProjectFiles() {
   // Store project ID for VM file access
   filesPage.dataset.projectId = currentProject.id;
   filesPage.dataset.useVm = 'true'; // Flag to use VM instead of GitHub API
+  filesPage.dataset.currentPath = ''; // Initialize current path to root
+  
+  // Add event listener for back button after a short delay to ensure DOM is ready
+  setTimeout(() => {
+    const backButton = document.getElementById('filesBackButton');
+    if (backButton) {
+      // Remove any existing listeners
+      backButton.replaceWith(backButton.cloneNode(true));
+      const newBackButton = document.getElementById('filesBackButton');
+      newBackButton.addEventListener('click', window.goBackInFiles);
+      console.log('Back button event listener attached');
+    } else {
+      console.error('Back button not found');
+    }
+  }, 100);
   
   // Load root directory
   await loadFilesPath('');
@@ -2355,6 +2370,11 @@ function renderFilesTree(items, currentPath) {
     
     div.onclick = () => {
       if (item.type === 'dir') {
+        // Store the path we're navigating to
+        const filesPage = document.getElementById('page-project-files');
+        if (filesPage) {
+          filesPage.dataset.currentPath = item.path;
+        }
         loadFilesPath(item.path);
       } else {
         loadFileContentForProject(item);
@@ -2519,6 +2539,12 @@ function updateFilesBreadcrumb(path, repo) {
   if (backButton) {
     if (path && path.split('/').filter(p => p).length > 0) {
       backButton.style.display = 'block';
+      // Ensure event listener is attached when button is shown
+      if (!backButton.hasAttribute('data-listener-attached')) {
+        backButton.addEventListener('click', window.goBackInFiles);
+        backButton.setAttribute('data-listener-attached', 'true');
+        console.log('Back button listener attached in updateFilesBreadcrumb');
+      }
     } else {
       backButton.style.display = 'none';
     }
@@ -2544,53 +2570,40 @@ function updateFilesBreadcrumb(path, repo) {
   breadcrumb.innerHTML = html;
 }
 
-// Go back in file navigation
-function goBackInFiles() {
+// Go back in file navigation - make it globally accessible
+window.goBackInFiles = function() {
+  console.log('goBackInFiles called');
   const filesPage = document.getElementById('page-project-files');
-  if (!filesPage) return;
+  if (!filesPage) {
+    console.error('Files page not found');
+    return;
+  }
   
-  // Get current path from breadcrumb or stored state
-  const breadcrumb = document.getElementById('filesBreadcrumb');
-  if (!breadcrumb) return;
+  // Get current path from stored state
+  const currentPath = filesPage.dataset.currentPath || '';
+  console.log('Current path:', currentPath);
   
-  // Find the last breadcrumb item that's not the root
-  const breadcrumbItems = breadcrumb.querySelectorAll('.breadcrumb-item');
-  if (breadcrumbItems.length <= 1) {
+  if (!currentPath || currentPath === '') {
     // Already at root
+    console.log('Already at root, staying at root');
     loadFilesPath('');
     return;
   }
   
-  // Get the second-to-last item's path
-  const secondToLast = breadcrumbItems[breadcrumbItems.length - 2];
-  if (secondToLast && secondToLast.onclick) {
-    // Extract path from onclick attribute
-    const onclickAttr = secondToLast.getAttribute('onclick');
-    if (onclickAttr) {
-      const match = onclickAttr.match(/loadFilesPath\('([^']*)'\)/);
-      if (match) {
-        loadFilesPath(match[1]);
-        return;
-      }
-    }
-  }
+  // Go to parent directory by removing last part of current path
+  const parts = currentPath.split('/').filter(p => p);
+  console.log('Path parts:', parts);
   
-  // Fallback: go to parent directory by removing last part of current path
-  // We need to track current path - let's use a simpler approach
-  const currentPath = filesPage.dataset.currentPath || '';
-  if (currentPath) {
-    const parts = currentPath.split('/').filter(p => p);
-    if (parts.length > 0) {
-      parts.pop();
-      const parentPath = parts.join('/');
-      loadFilesPath(parentPath);
-    } else {
-      loadFilesPath('');
-    }
+  if (parts.length > 0) {
+    parts.pop();
+    const parentPath = parts.join('/');
+    console.log('Going back to parent path:', parentPath);
+    loadFilesPath(parentPath);
   } else {
+    console.log('Going back to root');
     loadFilesPath('');
   }
-}
+};
 
 // Get file icon
 function getFileIconForFiles(filename) {
