@@ -33,13 +33,28 @@ from utils import (
 from connection_manager import manager
 
 # Helper function to broadcast to both global and project-specific connections
-async def broadcast_deployment_log(message: str, deployment_id: Optional[int] = None):
-    """Broadcast deployment log to both global deployment stream and project-specific logs"""
+async def broadcast_deployment_log(message: str, deployment_id: Optional[int] = None, log_type: str = "info"):
+    """Broadcast deployment log to both global deployment stream and project-specific logs, and save to database"""
     # Broadcast to global deployment logs (for deployment logs page)
     await manager.broadcast(message)
     # Also broadcast to project-specific logs (for project logs page)
     if deployment_id:
-        await manager.broadcast_to_project(deployment_id, {"message": message, "type": "info"})
+        await manager.broadcast_to_project(deployment_id, {"message": message, "type": log_type})
+        
+        # Save log to database
+        try:
+            from login import DeploymentLog
+            with Session(engine) as session:
+                log_entry = DeploymentLog(
+                    deployment_id=deployment_id,
+                    message=message,
+                    log_type=log_type
+                )
+                session.add(log_entry)
+                session.commit()
+        except Exception as e:
+            # Don't fail deployment if log saving fails
+            logger.warning(f"Failed to save deployment log to database: {e}")
 from process_manager import process_manager as pm
 from database import engine
 from login import Deployment
@@ -655,12 +670,71 @@ async def _run_deployment_attempt(
             
             await broadcast_deployment_log("✅ Repository cloned successfully in VM", deployment_id)
         
-        # PRIORITY 0: USER-PROVIDED COMMANDS - Highest priority, skip AI if user provided all commands
+        # PRIORITY 0: DOCKER DETECTION - Check for Docker files FIRST (before everything else)
+        # Docker deployment should take precedence over all other deployment methods
+        # This ensures projects with Dockerfile/docker-compose.yml always use Docker
+        docker_detected = False
+        docker_compose_exists = False
+        dockerfile_exists = False
+        
+        # Check for Docker files (case-insensitive)
+        docker_compose_check = await vm_manager.exec_in_vm(
+            vm_name,
+            f"if [ -f {vm_project_dir}/docker-compose.yml ] || [ -f {vm_project_dir}/docker-compose.yaml ]; then echo 'exists'; else echo 'not_exists'; fi"
+        )
+        dockerfile_check = await vm_manager.exec_in_vm(
+            vm_name,
+            f"if [ -f {vm_project_dir}/Dockerfile ] || [ -f {vm_project_dir}/dockerfile ]; then echo 'exists'; else echo 'not_exists'; fi"
+        )
+        
+        docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
+        dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
+        
+        if docker_compose_exists or dockerfile_exists:
+            # Check if Docker is available
+            docker_available = False
+            try:
+                docker_check = await vm_manager.exec_in_vm(vm_name, "which docker")
+                docker_available = docker_check.returncode == 0 and docker_check.stdout.strip()
+            except:
+                pass
+            
+            if docker_available:
+                docker_detected = True
+                await broadcast_deployment_log("🐳 Docker files detected - using Docker deployment (highest priority)", deployment_id)
+                logger.info(f"Docker files found - docker-compose: {docker_compose_exists}, dockerfile: {dockerfile_exists}")
+                try:
+                    from docker_deployment import deploy_with_docker
+                    docker_result = await deploy_with_docker(
+                        git_url, vm_name, vm_project_dir, deployment_id, user_id, env_vars
+                    )
+                    if docker_result:
+                        service_url, status = docker_result
+                        # Update deployment with service URL
+                        with Session(engine) as session:
+                            deployment = session.get(Deployment, deployment_id)
+                            if deployment:
+                                deployment.deployed_url = service_url
+                                set_status(deployment, status)
+                                session.add(deployment)
+                                session.commit()
+                        return docker_result
+                    else:
+                        await broadcast_deployment_log("⚠️ Docker deployment failed, falling back to process-based deployment", deployment_id)
+                        logger.warning("Docker deployment returned None, falling back to process-based")
+                except Exception as docker_error:
+                    logger.warning(f"Docker deployment failed: {docker_error}, falling back to process-based")
+                    await broadcast_deployment_log(f"⚠️ Docker deployment error: {str(docker_error)}, using process-based deployment", deployment_id)
+            else:
+                await broadcast_deployment_log("⚠️ Docker files found but Docker is not available in VM - using process-based deployment", deployment_id)
+                logger.warning("Docker files found but Docker not available in VM")
+        
+        # PRIORITY 0.1: USER-PROVIDED COMMANDS - High priority, skip AI if user provided all commands
         user_provided_all = build_command and start_command and port
         user_provided_any = build_command or start_command or port
         
         if user_provided_any:
-            await broadcast_deployment_log("✅ User-provided commands detected (highest priority - will not be overwritten)", deployment_id)
+            await broadcast_deployment_log("✅ User-provided commands detected (high priority - will not be overwritten)", deployment_id)
             if build_command:
                 await broadcast_deployment_log(f"📝 Build (user-provided): {build_command}", deployment_id)
             if start_command:
@@ -740,7 +814,7 @@ async def _run_deployment_attempt(
                         )
                         dockerfile_check = await vm_manager.exec_in_vm(
                             vm_name,
-                            f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
+                            f"if [ -f {vm_project_dir}/Dockerfile ] || [ -f {vm_project_dir}/dockerfile ]; then echo 'exists'; else echo 'not_exists'; fi"
                         )
                         
                         docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
@@ -842,7 +916,7 @@ async def _run_deployment_attempt(
                                     )
                                     dockerfile_check = await vm_manager.exec_in_vm(
                                         vm_name,
-                                        f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
+                                        f"if [ -f {vm_project_dir}/Dockerfile ] || [ -f {vm_project_dir}/dockerfile ]; then echo 'exists'; else echo 'not_exists'; fi"
                                     )
                                     
                                     docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
@@ -1096,6 +1170,7 @@ async def _run_deployment_attempt(
                             )
                             is_react_app = False
                             is_vite = False
+                            is_next = False  # Initialize before use
                             if package_json_check.returncode == 0 and package_json_check.stdout:
                                 try:
                                     package_data = json.loads(package_json_check.stdout)
@@ -1461,7 +1536,7 @@ async def _run_deployment_attempt(
                     # Check for Dockerfile
                     dockerfile_check = await vm_manager.exec_in_vm(
                         vm_name,
-                        f"if [ -f {vm_project_dir}/Dockerfile ]; then echo 'EXISTS'; else echo 'NOT_EXISTS'; fi"
+                        f"if [ -f {vm_project_dir}/Dockerfile ] || [ -f {vm_project_dir}/dockerfile ]; then echo 'EXISTS'; else echo 'NOT_EXISTS'; fi"
                     )
                     dockerfile_output = (dockerfile_check.stdout or "").strip()
                     dockerfile_exists = dockerfile_output == "EXISTS" and dockerfile_check.returncode == 0

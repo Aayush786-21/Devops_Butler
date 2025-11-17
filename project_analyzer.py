@@ -583,10 +583,10 @@ async def analyze_project_simple(
             docker_compose_output = (docker_compose_check.stdout or "").strip()
             docker_compose_exists = docker_compose_output == "EXISTS" and docker_compose_check.returncode == 0
             
-            # Check for Dockerfile
+            # Check for Dockerfile (case-insensitive: Dockerfile or dockerfile)
             dockerfile_check = await vm_manager.exec_in_vm(
                 vm_name,
-                f"if [ -f {project_dir}/Dockerfile ]; then echo 'EXISTS'; else echo 'NOT_EXISTS'; fi"
+                f"if [ -f {project_dir}/Dockerfile ] || [ -f {project_dir}/dockerfile ]; then echo 'EXISTS'; else echo 'NOT_EXISTS'; fi"
             )
             dockerfile_output = (dockerfile_check.stdout or "").strip()
             dockerfile_exists = dockerfile_output == "EXISTS" and dockerfile_check.returncode == 0
@@ -947,10 +947,10 @@ async def analyze_project_simple(
                 await connection_manager.broadcast(f"📊 Framework: {result['framework']} (JavaScript/Node.js)")
             return result
         
-        # Step 4: Check for Dockerfile (fallback)
+        # Step 4: Check for Dockerfile (fallback, case-insensitive: Dockerfile or dockerfile)
         dockerfile_check = await vm_manager.exec_in_vm(
             vm_name,
-            f"test -f {project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
+            f"if [ -f {project_dir}/Dockerfile ] || [ -f {project_dir}/dockerfile ]; then echo 'exists'; else echo 'not_exists'; fi"
         )
         
         if "exists" in (dockerfile_check.stdout or "").strip():

@@ -25,6 +25,25 @@
 
 ## Recent Updates (Latest Session)
 
+### Fixed Docker Detection for Case-Insensitive Dockerfile (2025-11-17)
+- **Issue Fixed**: Projects with `dockerfile` (lowercase) were not being detected and deployed using Docker
+- **Root Cause**: All Dockerfile checks were case-sensitive, only looking for `Dockerfile` (capital D). Projects with `dockerfile` (lowercase) were not detected, causing them to fall back to process-based deployment instead of Docker deployment.
+- **Fix Applied**:
+  1. Made all Dockerfile checks case-insensitive - now checks for both `Dockerfile` and `dockerfile`
+  2. Added PRIORITY 0 Docker detection that runs BEFORE AI analysis and other detection methods
+  3. Updated Docker build command to use `-f dockerfile` flag when the file is lowercase
+  4. Updated Dockerfile reading to check both cases
+  5. Ensures Docker deployment takes precedence over all other deployment methods
+- **Location**: 
+  - `process_deployment.py` - PRIORITY 0 Docker detection (lines ~658-715) and case-insensitive checks (lines ~670-673, 741-744, 843-846, 1462-1467)
+  - `docker_deployment.py` - Case-insensitive checks (lines ~54-57, 291-294) and build command (lines ~343-360)
+  - `project_analyzer.py` - Case-insensitive checks (lines ~587-590, 951-954)
+- **Benefits**:
+  - Projects with `dockerfile` (lowercase) are now correctly detected and deployed using Docker
+  - Docker deployment has highest priority - always checked first before other methods
+  - More robust Docker detection that handles both naming conventions
+  - Prevents projects with Docker files from incorrectly using process-based deployment
+
 ### Fixed Next.js Deployment Logic and Process Management (2025-11-17)
 - **Issue Fixed**: 
   1. Next.js applications were incorrectly being served with `python3 -m http.server` instead of `npm start`
@@ -69,28 +88,32 @@
   - Prevents UnboundLocalError when parsing package.json or Docker container status
   - Cleaner code by using module-level imports consistently
 
-### Deployment Logs Shown in Project Logs Page (2025-11-17)
-- **Feature Added**: Project Logs page now shows deployment logs (not VM process logs)
+### Deployment Logs Unified in Project Logs Page (2025-11-17)
+- **Feature Added**: Project Logs page now shows deployment logs exclusively (removed "Container Logs" terminology)
 - **Implementation**:
   1. **Helper Function**: Created `broadcast_deployment_log()` that broadcasts to both global deployment stream and project-specific logs
   2. **Updated Key Broadcasts**: Updated critical deployment log messages to use the helper function
   3. **Simplified WebSocket**: Changed project logs WebSocket to receive deployment log broadcasts instead of reading VM log file
   4. **Real-time Logs**: Deployment logs are streamed to the Logs page in real-time during deployment
+  5. **UI Cleanup**: Removed "Container Logs" terminology and connection/disconnection messages - now shows "Deployment Logs" and displays logs directly
 - **Location**: 
   - `process_deployment.py` - Helper function (lines ~35-42) and updated broadcast calls
   - `orchestrator.py` - Project logs WebSocket (lines ~3656-3732)
-  - `frontend/src/js/app.js` - Frontend log handling (updated to handle broadcast messages)
+  - `frontend/src/js/app.js` - Frontend log handling (lines ~2089-2114, 6102-6157) - updated to show deployment logs directly
 - **How It Works**:
   - When deployment runs, `broadcast_deployment_log()` sends logs to both:
     - Global deployment stream (deployment logs page)
     - Project-specific stream (project Logs page)
   - Project Logs WebSocket is registered to receive project-specific broadcasts
   - Logs appear in real-time in the Logs page during deployment
+  - No connection/disconnection messages - logs appear directly
 - **Benefits**:
-  - Deployment logs are the primary logs shown in the Logs page
+  - Deployment logs are the primary (and only) logs shown in the Logs page
   - Real-time streaming of deployment progress
   - Better visibility into deployment process
   - Easier debugging by viewing logs in project context
+  - Cleaner UI - no confusing "container logs" terminology or connection messages
+  - Same logs shown during deployment and in the Logs page - unified experience
 
 ### Improved Static Site Process Start Verification (2025-11-17)
 - **Issue Fixed**: Static sites failing to start - process starts but verification fails

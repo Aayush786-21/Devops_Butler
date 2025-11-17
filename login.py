@@ -89,4 +89,15 @@ class EnvironmentVariable(SQLModel, table=True):
     
     class Config:
         # Ensure unique key per user
-        indexes = [("user_id", "key")] 
+        indexes = [("user_id", "key")]
+
+class DeploymentLog(SQLModel, table=True):
+    """Store deployment logs for projects"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    deployment_id: int = Field(foreign_key="deployment.id", index=True)
+    message: str
+    log_type: str = Field(default="info")  # info, success, error, warning
+    created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, index=True)
+    
+    class Config:
+        indexes = [("deployment_id", "created_at")] 

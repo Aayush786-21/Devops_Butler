@@ -2878,10 +2878,12 @@ async def get_project_file_content(
 @app.get("/projects/{project_id}/logs")
 async def get_project_logs(
     project_id: int,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    limit: int = 1000
 ):
-    """Get logs for a specific project/process from VM"""
+    """Get saved deployment logs for a specific project from database"""
     try:
+        from login import DeploymentLog
         with Session(engine) as session:
             # Verify project belongs to user
             deployment = session.exec(
@@ -2894,37 +2896,44 @@ async def get_project_logs(
             if not deployment:
                 raise HTTPException(status_code=404, detail="Project not found")
             
-            # Get logs from VM log file
-            vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
-            log_file_path = f"/tmp/project-{project_id}.log"
+            # Get saved logs from database
+            logs = session.exec(
+                select(DeploymentLog)
+                .where(DeploymentLog.deployment_id == project_id)
+                .order_by(DeploymentLog.created_at.desc())
+                .limit(limit)
+            ).all()
             
-            from vm_manager import vm_manager
+            # Convert to list of dicts for JSON response
+            logs_list = [
+                {
+                    "id": log.id,
+                    "message": log.message,
+                    "type": log.log_type,
+                    "created_at": log.created_at.isoformat() if log.created_at else None
+                }
+                for log in reversed(logs)  # Reverse to show oldest first
+            ]
             
-            try:
-                # Read log file from VM
-                log_result = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"tail -100 {log_file_path} 2>/dev/null || cat {log_file_path} 2>/dev/null || echo 'No logs available'"
-                )
-                logs_text = log_result.stdout.strip() if log_result.stdout else "No logs available"
-                
-                # Check if process is running (check if port is listening)
-                is_running = False
-                if deployment.port or deployment.host_port:
-                    port = deployment.host_port or deployment.port
+            # Check if process is running (check if port is listening)
+            is_running = False
+            if deployment.port or deployment.host_port:
+                vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
+                port = deployment.host_port or deployment.port
+                from vm_manager import vm_manager
+                try:
                     port_check = await vm_manager.exec_in_vm(
                         vm_name,
                         f"lsof -i :{port} 2>/dev/null | grep LISTEN || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
                     )
                     is_running = bool(port_check.stdout and port_check.stdout.strip())
-            except Exception as e:
-                logs_text = f"Error retrieving logs: {str(e)}"
-                is_running = False
+                except:
+                    pass
             
             return {
                 "project_id": project_id,
                 "container_name": deployment.container_name or f"project-{project_id}",
-                "logs": logs_text,
+                "logs": logs_list,
                 "is_running": is_running
             }
             

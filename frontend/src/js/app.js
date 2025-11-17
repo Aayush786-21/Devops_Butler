@@ -2089,7 +2089,7 @@ async function showProjectLogs() {
   logsPage.innerHTML = `
     <div class="card">
       <div class="page-header">
-        <h2>Container Logs</h2>
+        <h2>Deployment Logs</h2>
         <div style="display: flex; gap: 0.5rem;">
           <button class="btn-secondary" id="clearProjectLogsBtn">Clear</button>
           <button class="btn-secondary" id="toggleProjectLogsBtn">Pause</button>
@@ -2098,7 +2098,7 @@ async function showProjectLogs() {
       <div class="logs-container">
         <div id="projectLogsContent" class="logs-content">
           <p style="text-align: center; color: var(--text-secondary); padding: 2rem;">
-            Connecting to logs stream...
+            Waiting for deployment logs...
           </p>
         </div>
       </div>
@@ -2107,9 +2107,67 @@ async function showProjectLogs() {
   
   logsPage.style.display = 'block';
   
-  // Start WebSocket connection for container logs
+  // Load saved logs from database
   if (currentProject && currentProject.id) {
+    loadSavedProjectLogs(currentProject.id);
+    // Start WebSocket connection for real-time deployment logs
     connectProjectLogsWebSocket(currentProject.id);
+  }
+}
+
+async function loadSavedProjectLogs(projectId) {
+  try {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    if (!token) {
+      console.warn('No authentication token found');
+      return;
+    }
+    
+    const response = await fetch(`/projects/${projectId}/logs`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Failed to load logs:', response.status, errorText);
+      throw new Error(`Failed to load logs: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Loaded saved logs:', data.logs?.length || 0, 'logs');
+    const logsContent = document.getElementById('projectLogsContent');
+    
+    if (!logsContent) {
+      console.warn('projectLogsContent element not found');
+      return;
+    }
+    
+    // Clear loading message
+    if (logsContent.querySelector('p')) {
+      logsContent.innerHTML = '';
+    }
+    
+    // Display saved logs
+    if (data.logs && Array.isArray(data.logs) && data.logs.length > 0) {
+      console.log('Displaying', data.logs.length, 'saved logs');
+      data.logs.forEach(log => {
+        appendProjectLog(log.message, log.type || 'info');
+      });
+    } else {
+      console.log('No saved logs found, showing waiting message');
+      appendProjectLog('No saved logs found. Waiting for new deployment logs...', 'info');
+    }
+  } catch (error) {
+    console.error('Error loading saved logs:', error);
+    const logsContent = document.getElementById('projectLogsContent');
+    if (logsContent) {
+      // Don't clear existing content if there's an error
+      if (logsContent.children.length === 0 || logsContent.querySelector('p')) {
+        appendProjectLog(`Error loading saved logs: ${error.message}`, 'error');
+      }
+    }
   }
 }
 
@@ -6101,7 +6159,13 @@ function connectProjectLogsWebSocket(projectId) {
   
   projectLogsWebSocket.onopen = () => {
     console.log(`Project logs WebSocket connected for project ${projectId}`);
-    appendProjectLog('Connected to container logs stream', 'success');
+    // Don't show connection message - just start showing logs directly
+    
+    // Clear the "Waiting for deployment logs..." message
+    const logsContent = document.getElementById('projectLogsContent');
+    if (logsContent && logsContent.querySelector('p')) {
+      logsContent.innerHTML = '';
+    }
     
     // Send any buffered logs
     if (projectLogsBuffer.length > 0) {
@@ -6139,7 +6203,7 @@ function connectProjectLogsWebSocket(projectId) {
   
   projectLogsWebSocket.onclose = () => {
     console.log('Project logs WebSocket disconnected');
-    appendProjectLog('Disconnected from logs stream', 'warning');
+    // Don't show disconnection message - silently reconnect
     
     // Try to reconnect after 3 seconds
     setTimeout(() => {
