@@ -34,6 +34,9 @@ async def deploy_with_docker(
     """
     Deploy a project using Docker or docker-compose.
     
+    CRITICAL: This function should ONLY be called after verifying Docker files exist!
+    It performs a final verification check before proceeding.
+    
     Priority:
     1. docker-compose.yml (multi-service)
     2. Dockerfile (single container)
@@ -42,32 +45,43 @@ async def deploy_with_docker(
         Tuple of (service_url, status) or None if failed
     """
     try:
-        await manager.broadcast("🐳 Checking for Docker configuration...")
-        
-        # Check for docker-compose.yml first (multi-service)
+        # CRITICAL: Final verification - check files exist BEFORE doing anything
+        # This is a safety check - files should already be verified by caller
         compose_check = await vm_manager.exec_in_vm(
             vm_name,
             f"test -f {vm_project_dir}/docker-compose.yml -o -f {vm_project_dir}/docker-compose.yaml && echo 'exists' || echo 'not_exists'"
         )
+        dockerfile_check = await vm_manager.exec_in_vm(
+            vm_name,
+            f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
+        )
         
-        if "exists" in (compose_check.stdout or "").strip():
+        docker_compose_exists = "exists" in (compose_check.stdout or "").strip()
+        dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
+        
+        # If NO Docker files exist, immediately return None - don't proceed
+        if not docker_compose_exists and not dockerfile_exists:
+            logger.warning(f"deploy_with_docker called but no Docker files found in {vm_project_dir}")
+            await manager.broadcast("❌ ERROR: Docker deployment called but no Docker files found - this should not happen")
+            return None
+        
+        await manager.broadcast("🐳 Verifying Docker configuration...")
+        
+        # Check for docker-compose.yml first (multi-service)
+        if docker_compose_exists:
             await manager.broadcast("📦 Found docker-compose.yml - deploying multi-service application...")
             return await deploy_docker_compose(
                 vm_name, vm_project_dir, deployment_id, user_id, env_vars
             )
         
         # Check for Dockerfile (single container)
-        dockerfile_check = await vm_manager.exec_in_vm(
-            vm_name,
-            f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
-        )
-        
-        if "exists" in (dockerfile_check.stdout or "").strip():
+        if dockerfile_exists:
             await manager.broadcast("📦 Found Dockerfile - deploying single container...")
             return await deploy_dockerfile(
                 vm_name, vm_project_dir, deployment_id, user_id, env_vars
             )
         
+        # Should never reach here if checks above worked, but safety fallback
         await manager.broadcast("⚠️ No Docker configuration found")
         return None
         

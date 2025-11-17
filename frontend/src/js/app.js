@@ -6118,6 +6118,11 @@ function connectProjectLogsWebSocket(projectId) {
     if (!data || !data.message) {
       return;
     }
+    
+    // Skip ping messages (empty messages used for keepalive)
+    if (data.type === 'ping' || !data.message.trim()) {
+      return;
+    }
 
     if (projectLogsPaused) {
       // Buffer logs when paused

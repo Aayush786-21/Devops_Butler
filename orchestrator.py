@@ -3654,8 +3654,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 
 @app.websocket("/ws/project/{project_id}/logs")
 async def project_logs_websocket(websocket: WebSocket, project_id: int):
-    """WebSocket endpoint for project-specific process logs streaming from VM"""
+    """WebSocket endpoint for project-specific deployment logs"""
     await websocket.accept()
+    
+    # Register this connection for project-specific broadcasts (deployment logs)
+    manager.connect_to_project(websocket, project_id)
+    
     global_logger.log_structured(
         level=LogLevel.INFO,
         category=LogCategory.SYSTEM,
@@ -3664,117 +3668,58 @@ async def project_logs_websocket(websocket: WebSocket, project_id: int):
     )
     
     try:
-        # Send initial connection message
-        await websocket.send_json({
-            "message": "Connected to process logs stream",
-            "type": "success"
-        })
-        
-        # Get deployment info (VM name, log file path)
-        deployment = None
-        vm_name = None
-        log_file_path = None
-        
+        # Verify deployment exists
         with Session(engine) as session:
             deployment = session.exec(
                 select(Deployment).where(Deployment.id == project_id)
             ).first()
         
             if not deployment:
-                await websocket.send_json({
-                    "message": f"No project found for project {project_id}",
-                    "type": "error"
-                })
-                await websocket.close()
+                try:
+                    await websocket.send_json({
+                        "message": f"No project found for project {project_id}",
+                        "type": "error"
+                    })
+                    await websocket.close()
+                except (RuntimeError, ConnectionError):
+                    pass
                 return
         
-            # Get VM name
-            vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
-            # Log file is stored in VM at /tmp/project-{deployment_id}.log
-            log_file_path = f"/tmp/project-{project_id}.log"
+        # The WebSocket is now registered to receive broadcasts via broadcast_to_project()
+        # Deployment logs will be sent automatically when broadcast_deployment_log() is called
+        # We just need to keep the connection alive and handle disconnects
         
-        # Import vm_manager for reading logs from VM
-        from vm_manager import vm_manager
-        import time
-        
-        # Stream logs from VM log file
-        last_position = 0
-        # Track last sent time for duplicate messages (deduplication)
-        last_message_time = {}  # {message: timestamp}
-        DEDUP_INTERVAL = 5.0  # Only show duplicate messages every 5 seconds
-        
-        while True:
-            try:
-                # Read log file from VM
-                log_check = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"test -f {log_file_path} && echo 'exists' || echo 'not_exists'"
-                )
-                
-                if "exists" in (log_check.stdout or "").strip():
-                    # Read new lines from log file
-                    read_cmd = f"tail -c +{last_position + 1} {log_file_path} 2>/dev/null || cat {log_file_path} 2>/dev/null"
-                    log_result = await vm_manager.exec_in_vm(vm_name, read_cmd)
-                    
-                    if log_result.stdout:
-                        new_lines = log_result.stdout.split('\n')
-                        # Filter out empty lines
-                        new_lines = [line for line in new_lines if line.strip()]
-                        
-                        # Send new log lines with deduplication
-                        current_time = time.time()
-                        for line in new_lines:
-                            if line.strip():
-                                message = line.strip()
-                                
-                                # Check if this is a duplicate message
-                                if message in last_message_time:
-                                    # Only send if enough time has passed (5 seconds)
-                                    time_since_last = current_time - last_message_time[message]
-                                    if time_since_last < DEDUP_INTERVAL:
-                                        continue  # Skip duplicate message
-                                
-                                # Send the message and update timestamp
-                                await websocket.send_json({
-                                    "message": message,
-                                    "type": "info"
-                                })
-                                last_message_time[message] = current_time
-                        
-                        # Update position (approximate - we read the whole file)
-                        # For better tracking, we could use wc -c to get file size
-                        size_result = await vm_manager.exec_in_vm(
-                            vm_name,
-                            f"wc -c < {log_file_path} 2>/dev/null || echo '0'"
-                        )
-                        if size_result.stdout and size_result.stdout.strip().isdigit():
-                            last_position = int(size_result.stdout.strip())
-                else:
-                    # Log file doesn't exist yet - process might not be running
-                    await websocket.send_json({
-                        "message": "Log file not found - process may not be running",
-                        "type": "warning"
-                    })
-                    await asyncio.sleep(3)
-                
-                # Wait before next fetch
-                await asyncio.sleep(1)
-                
-            except Exception as e:
-                global_logger.log_error(f"Error in logs loop: {str(e)}")
-                await websocket.send_json({
-                    "message": f"Error fetching logs: {str(e)}",
-                    "type": "error"
-                })
-                await asyncio.sleep(5)
+        # Keep connection alive and handle any incoming messages (though we're primarily sending)
+        try:
+            while True:
+                # Wait for messages (or timeout to check connection)
+                try:
+                    # This will raise WebSocketDisconnect when client closes
+                    await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    # Connection still alive, just no message received (this is normal)
+                    # Send a ping to keep connection alive
+                    try:
+                        await websocket.send_json({
+                            "message": "",
+                            "type": "ping"
+                        })
+                    except (RuntimeError, ConnectionError):
+                        # Connection closed
+                        break
+                except WebSocketDisconnect:
+                    break
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            # Check if error is about closed WebSocket
+            if "close" in str(e).lower() or "closed" in str(e).lower() or "Cannot call" in str(e):
+                pass  # Normal disconnect
+            else:
+                global_logger.log_error(f"Error in project logs WebSocket: {str(e)}")
                 
     except WebSocketDisconnect:
-        global_logger.log_structured(
-            level=LogLevel.INFO,
-            category=LogCategory.SYSTEM,
-            message=f"Project logs WebSocket client disconnected for project {project_id}",
-            component="websocket"
-        )
+        pass
     except Exception as e:
         global_logger.log_error(f"WebSocket error for project {project_id}: {str(e)}")
         global_logger.log_structured(
@@ -3783,6 +3728,8 @@ async def project_logs_websocket(websocket: WebSocket, project_id: int):
             message=f"Project logs WebSocket error for project {project_id}: {str(e)}",
             component="websocket"
         )
+    finally:
+        manager.disconnect(websocket)
 
 
 # Catch-all route for SPA - serve index.html for all frontend routes

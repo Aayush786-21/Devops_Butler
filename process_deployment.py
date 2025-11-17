@@ -31,6 +31,15 @@ from utils import (
     extract_repo_name
 )
 from connection_manager import manager
+
+# Helper function to broadcast to both global and project-specific connections
+async def broadcast_deployment_log(message: str, deployment_id: Optional[int] = None):
+    """Broadcast deployment log to both global deployment stream and project-specific logs"""
+    # Broadcast to global deployment logs (for deployment logs page)
+    await manager.broadcast(message)
+    # Also broadcast to project-specific logs (for project logs page)
+    if deployment_id:
+        await manager.broadcast_to_project(deployment_id, {"message": message, "type": "info"})
 from process_manager import process_manager as pm
 from database import engine
 from login import Deployment
@@ -434,7 +443,7 @@ async def _run_deployment_attempt(
         repo_name = extract_repo_name(git_url)
         project_id = f"{repo_name}-{str(uuid.uuid4())[:8]}"
         
-        await manager.broadcast(f"🚀 Starting VM-based deployment: {project_id}")
+        await broadcast_deployment_log(f"🚀 Starting VM-based deployment: {project_id}", deployment_id)
         
         # Project directory inside VM user's home directory
         # Use format: /home/{username}/projects/{project_id}
@@ -585,7 +594,7 @@ async def _run_deployment_attempt(
                 deployment_id = db_deployment.id  # Store ID for later use
         
         # Clone or update repository inside VM
-        await manager.broadcast(f"📥 Cloning repository to VM: {vm_project_dir}...")
+        await broadcast_deployment_log(f"📥 Cloning repository to VM: {vm_project_dir}...", deployment_id)
         
         # Check if repository already exists in VM
         check_result = await vm_manager.exec_in_vm(
@@ -596,7 +605,7 @@ async def _run_deployment_attempt(
         repo_exists = "exists" in (check_result.stdout or "")
         
         if repo_exists:
-            await manager.broadcast("📥 Updating repository in VM...")
+            await broadcast_deployment_log("📥 Updating repository in VM...", deployment_id)
             # Update existing repo
             update_result = await vm_manager.exec_in_vm(
                 vm_name,
@@ -605,7 +614,7 @@ async def _run_deployment_attempt(
             )
             
             if update_result.returncode != 0:
-                await manager.broadcast(f"⚠️ Git pull failed: {update_result.stderr}")
+                await broadcast_deployment_log(f"⚠️ Git pull failed: {update_result.stderr}", deployment_id)
         else:
             # Create project directory in user's home directory if it doesn't exist
             # Extract parent directory from vm_project_dir (e.g., /home/username/projects from /home/username/projects/project-id)
@@ -644,126 +653,145 @@ async def _run_deployment_attempt(
                             session.commit()
                 return None
             
-            await manager.broadcast("✅ Repository cloned successfully in VM")
+            await broadcast_deployment_log("✅ Repository cloned successfully in VM", deployment_id)
         
-        # PRIORITY 0: AI ANALYSIS FIRST - Let AI understand the project by reading files
+        # PRIORITY 0: USER-PROVIDED COMMANDS - Highest priority, skip AI if user provided all commands
+        user_provided_all = build_command and start_command and port
+        user_provided_any = build_command or start_command or port
+        
+        if user_provided_any:
+            await broadcast_deployment_log("✅ User-provided commands detected (highest priority - will not be overwritten)", deployment_id)
+            if build_command:
+                await broadcast_deployment_log(f"📝 Build (user-provided): {build_command}", deployment_id)
+            if start_command:
+                await broadcast_deployment_log(f"🚀 Start (user-provided): {start_command}", deployment_id)
+            if port:
+                await broadcast_deployment_log(f"🔌 Port (user-provided): {port}", deployment_id)
+        
+        # PRIORITY 0.5: AI ANALYSIS - Let AI understand the project by reading files
         # AI will check for Dockerfile, docker-compose.yml, and read all relevant files
         # This gives us intelligent deployment decisions based on actual project structure
+        # Only run AI if user hasn't provided all commands
         ai_analysis_result = None
-        if is_retry:
-            await manager.broadcast("🤖 AI is re-analyzing project - reading Dockerfile, docker-compose.yml, package.json, requirements.txt, and other files...")
+        if user_provided_all:
+            # Skip AI analysis entirely - user knows what they want
+            await manager.broadcast("⏭️ Skipping AI analysis - all commands provided by user")
         else:
-            await manager.broadcast("🤖 AI is analyzing project structure - reading Dockerfile, docker-compose.yml, package.json, requirements.txt, and other files...")
-        try:
-            from project_analyzer import analyze_project_with_ai, analyze_project_simple
-            # Check if AI is available
+            if is_retry:
+                await manager.broadcast("🤖 AI is re-analyzing project - reading Dockerfile, docker-compose.yml, package.json, requirements.txt, and other files...")
+            else:
+                await broadcast_deployment_log("🤖 AI is analyzing project structure - reading Dockerfile, docker-compose.yml, package.json, requirements.txt, and other files...", deployment_id)
             try:
-                import google.generativeai as genai  # type: ignore
-                AI_AVAILABLE = True
-            except ImportError:
-                AI_AVAILABLE = False
-            
-            # Try AI analysis first (if available)
-            if AI_AVAILABLE:
+                from project_analyzer import analyze_project_with_ai, analyze_project_simple
+                # Check if AI is available
                 try:
-                    ai_analysis_result = await analyze_project_with_ai(
+                    import google.generativeai as genai  # type: ignore
+                    AI_AVAILABLE = True
+                except ImportError:
+                    AI_AVAILABLE = False
+                
+                # Try AI analysis first (if available)
+                if AI_AVAILABLE:
+                    try:
+                        ai_analysis_result = await analyze_project_with_ai(
+                            vm_name, vm_project_dir, vm_manager, manager
+                        )
+                        if ai_analysis_result and ai_analysis_result.get("start_command"):
+                            await broadcast_deployment_log(f"✅ AI analysis complete: {ai_analysis_result.get('framework', 'Unknown')} project detected", deployment_id)
+                    except Exception as ai_error:
+                        logger.warning(f"AI analysis failed: {ai_error}, falling back to simple analysis")
+                        ai_analysis_result = None
+                
+                # Fallback to simple analysis if AI not available or failed
+                if not ai_analysis_result:
+                    ai_analysis_result = await analyze_project_simple(
                         vm_name, vm_project_dir, vm_manager, manager
                     )
                     if ai_analysis_result and ai_analysis_result.get("start_command"):
-                        await manager.broadcast(f"✅ AI analysis complete: {ai_analysis_result.get('framework', 'Unknown')} project detected")
-                except Exception as ai_error:
-                    logger.warning(f"AI analysis failed: {ai_error}, falling back to simple analysis")
-                    ai_analysis_result = None
-            
-            # Fallback to simple analysis if AI not available or failed
-            if not ai_analysis_result:
-                ai_analysis_result = await analyze_project_simple(
-                    vm_name, vm_project_dir, vm_manager, manager
-                )
-                if ai_analysis_result and ai_analysis_result.get("start_command"):
-                    await manager.broadcast(f"✅ Project analysis complete: {ai_analysis_result.get('framework', 'Unknown')} project detected")
-            
-            # Use AI analysis results if available and user hasn't provided commands
-            if ai_analysis_result:
-                if not build_command and ai_analysis_result.get("build_command"):
-                    build_command = ai_analysis_result["build_command"]
-                    await manager.broadcast(f"🤖 Using AI-detected build command: {build_command}")
+                        await broadcast_deployment_log(f"✅ Project analysis complete: {ai_analysis_result.get('framework', 'Unknown')} project detected", deployment_id)
                 
-                if not start_command and ai_analysis_result.get("start_command"):
-                    start_command = ai_analysis_result["start_command"]
-                    await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
-                
-                if not port and ai_analysis_result.get("port"):
-                    port = ai_analysis_result["port"]
-                    await manager.broadcast(f"🤖 Using AI-detected port: {port}")
-                
-                # Check if AI detected Docker - BUT VERIFY FILES ACTUALLY EXIST
-                is_docker = ai_analysis_result.get("is_docker", False) or "docker" in (ai_analysis_result.get("framework", "") or "").lower()
-                deployment_type = ai_analysis_result.get("deployment_type", "")
-                
-                # CRITICAL: Always verify Docker files actually exist before using Docker deployment
-                # Don't trust AI - verify the files are really there!
-                # Also check if start_command contains Docker commands - if so, verify files exist
-                if is_docker or (start_command and ("docker" in start_command.lower())):
-                    await manager.broadcast("🔍 Verifying Docker files actually exist...")
-                    docker_compose_check = await vm_manager.exec_in_vm(
-                        vm_name,
-                        f"test -f {vm_project_dir}/docker-compose.yml -o -f {vm_project_dir}/docker-compose.yaml && echo 'exists' || echo 'not_exists'"
-                    )
-                    dockerfile_check = await vm_manager.exec_in_vm(
-                        vm_name,
-                        f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
-                    )
+                # Use AI analysis results if available and user hasn't provided commands
+                # CRITICAL: Only use AI results if user didn't provide the corresponding command
+                if ai_analysis_result:
+                    if not build_command and ai_analysis_result.get("build_command"):
+                        build_command = ai_analysis_result["build_command"]
+                        await manager.broadcast(f"🤖 Using AI-detected build command: {build_command}")
                     
-                    docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
-                    dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
+                    if not start_command and ai_analysis_result.get("start_command"):
+                        start_command = ai_analysis_result["start_command"]
+                        await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
                     
-                    if not docker_compose_exists and not dockerfile_exists:
-                        # AI was wrong OR start_command has Docker but no files exist!
-                        await manager.broadcast("⚠️ Docker command detected but no Docker files found - ignoring Docker and using proper deployment method")
-                        logger.warning(f"Docker command detected but no Docker files found - clearing Docker command")
-                        # Clear Docker detection to use other deployment methods
-                        is_docker = False
-                        if start_command and ("docker" in start_command.lower()):
-                            start_command = None  # Clear incorrect Docker command
-                            build_command = None  # Also clear build command if it's Docker-related
-                            await manager.broadcast("🔄 Clearing incorrect Docker command, will detect proper deployment method")
-                    else:
-                        # Docker files DO exist - proceed with Docker deployment
-                        # Check if Docker is available
-                        docker_available = False
-                        try:
-                            docker_check = await vm_manager.exec_in_vm(vm_name, "which docker")
-                            docker_available = docker_check.returncode == 0 and docker_check.stdout.strip()
-                        except:
-                            pass
+                    if not port and ai_analysis_result.get("port"):
+                        port = ai_analysis_result["port"]
+                        await manager.broadcast(f"🤖 Using AI-detected port: {port}")
+                
+                    # Check if AI detected Docker - BUT VERIFY FILES ACTUALLY EXIST
+                    is_docker = ai_analysis_result.get("is_docker", False) or "docker" in (ai_analysis_result.get("framework", "") or "").lower()
+                    deployment_type = ai_analysis_result.get("deployment_type", "")
+                    
+                    # CRITICAL: Always verify Docker files actually exist before using Docker deployment
+                    # Don't trust AI - verify the files are really there!
+                    # Also check if start_command contains Docker commands - if so, verify files exist
+                    if is_docker or (start_command and ("docker" in start_command.lower())):
+                        await manager.broadcast("🔍 Verifying Docker files actually exist...")
+                        docker_compose_check = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"test -f {vm_project_dir}/docker-compose.yml -o -f {vm_project_dir}/docker-compose.yaml && echo 'exists' || echo 'not_exists'"
+                        )
+                        dockerfile_check = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
+                        )
                         
-                        if docker_available and (docker_compose_exists or dockerfile_exists):
-                            await manager.broadcast("🐳 AI detected Docker configuration - using Docker deployment...")
+                        docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
+                        dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
+                        
+                        if not docker_compose_exists and not dockerfile_exists:
+                            # AI was wrong OR start_command has Docker but no files exist!
+                            await manager.broadcast("⚠️ Docker command detected but no Docker files found - ignoring Docker and using proper deployment method")
+                            logger.warning(f"Docker command detected but no Docker files found - clearing Docker command")
+                            # Clear Docker detection to use other deployment methods
+                            is_docker = False
+                            if start_command and ("docker" in start_command.lower()):
+                                start_command = None  # Clear incorrect Docker command
+                                build_command = None  # Also clear build command if it's Docker-related
+                                await manager.broadcast("🔄 Clearing incorrect Docker command, will detect proper deployment method")
+                        else:
+                            # Docker files DO exist - proceed with Docker deployment
+                            # Check if Docker is available
+                            docker_available = False
                             try:
-                                from docker_deployment import deploy_with_docker
-                                docker_result = await deploy_with_docker(
-                                    git_url, vm_name, vm_project_dir, deployment_id, user_id, env_vars
-                                )
-                                if docker_result:
-                                    service_url, status = docker_result
-                                    # Update deployment with service URL
-                                    with Session(engine) as session:
-                                        deployment = session.get(Deployment, deployment_id)
-                                        if deployment:
-                                            deployment.deployed_url = service_url
-                                            set_status(deployment, status)
-                                            session.add(deployment)
-                                            session.commit()
-                                    return docker_result
-                                else:
-                                    await manager.broadcast("⚠️ Docker deployment failed, falling back to process-based deployment")
-                            except Exception as docker_error:
-                                logger.warning(f"Docker deployment failed: {docker_error}, falling back to process-based")
-                                await manager.broadcast(f"⚠️ Docker deployment error: {str(docker_error)}, using process-based deployment")
-        except Exception as analysis_error:
-            logger.warning(f"Project analysis failed: {analysis_error}, continuing with manual detection")
-            await manager.broadcast(f"⚠️ Analysis error: {str(analysis_error)}, using fallback detection")
+                                docker_check = await vm_manager.exec_in_vm(vm_name, "which docker")
+                                docker_available = docker_check.returncode == 0 and docker_check.stdout.strip()
+                            except:
+                                pass
+                            
+                            if docker_available and (docker_compose_exists or dockerfile_exists):
+                                await manager.broadcast("🐳 AI detected Docker configuration - using Docker deployment...")
+                                try:
+                                    from docker_deployment import deploy_with_docker
+                                    docker_result = await deploy_with_docker(
+                                        git_url, vm_name, vm_project_dir, deployment_id, user_id, env_vars
+                                    )
+                                    if docker_result:
+                                        service_url, status = docker_result
+                                        # Update deployment with service URL
+                                        with Session(engine) as session:
+                                            deployment = session.get(Deployment, deployment_id)
+                                            if deployment:
+                                                deployment.deployed_url = service_url
+                                                set_status(deployment, status)
+                                                session.add(deployment)
+                                                session.commit()
+                                        return docker_result
+                                    else:
+                                        await manager.broadcast("⚠️ Docker deployment failed, falling back to process-based deployment")
+                                except Exception as docker_error:
+                                    logger.warning(f"Docker deployment failed: {docker_error}, falling back to process-based")
+                                    await manager.broadcast(f"⚠️ Docker deployment error: {str(docker_error)}, using process-based deployment")
+            except Exception as analysis_error:
+                logger.warning(f"Project analysis failed: {analysis_error}, continuing with manual detection")
+                await manager.broadcast(f"⚠️ Analysis error: {str(analysis_error)}, using fallback detection")
         
         # Auto-detect build and start commands if not provided (fallback if AI didn't provide)
         # Priority: 1. User-provided, 2. AI analysis (already done), 3. File-based detection
@@ -775,6 +803,7 @@ async def _run_deployment_attempt(
             # PRIORITY 2: Check for AI analysis results in database (if deployment exists)
             # AI analysis runs in background after import, so results may already be available
             # Only use if we didn't get fresh AI analysis results above
+            # CRITICAL: Only use database values if user didn't provide the command
             if not ai_analysis_result:
                 ai_detected = False
                 if deployment_id:
@@ -783,6 +812,7 @@ async def _run_deployment_attempt(
                         if deployment:
                             # Use AI analysis results if available (these are set by project_analyzer.py)
                             # BUT: Validate that requirements.txt exists before using pip install command
+                            # CRITICAL: Only use if user didn't provide build_command
                             if not build_command and deployment.build_command:
                                 # Check if build command is pip install -r requirements.txt
                                 if "pip install -r requirements.txt" in deployment.build_command:
@@ -1087,8 +1117,26 @@ async def _run_deployment_attempt(
                                 except:
                                     pass
                             
+                            # CRITICAL: Next.js apps MUST use npm start or npx next start (NOT static file server)
+                            # Next.js requires Node.js server to handle SSR, API routes, and dynamic features
+                            if is_next and (build_output == 'next' or not start_command or "python3 -m http.server" in (start_command or "")):
+                                # Override incorrect start command for Next.js
+                                original_start = start_command or ""
+                                new_port = port or 3000
+                                # Use npm start if available, otherwise npx next start
+                                # Next.js needs HOSTNAME=0.0.0.0 to bind to all interfaces (not just localhost)
+                                # This allows the service to be accessible from outside the VM
+                                start_command = f"HOSTNAME=0.0.0.0 PORT={new_port} npm start"
+                                if not port:
+                                    port = 3000
+                                await manager.broadcast(f"🚀 Next.js app detected: Using npm start (Next.js handles production serving)")
+                                if original_start and original_start != start_command:
+                                    await manager.broadcast(f"🔄 Fixed incorrect start command: '{original_start}' → '{start_command}'")
+                                await manager.broadcast(f"✅ Start command: {start_command} on port {port}")
+                                logger.info(f"Post-build adjustment: Next.js app, using npm start (not static server), changed from '{original_start}' to '{start_command}'")
+                            
                             # If React app and build output exists, serve from that folder
-                            if is_react_app and build_output in ['build', 'dist', 'out']:
+                            elif is_react_app and build_output in ['build', 'dist', 'out']:
                                 # ALWAYS serve from build output folder for React apps
                                 original_start = start_command or ""
                                 new_port = port or 3000
@@ -1106,6 +1154,7 @@ async def _run_deployment_attempt(
                                 logger.info(f"Post-build adjustment: React app, serving from {build_output}, changed from '{original_start}' to '{new_start}'")
                             
                             # If build output exists but no start command, serve from that folder
+                            # BUT: Only for static builds (build/dist/out), NOT for Next.js (.next)
                             elif build_output in ['build', 'dist', 'out'] and not start_command:
                                 new_port = port or 3000
                                 start_command = f"python3 -m http.server {new_port} --bind 0.0.0.0 --directory {build_output}"
@@ -1264,6 +1313,10 @@ async def _run_deployment_attempt(
             if "python3 -m http.server" in start_command:
                 # Replace port number in http.server command (handles --directory and --bind flags)
                 start_command = re.sub(r'http\.server\s+\d+', f'http.server {host_port}', start_command)
+            elif "PORT=" in start_command:
+                # For commands with PORT= environment variable (e.g., Next.js, Node.js)
+                # Replace PORT=XXXX with PORT=host_port
+                start_command = re.sub(r'PORT=\d+', f'PORT={host_port}', start_command)
             else:
                 # Generic replacement for other commands
                 start_command = start_command.replace(str(original_port), str(host_port))
@@ -1373,7 +1426,7 @@ async def _run_deployment_attempt(
         # Start process inside VM using nohup or PM2 for background execution
         # Use deployment_id as project_id for process tracking
         process_project_id = str(deployment_id)
-        await manager.broadcast(f"🚀 Starting application in VM on port {port}: {start_command}")
+        await broadcast_deployment_log(f"🚀 Starting application in VM on port {port}: {start_command}", deployment_id)
         
         try:
             # Prepare environment variables
@@ -1393,45 +1446,247 @@ async def _run_deployment_attempt(
             
             # CRITICAL: Final check - if start_command contains Docker but no Docker files exist, reject it
             if start_command and ("docker" in start_command.lower()):
-                docker_compose_check = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"test -f {vm_project_dir}/docker-compose.yml -o -f {vm_project_dir}/docker-compose.yaml && echo 'exists' || echo 'not_exists'"
-                )
-                dockerfile_check = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
-                )
+                docker_compose_exists = False
+                dockerfile_exists = False
                 
-                docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
-                dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
+                try:
+                    # Check for docker-compose.yml or docker-compose.yaml
+                    docker_compose_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"if [ -f {vm_project_dir}/docker-compose.yml ] || [ -f {vm_project_dir}/docker-compose.yaml ]; then echo 'EXISTS'; else echo 'NOT_EXISTS'; fi"
+                    )
+                    docker_compose_output = (docker_compose_check.stdout or "").strip()
+                    docker_compose_exists = docker_compose_output == "EXISTS" and docker_compose_check.returncode == 0
+                    
+                    # Check for Dockerfile
+                    dockerfile_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"if [ -f {vm_project_dir}/Dockerfile ]; then echo 'EXISTS'; else echo 'NOT_EXISTS'; fi"
+                    )
+                    dockerfile_output = (dockerfile_check.stdout or "").strip()
+                    dockerfile_exists = dockerfile_output == "EXISTS" and dockerfile_check.returncode == 0
+                    
+                    logger.info(f"Docker file check before start - docker-compose: {docker_compose_exists}, Dockerfile: {dockerfile_exists}")
+                except Exception as e:
+                    logger.warning(f"Error checking for Docker files before start: {e}")
+                    docker_compose_exists = False
+                    dockerfile_exists = False
                 
                 if not docker_compose_exists and not dockerfile_exists:
                     await manager.broadcast("❌ ERROR: Docker command detected but no Docker files found in project!")
                     logger.error(f"Rejecting Docker command '{start_command}' - no Docker files exist")
-                    raise Exception(f"Cannot use Docker command '{start_command}' - no docker-compose.yml or Dockerfile found in project. This appears to be a static site - please use a simple HTTP server instead.")
+                    # Auto-fix: Replace Docker command with static HTTP server for static sites
+                    await manager.broadcast("🔧 Auto-fixing: Replacing Docker command with static HTTP server...")
+                    # Check if it's a static site
+                    html_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"if [ -f {vm_project_dir}/index.html ] || [ $(find {vm_project_dir} -maxdepth 1 -name '*.html' 2>/dev/null | wc -l) -gt 0 ]; then echo 'found'; else echo 'not_found'; fi"
+                    )
+                    if "found" in (html_check.stdout or "").strip():
+                        # It's a static site - use HTTP server
+                        start_command = f"python3 -m http.server {port} --bind 0.0.0.0"
+                        await manager.broadcast(f"✅ Fixed: Using static HTTP server: {start_command}")
+                        logger.info(f"Auto-fixed start command to: {start_command}")
+                    else:
+                        # Not a static site - raise error
+                        raise Exception(f"Cannot use Docker command '{start_command}' - no docker-compose.yml or Dockerfile found in project. Please specify a valid start command.")
             
             # Start command in background using nohup with proper detaching
             # Escape single quotes in start_command for safe shell execution
             escaped_start_command = start_command.replace("'", "'\"'\"'")
             
-            # Improved start command that ensures process stays alive:
-            # Use nohup with proper shell execution to ensure process survives shell exit
-            # Format: cd dir && nohup bash -c 'command' > log 2>&1 &
-            # The nohup command ensures the process continues running after the shell exits
-            # We use bash -c to properly execute the command with environment variables
-            # The & runs it in background, and nohup ensures it survives
-            start_cmd = f"cd {vm_project_dir} && nohup bash -c '{escaped_start_command}' > {log_file} 2>&1 &"
+            # CRITICAL: For python3 -m http.server, verify the directory exists and Python is available
+            if "python3 -m http.server" in start_command:
+                # Verify directory exists
+                dir_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"test -d {vm_project_dir} && echo 'exists' || echo 'missing'"
+                )
+                if "missing" in (dir_check.stdout or "").strip():
+                    error_msg = f"Project directory does not exist: {vm_project_dir}"
+                    await manager.broadcast(f"❌ {error_msg}")
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+                
+                # Verify Python 3 is available
+                python_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    "python3 --version 2>&1 || echo 'NOT_FOUND'"
+                )
+                if "NOT_FOUND" in (python_check.stdout or "").strip():
+                    error_msg = "Python 3 is not available in VM"
+                    await manager.broadcast(f"❌ {error_msg}")
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+                
+                # Verify http.server module is available
+                module_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    "python3 -m http.server --help 2>&1 | head -1 || echo 'MODULE_ERROR'"
+                )
+                if "MODULE_ERROR" in (module_check.stdout or "").strip():
+                    error_msg = "Python http.server module is not available"
+                    await manager.broadcast(f"❌ {error_msg}")
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+                
+                await manager.broadcast(f"✅ Verified: Directory exists, Python 3 available, http.server module ready")
             
-            # Execute the command with environment variables
-            # Note: env vars are exported in exec_in_vm, so they should be available
-            await manager.broadcast(f"📝 Executing: {start_command} in directory: {vm_project_dir}")
-            logger.info(f"Start command: {start_cmd}")
-            start_result = await vm_manager.exec_in_vm(
-                vm_name,
-                start_cmd,
-                cwd=None,  # Don't use cwd in exec_in_vm since we're using cd in the command
-                env=env_vars_full
-            )
+            # Improved start command that ensures process stays alive:
+            # Use script-based approach for both Python and Node.js/npm commands
+            # This ensures processes stay alive and environment variables are properly set
+            use_script_approach = "python3 -m http.server" in start_command or "npm" in start_command or "node" in start_command or "npx" in start_command
+            
+            if use_script_approach:
+                # Create a temporary script file in the VM for reliable process execution
+                script_path = f"/tmp/start-project-{deployment_id}.sh"
+                
+                # Extract environment variables from start_command (e.g., HOSTNAME=0.0.0.0 PORT=6003)
+                # and the actual command (e.g., npm start)
+                env_vars_in_cmd = {}
+                actual_command = start_command
+                
+                # Parse environment variables from command (format: VAR=value VAR2=value2 command)
+                import shlex
+                parts = shlex.split(start_command)
+                cmd_parts = []
+                for part in parts:
+                    if '=' in part and not part.startswith('-'):
+                        # This looks like an environment variable
+                        key, value = part.split('=', 1)
+                        env_vars_in_cmd[key] = value
+                    else:
+                        # This is part of the actual command
+                        cmd_parts.append(part)
+                
+                actual_command = ' '.join(cmd_parts)
+                
+                # Build script that exports env vars and runs the command
+                script_content = f"""#!/bin/bash
+cd {vm_project_dir} || exit 1
+# Export environment variables from command
+"""
+                # Add environment variables from command
+                for key, value in env_vars_in_cmd.items():
+                    script_content += f"export {key}={value}\n"
+                
+                # Add environment variables from env_vars_full
+                if env_vars_full:
+                    for key, value in env_vars_full.items():
+                        script_content += f"export {key}={shlex.quote(str(value))}\n"
+                
+                # Build pgrep pattern - use the first word of the command (e.g., "npm", "node", "python3")
+                cmd_first_word = actual_command.split()[0] if actual_command.split() else ""
+                # Escape special characters for use in pgrep pattern
+                pgrep_pattern = cmd_first_word.replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
+                
+                script_content += f"""
+# Start the process using setsid to ensure it survives shell exit
+# Use nohup as backup to ensure process continues
+nohup setsid bash -c '{actual_command.replace("'", "'\"'\"'")}' > {log_file} 2>&1 < /dev/null &
+PROCESS_PID=$!
+# Give it a moment to start and bind to port
+sleep 3
+# Check if process is still running
+# Use pgrep to find the actual process (handles npm/node/python3 processes)
+if ps -p $PROCESS_PID > /dev/null 2>&1; then
+    echo $PROCESS_PID
+    exit 0
+elif pgrep -f '{pgrep_pattern}' > /dev/null 2>&1; then
+    # Try to get the actual PID of the running process
+    ACTUAL_PID=$(pgrep -f '{pgrep_pattern}' | head -1)
+    if [ -n "$ACTUAL_PID" ]; then
+        echo $ACTUAL_PID
+        exit 0
+    fi
+fi
+
+# If we get here, process might have died or not started
+# Check log file for errors
+if [ -f {log_file} ]; then
+    LOG_CONTENT=$(cat {log_file} 2>/dev/null | head -50)
+    if [ -n "$LOG_CONTENT" ]; then
+        echo "PROCESS_DIED"
+        echo "$LOG_CONTENT"
+    else
+        echo "PROCESS_DIED"
+        echo "Log file exists but is empty"
+    fi
+else
+    echo "PROCESS_DIED"
+    echo "Log file not found"
+fi
+exit 1
+"""
+                # Write the script using cat with heredoc (more reliable)
+                script_write_cmd = f"cat > {script_path} << 'EOFSCRIPT'\n{script_content}\nEOFSCRIPT"
+                script_write_result = await vm_manager.exec_in_vm(vm_name, script_write_cmd)
+                if script_write_result.returncode != 0:
+                    error_msg = f"Failed to create start script: {script_write_result.stderr}"
+                    await broadcast_deployment_log(f"❌ {error_msg}", deployment_id)
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+                
+                # Make script executable and run it
+                chmod_cmd = f"chmod +x {script_path}"
+                await vm_manager.exec_in_vm(vm_name, chmod_cmd)
+                
+                # Execute the script
+                await broadcast_deployment_log(f"📝 Executing: {start_command} in directory: {vm_project_dir}", deployment_id)
+                logger.info(f"Start command: {start_command}")
+                logger.info(f"Using script-based execution for reliable process management")
+                
+                start_result = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"bash {script_path}",
+                    cwd=None,
+                    env=env_vars_full
+                )
+                
+                # Check script output
+                if start_result.stdout:
+                    output = start_result.stdout.strip()
+                    if output.isdigit():
+                        try:
+                            script_pid = int(output)
+                            await broadcast_deployment_log(f"✅ Process started with PID: {script_pid}", deployment_id)
+                            logger.info(f"Process PID from script: {script_pid}")
+                            pid = script_pid  # Set pid for later use
+                        except ValueError:
+                            pass
+                    elif "PROCESS_DIED" in output:
+                        error_msg = f"Process started but immediately died. Log: {output[:500]}"
+                        await broadcast_deployment_log(f"❌ {error_msg}", deployment_id)
+                        logger.error(error_msg)
+                        # Don't fail yet - let verification logic handle it
+                
+                if start_result.returncode != 0:
+                    error_output = start_result.stderr or start_result.stdout or "Unknown error"
+                    await broadcast_deployment_log(f"⚠️ Script returned non-zero: {error_output[:300]}", deployment_id)
+                    logger.warning(f"Script execution returned {start_result.returncode}: {error_output[:300]}")
+                
+                # Give the process a moment to fully start and bind to port
+                await asyncio.sleep(3)
+            else:
+                # For other commands, use simple nohup approach
+                start_cmd = f"cd {vm_project_dir} && nohup bash -c '{escaped_start_command}' > {log_file} 2>&1 &"
+                await broadcast_deployment_log(f"📝 Executing: {start_command} in directory: {vm_project_dir}", deployment_id)
+                logger.info(f"Start command: {start_cmd}")
+                start_result = await vm_manager.exec_in_vm(
+                    vm_name,
+                    start_cmd,
+                    cwd=None,  # Don't use cwd in exec_in_vm since we're using cd in the command
+                    env=env_vars_full
+                )
+            
+            # Ensure start_result is defined (should be set in both script and non-script paths)
+            if 'start_result' not in locals():
+                # Fallback: create a dummy result if somehow start_result wasn't set
+                class DummyResult:
+                    returncode = 1
+                    stdout = ""
+                    stderr = "start_result was not properly initialized"
+                start_result = DummyResult()
             
             # Check if command executed (nohup always returns 0, so we check stderr for actual errors)
             if start_result.returncode != 0:
@@ -1439,7 +1694,7 @@ async def _run_deployment_attempt(
                 error_msg = f"Failed to start process in VM (exit code {start_result.returncode}): {error_output[:500]}"
                 await manager.broadcast(f"❌ {error_msg}")
                 logger.error(f"Process start failed: {error_msg}")
-                logger.error(f"Start command: {start_cmd}")
+                logger.error(f"Start command: {start_command}")
                 logger.error(f"Start result stdout: {start_result.stdout}")
                 logger.error(f"Start result stderr: {start_result.stderr}")
                 # Read log file to see if process started anyway
@@ -1452,12 +1707,28 @@ async def _run_deployment_attempt(
                 # Don't fail immediately - check if process is actually running
                 await manager.broadcast(f"⚠️ Command returned non-zero, but checking if process is running...")
             else:
-                await manager.broadcast(f"✅ Start command executed successfully")
+                await broadcast_deployment_log(f"✅ Start command executed successfully", deployment_id)
                 if start_result.stdout:
                     logger.info(f"Start command output: {start_result.stdout[:200]}")
             
             # Wait a moment for process to start
             await asyncio.sleep(3)  # Increased wait time for process to fully start
+            
+            # Check log file immediately after starting to see if there are any errors
+            if "python3 -m http.server" in start_command:
+                log_check_immediate = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"cat {log_file} 2>/dev/null || echo 'LOG_NOT_FOUND'"
+                )
+                if log_check_immediate.stdout:
+                    log_content = log_check_immediate.stdout.strip()
+                    if log_content and log_content != "LOG_NOT_FOUND":
+                        await broadcast_deployment_log(f"📋 Log file content after start: {log_content[:500]}", deployment_id)
+                        logger.info(f"Log file content: {log_content[:500]}")
+                    elif log_content == "LOG_NOT_FOUND":
+                        await broadcast_deployment_log(f"⚠️ Log file not found after 3 seconds", deployment_id)
+                    else:
+                        await broadcast_deployment_log(f"⚠️ Log file exists but is empty", deployment_id)
             
             # Initialize variables for process verification
             pid = None
@@ -1479,17 +1750,76 @@ async def _run_deployment_attempt(
                 # Try to read any error output from the start command
                 if start_result.stderr:
                     await manager.broadcast(f"Error output: {start_result.stderr[:500]}")
+                # For python3 -m http.server, try to run it directly to see the error
+                if "python3 -m http.server" in start_command:
+                    await broadcast_deployment_log(f"🔍 Testing python3 -m http.server command directly...", deployment_id)
+                    # Test 1: Check if we can run the command at all
+                    test_cmd = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"cd {vm_project_dir} && python3 -m http.server {port} --bind 0.0.0.0 2>&1 & sleep 1 && kill %1 2>/dev/null; wait %1 2>/dev/null; echo 'TEST_DONE'"
+                    )
+                    if test_cmd.stdout:
+                        test_output = test_cmd.stdout[:500]
+                        await broadcast_deployment_log(f"Test output: {test_output}", deployment_id)
+                        logger.info(f"Direct test output: {test_output}")
+                    
+                    # Test 2: Check what happens when we try to start it
+                    test_cmd2 = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"cd {vm_project_dir} && python3 -c 'import http.server; import socketserver; s = socketserver.TCPServer((\"0.0.0.0\", {port}), http.server.SimpleHTTPRequestHandler); print(\"Server created successfully\")' 2>&1"
+                    )
+                    if test_cmd2.stdout:
+                        await broadcast_deployment_log(f"Server creation test: {test_cmd2.stdout[:500]}", deployment_id)
+                    if test_cmd2.stderr:
+                        await broadcast_deployment_log(f"Server creation error: {test_cmd2.stderr[:500]}", deployment_id)
+                    
+                    # Test 3: Check if port is already in use
+                    port_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"lsof -i :{port} 2>/dev/null || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo 'PORT_FREE'"
+                    )
+                    if port_check.stdout and "PORT_FREE" not in port_check.stdout:
+                        await broadcast_deployment_log(f"⚠️ Port {port} appears to be in use: {port_check.stdout[:200]}", deployment_id)
+                    else:
+                        await broadcast_deployment_log(f"✅ Port {port} is free", deployment_id)
             
             if port:
+                # For python3 -m http.server, also check if the process is running directly
+                if "python3 -m http.server" in start_command:
+                    process_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"ps aux | grep '[p]ython3 -m http.server {port}' || pgrep -f 'http.server {port}' || echo 'PROCESS_NOT_FOUND'"
+                    )
+                    if process_check.stdout and "PROCESS_NOT_FOUND" not in process_check.stdout:
+                        await broadcast_deployment_log(f"✅ Found python3 http.server process: {process_check.stdout[:200]}", deployment_id)
+                        logger.info(f"Process check: {process_check.stdout[:200]}")
+                        
+                        # If process is found, try to actually test if the port is accessible
+                        # This is more reliable than just checking if it's listening
+                        http_test = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 2 http://localhost:{port}/ || echo 'CONNECTION_FAILED'"
+                        )
+                        if http_test.stdout and "200" in http_test.stdout:
+                            port_listening = True
+                            process_running = True
+                            await broadcast_deployment_log(f"✅ Port {port} is accessible via HTTP - server is working!", deployment_id)
+                            logger.info(f"✅ HTTP test successful - port {port} is working")
+                        elif http_test.stdout and "CONNECTION_FAILED" not in http_test.stdout:
+                            await broadcast_deployment_log(f"⚠️ HTTP test returned: {http_test.stdout}", deployment_id)
+                    else:
+                        await broadcast_deployment_log(f"⚠️ python3 http.server process not found in process list", deployment_id)
+                
                 # Check if port is listening (primary verification method)
-                port_check = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
-                )
-                if port_check.stdout and port_check.stdout.strip():
-                    port_listening = True
-                    process_running = True
-                    logger.info(f"✅ Port {port} is listening - process is running")
+                if not port_listening:
+                    port_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
+                    )
+                    if port_check.stdout and port_check.stdout.strip():
+                        port_listening = True
+                        process_running = True
+                        logger.info(f"✅ Port {port} is listening - process is running")
                     
                     # Try to extract PID from port check
                     if not pid or pid <= 0:
@@ -1624,6 +1954,46 @@ async def _run_deployment_attempt(
                                 process_running = True
                             except ValueError:
                                 pass
+            
+            # PRIORITY 3.5: For python3 -m http.server, if we found the process but port isn't listening,
+            # try to wait a bit longer and test HTTP connection directly
+            if "python3 -m http.server" in start_command and not process_running:
+                # Check one more time if process exists
+                final_process_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"pgrep -f 'http.server {port}' | head -1 || echo 'NOT_FOUND'"
+                )
+                if final_process_check.stdout and "NOT_FOUND" not in final_process_check.stdout:
+                    await broadcast_deployment_log(f"⏳ Process found but port not listening yet, waiting 5 seconds...", deployment_id)
+                    await asyncio.sleep(5)
+                    
+                    # Try HTTP connection test
+                    http_final_test = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 http://localhost:{port}/ 2>&1 || echo 'FAILED'"
+                    )
+                    if http_final_test.stdout and ("200" in http_final_test.stdout or "301" in http_final_test.stdout or "302" in http_final_test.stdout):
+                        port_listening = True
+                        process_running = True
+                        await broadcast_deployment_log(f"✅ HTTP server is responding on port {port}!", deployment_id)
+                        logger.info(f"✅ Final HTTP test successful - server is working")
+                    else:
+                        await broadcast_deployment_log(f"⚠️ HTTP test failed: {http_final_test.stdout[:200]}", deployment_id)
+                        # Check if process is still running
+                        still_running = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"pgrep -f 'http.server {port}' | head -1 || echo 'NOT_FOUND'"
+                        )
+                        if still_running.stdout and "NOT_FOUND" not in still_running.stdout:
+                            # Process is running but not responding - might be an issue
+                            await broadcast_deployment_log(f"⚠️ Process is running but HTTP test failed - checking process state...", deployment_id)
+                            # Check process state
+                            proc_state = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"ps -p $(pgrep -f 'http.server {port}' | head -1) -o state= 2>/dev/null || echo 'UNKNOWN'"
+                            )
+                            if proc_state.stdout:
+                                await broadcast_deployment_log(f"Process state: {proc_state.stdout.strip()}", deployment_id)
             
             # PRIORITY 4: If port is not listening yet, wait a bit and check again (process might be starting)
             if not process_running and port:
@@ -1791,7 +2161,6 @@ async def _run_deployment_attempt(
                                 
                                 if container_check.stdout and container_check.stdout.strip() and container_check.stdout.strip() != '[]':
                                     try:
-                                        import json
                                         containers = json.loads(container_check.stdout)
                                         if isinstance(containers, list) and len(containers) > 0:
                                             running_containers = [c for c in containers if c.get('State') == 'running']
@@ -1982,27 +2351,63 @@ async def _run_deployment_attempt(
                 
                 # Broadcast success
                 if pid and pid > 0:
-                    await manager.broadcast(f"✅ Process started successfully in VM (PID: {pid}, Port: {port})")
+                    await broadcast_deployment_log(f"✅ Process started successfully in VM (PID: {pid}, Port: {port})", deployment_id)
                 else:
-                    await manager.broadcast(f"✅ Process started successfully in VM (Port: {port} listening, PID unknown)")
+                    await broadcast_deployment_log(f"✅ Process started successfully in VM (Port: {port} listening, PID unknown)", deployment_id)
                     logger.info(f"✅ Process is running on port {port} (PID unknown)")
             
-            # Final check: If process is still not running, fail
+            # Final check: If process is still not running, do one last verification
             if not process_running:
-                error_msg = "Process failed to start and is not running"
-                await manager.broadcast(f"❌ {error_msg}")
-                logger.error(f"Process start failed: {error_msg}")
-                # Read full log for debugging
-                full_log = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"cat {log_file} 2>/dev/null || echo 'No log file'"
-                )
-                if full_log.stdout:
-                    logger.error(f"Full log: {full_log.stdout}")
-                    await manager.broadcast(f"📋 Full log: {full_log.stdout[:1000]}")
+                # For python3 -m http.server, do a final check - process might be running but port check failed
+                if "python3 -m http.server" in start_command:
+                    final_pgrep = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"pgrep -f 'http.server {port}' | head -1 || echo 'NOT_FOUND'"
+                    )
+                    if final_pgrep.stdout and "NOT_FOUND" not in final_pgrep.stdout:
+                        # Process exists - try HTTP test one more time
+                        await broadcast_deployment_log(f"🔄 Final verification: Process found, testing HTTP connection...", deployment_id)
+                        final_http = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"timeout 3 curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{port}/ 2>&1 || echo 'TIMEOUT'"
+                        )
+                        if final_http.stdout and ("200" in final_http.stdout or "301" in final_http.stdout or "302" in final_http.stdout):
+                            process_running = True
+                            port_listening = True
+                            await broadcast_deployment_log(f"✅ HTTP server is working! Accepting deployment.", deployment_id)
+                            logger.info(f"✅ Final HTTP test passed - accepting deployment")
+                        else:
+                            # Process exists but HTTP test failed - check why
+                            proc_info = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"ps -p $(pgrep -f 'http.server {port}' | head -1) -o pid,state,cmd= 2>/dev/null || echo 'NOT_FOUND'"
+                            )
+                            if proc_info.stdout:
+                                await broadcast_deployment_log(f"Process info: {proc_info.stdout[:300]}", deployment_id)
+                            # Check log file for errors
+                            log_check = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"tail -50 {log_file} 2>/dev/null || echo 'NO_LOG'"
+                            )
+                            if log_check.stdout and "NO_LOG" not in log_check.stdout:
+                                await broadcast_deployment_log(f"Recent log: {log_check.stdout[:500]}", deployment_id)
                 
-                # Raise exception to trigger retry logic
-                raise DeploymentError(f"Deployment failed: {error_msg}")
+                # If still not running, fail
+                if not process_running:
+                    error_msg = "Process failed to start and is not running"
+                    await broadcast_deployment_log(f"❌ {error_msg}", deployment_id)
+                    logger.error(f"Process start failed: {error_msg}")
+                    # Read full log for debugging
+                    full_log = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"cat {log_file} 2>/dev/null || echo 'No log file'"
+                    )
+                    if full_log.stdout:
+                        logger.error(f"Full log: {full_log.stdout}")
+                        await broadcast_deployment_log(f"📋 Full log: {full_log.stdout[:1000]}", deployment_id)
+                    
+                    # Raise exception to trigger retry logic
+                    raise DeploymentError(f"Deployment failed: {error_msg}")
             
         except Exception as e:
             error_msg = f"Exception while starting process in VM: {str(e)}"
@@ -2191,7 +2596,7 @@ async def _run_deployment_attempt(
                 session.add(deployment)
                 session.commit()
                 
-            await manager.broadcast(f"🎉 Deployment successful!")
+            await broadcast_deployment_log(f"🎉 Deployment successful!", deployment_id)
             await manager.broadcast(f"🌐 Application is running at: {deployed_url}")
             await manager.broadcast(f"📍 VM: {vm_name}, Port: {port}")
             

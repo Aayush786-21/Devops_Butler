@@ -216,6 +216,9 @@ Return JSON with all information found:
                     # Stage 1: Initial Project Discovery (use README insights if available)
                     # Build project files list (excluding README.md)
                     other_files = "\n".join([f"=== {filename} ===\n{content[:3000]}\n" for filename, content in project_files.items() if filename != "README.md"])
+                    # Explicitly list which files were found for Docker detection
+                    files_found_list = list(project_files.keys())
+                    docker_files_found = [f for f in files_found_list if f in ["docker-compose.yml", "Dockerfile", "docker-compose.yaml"]]
                     readme_insights_json = json.dumps(readme_insights, indent=2) if readme_insights else 'No README.md found'
                     
                     discovery_prompt = f"""You are an expert DevOps engineer performing initial project discovery.
@@ -227,6 +230,12 @@ README.md ANALYSIS (HIGHEST PRIORITY - USE THIS INFORMATION):
 
 PROJECT FILES COLLECTED:
 {other_files}
+
+{'='*80}
+CRITICAL: FILES ACTUALLY FOUND IN PROJECT:
+Files in project_files dictionary: {files_found_list}
+Docker files found: {docker_files_found if docker_files_found else 'NONE - This is NOT a Docker project'}
+{'='*80}
 
 STEP 1: PROJECT TYPE DETECTION
 1. List all files found in the project
@@ -344,6 +353,12 @@ README.md START COMMAND (HIGHEST PRIORITY - USE THIS IF AVAILABLE):
 - Entry file from README: {readme_insights.get('entry_file_from_readme', 'Not found')}
 {'='*80}
 
+{'='*80}
+CRITICAL: DOCKER FILES CHECK
+Docker files actually found in project_files: {docker_files_found if docker_files_found else 'NONE'}
+If docker_files_found is empty (NONE), this is NOT a Docker project - use static site or regular app deployment
+{'='*80}
+
 PROJECT CONTEXT:
 - Framework: {framework}
 - Project Type: {project_type}
@@ -377,11 +392,13 @@ DETERMINE START COMMAND:
    - Keep running: `nohup python3 <script_name> &`
 
 5. FOR DOCKER PROJECTS:
-   - **CRITICAL: ONLY suggest Docker if docker-compose.yml OR Dockerfile ACTUALLY EXISTS in project_files**
-   - Check project_files dictionary - if "docker-compose.yml" or "Dockerfile" is NOT in project_files, DO NOT suggest Docker
-   - If docker-compose.yml exists: `docker compose up -d`
-   - If Dockerfile exists (but no docker-compose.yml): `docker build -t app . && docker run -d -p 8080:8080 app`
-   - **NEVER suggest Docker commands if Docker files are not in the project_files dictionary**
+   - **CRITICAL: ONLY suggest Docker if docker-compose.yml OR Dockerfile ACTUALLY EXISTS in project_files dictionary**
+   - **MANDATORY CHECK: Look at the project_files dictionary keys. If "docker-compose.yml" or "Dockerfile" is NOT a key in project_files, DO NOT suggest Docker - it's a static site or regular app**
+   - **DO NOT suggest Docker just because you see "docker" mentioned in README or project_structure - the files must actually exist**
+   - **If you see index.html, style.css, script.js but NO Dockerfile or docker-compose.yml in project_files, it's a STATIC SITE - use python3 -m http.server**
+   - If docker-compose.yml exists in project_files: `docker compose up -d`
+   - If Dockerfile exists in project_files (but no docker-compose.yml): `docker build -t app . && docker run -d -p 8080:8080 app`
+   - **NEVER suggest Docker commands if Docker files are not in the project_files dictionary - this will cause deployment to fail**
 
 IMPORTANT RULES:
 - **IF README.md HAS START COMMAND, USE IT AS PRIMARY SOURCE** - it knows best how to run the project
@@ -401,6 +418,19 @@ Return JSON:
                     start_response = model.generate_content(start_command_prompt)  # type: ignore
                     start_text = _clean_ai_response(start_response.text)
                     start_data = json.loads(start_text)
+                    
+                    # CRITICAL: Post-process AI response - verify Docker suggestion is valid
+                    if start_data.get("start_command") and "docker" in start_data.get("start_command", "").lower():
+                        # AI suggested Docker - verify files actually exist
+                        if not docker_files_found:
+                            logger.warning(f"AI suggested Docker command '{start_data.get('start_command')}' but no Docker files found - rejecting Docker suggestion")
+                            if connection_manager:
+                                await connection_manager.broadcast("⚠️ AI suggested Docker but no Docker files found - using static site deployment")
+                            # Clear Docker command and set to static site
+                            start_data["start_command"] = f"python3 -m http.server 8080 --bind 0.0.0.0 --directory ."
+                            start_data["start_command_type"] = "static"
+                            result["is_static"] = True
+                            result["framework"] = "Static HTML"
                     
                     if connection_manager:
                         await connection_manager.broadcast(f"🚀 Stage 3: Start command determined")
@@ -540,14 +570,32 @@ async def analyze_project_simple(
             await connection_manager.broadcast("🔍 Analyzing project structure...")
         
         # Step 0: Check for Docker files (HIGHEST PRIORITY - if Docker is available)
-        docker_compose_check = await vm_manager.exec_in_vm(
-            vm_name,
-            f"test -f {project_dir}/docker-compose.yml -o -f {project_dir}/docker-compose.yaml && echo 'exists' || echo 'not_exists'"
-        )
-        dockerfile_check = await vm_manager.exec_in_vm(
-            vm_name,
-            f"test -f {project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
-        )
+        # Use more robust checks that verify files actually exist
+        docker_compose_exists = False
+        dockerfile_exists = False
+        
+        try:
+            # Check for docker-compose.yml or docker-compose.yaml
+            docker_compose_check = await vm_manager.exec_in_vm(
+                vm_name,
+                f"if [ -f {project_dir}/docker-compose.yml ] || [ -f {project_dir}/docker-compose.yaml ]; then echo 'EXISTS'; else echo 'NOT_EXISTS'; fi"
+            )
+            docker_compose_output = (docker_compose_check.stdout or "").strip()
+            docker_compose_exists = docker_compose_output == "EXISTS" and docker_compose_check.returncode == 0
+            
+            # Check for Dockerfile
+            dockerfile_check = await vm_manager.exec_in_vm(
+                vm_name,
+                f"if [ -f {project_dir}/Dockerfile ]; then echo 'EXISTS'; else echo 'NOT_EXISTS'; fi"
+            )
+            dockerfile_output = (dockerfile_check.stdout or "").strip()
+            dockerfile_exists = dockerfile_output == "EXISTS" and dockerfile_check.returncode == 0
+            
+            logger.info(f"Docker file check - docker-compose: {docker_compose_exists}, Dockerfile: {dockerfile_exists}")
+        except Exception as e:
+            logger.warning(f"Error checking for Docker files: {e}")
+            docker_compose_exists = False
+            dockerfile_exists = False
         
         # Check if Docker is available in VM
         docker_available = False
@@ -557,21 +605,26 @@ async def analyze_project_simple(
         except:
             pass
         
-        if docker_available and ("exists" in (docker_compose_check.stdout or "").strip() or "exists" in (dockerfile_check.stdout or "").strip()):
+        # Only suggest Docker if Docker is available AND at least one Docker file actually exists
+        if docker_available and (docker_compose_exists or dockerfile_exists):
             logger.info("✅ Detected: Docker-based project")
             result["framework"] = "Docker"
             result["is_docker"] = True
             result["build_command"] = None  # Docker handles build
-            if "exists" in (docker_compose_check.stdout or "").strip():
+            if docker_compose_exists:
                 result["start_command"] = "docker compose up -d"
                 result["deployment_type"] = "docker-compose"
-            else:
+                logger.info("Using docker-compose deployment")
+            elif dockerfile_exists:
                 result["start_command"] = "docker build -t app . && docker run -d -p 8080:8080 app"
                 result["deployment_type"] = "dockerfile"
+                logger.info("Using Dockerfile deployment")
             result["port"] = 8080
             if connection_manager:
                 await connection_manager.broadcast("🐳 Framework: Docker (will use Docker deployment)")
             return result
+        elif docker_available and not docker_compose_exists and not dockerfile_exists:
+            logger.info("Docker is available but no Docker files found - skipping Docker detection")
         
         # Step 1: Check for static HTML sites
         html_check = await vm_manager.exec_in_vm(

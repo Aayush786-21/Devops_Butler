@@ -1,5 +1,10 @@
 # DevOps Butler - Codebase Location Guide
-# Last Updated: 2025-11-12
+# Last Updated: 2025-11-17
+
+## Algorithms Documentation
+- **Comprehensive Algorithm List**: See `ALGORITHMS.md` for detailed documentation of all algorithms used in the codebase
+- **Categories**: Port finding, retry algorithms, state machines, pattern matching, sorting, search, graph/tree traversal, string processing, polling, circuit breaker, error handling, and more
+- **Total Algorithms Documented**: 18+ distinct algorithmic patterns
 
 ## SSL/HTTPS Configuration (2025-11-12)
 - **Architecture**: All SSL/TLS is handled by Cloudflare at the edge - no SSL certificates needed on origin
@@ -19,6 +24,117 @@
 - **Note**: Users can still access sites via HTTPS - Cloudflare automatically provides SSL certificates and handles encryption
 
 ## Recent Updates (Latest Session)
+
+### Fixed Next.js Deployment Logic and Process Management (2025-11-17)
+- **Issue Fixed**: 
+  1. Next.js applications were incorrectly being served with `python3 -m http.server` instead of `npm start`
+  2. Next.js wasn't binding to 0.0.0.0 to be accessible from outside the VM
+  3. npm/node processes weren't staying alive when started via deployment system (even though they worked when run manually)
+- **Root Cause**: 
+  1. The post-build detection logic was checking for build output directories (`build`, `dist`, `out`) but not properly handling Next.js apps. When `build_output == 'next'` (meaning `.next` directory exists), the code was falling through to default static file server logic instead of using the proper Next.js start command.
+  2. Next.js was starting with `PORT=XXXX npm start` but wasn't explicitly setting `HOSTNAME=0.0.0.0`, which meant it might only bind to localhost, making it inaccessible from outside the VM.
+  3. The deployment system was using `nohup bash -c 'command'` for npm/node commands, which wasn't reliably keeping processes alive or properly setting environment variables. Manual execution worked because it was run directly in an interactive shell.
+- **Fix Applied**: 
+  1. Added explicit check for Next.js apps before generic build output handling
+  2. When Next.js is detected (`is_next == True`), use `HOSTNAME=0.0.0.0 PORT={port} npm start` instead of static file server
+  3. Added logic to override incorrect start commands (e.g., if `python3 -m http.server` was incorrectly set for Next.js)
+  4. Improved port replacement logic to properly handle `PORT=XXXX` format in commands using regex
+  5. **NEW**: Implemented script-based process execution for npm/node/python3 commands (same approach as Python HTTP server)
+  6. **NEW**: Script properly extracts and exports environment variables from command string (e.g., `HOSTNAME=0.0.0.0 PORT=6003`)
+  7. **NEW**: Script uses `setsid` and `nohup` to ensure processes survive shell exit
+  8. **NEW**: Better process detection using `pgrep` to find actual running processes (handles npm spawning node processes)
+  9. **NEW**: Improved error reporting - script outputs log file contents when process dies
+  10. Next.js requires Node.js server to handle SSR, API routes, and dynamic features - cannot use static file server
+  11. `HOSTNAME=0.0.0.0` ensures Next.js binds to all network interfaces, making it accessible via port forwarding
+- **Location**: `process_deployment.py` - Post-build detection logic (lines ~1120-1136), port replacement (lines ~1316-1319), and script-based process execution (lines ~1535-1669)
+- **Benefits**:
+  - Next.js apps now deploy correctly with proper Node.js server
+  - Prevents incorrect static file server usage for Next.js
+  - Automatically fixes incorrect start commands for Next.js apps
+  - Better error messages when fixing incorrect commands
+  - Next.js services are now accessible from outside the VM via port forwarding
+  - Proper host binding ensures services work correctly with Cloudflare tunnels
+  - **Processes now stay alive reliably** - same approach that works for Python HTTP server
+  - **Environment variables properly set** - extracted from command and exported in script
+  - **Better process detection** - finds actual running processes even when spawned by npm
+  - **Improved error diagnostics** - shows log file contents when process fails to start
+
+### Fixed UnboundLocalError for json Module (2025-11-17)
+- **Issue Fixed**: `UnboundLocalError: cannot access local variable 'json' where it is not associated with a value` when deploying static sites
+- **Root Cause**: A redundant `import json` statement inside the `_run_deployment_attempt` function (line 2103) was shadowing the module-level `import json` (line 12), causing Python to treat `json` as a local variable throughout the entire function. When `json.loads()` was called at line 887 (before the local import), Python raised an UnboundLocalError.
+- **Fix Applied**: Removed the redundant `import json` statement inside the function, allowing the module-level import to be used throughout
+- **Location**: `process_deployment.py` - Removed redundant import (line 2103)
+- **Benefits**:
+  - Fixes deployment failures for static sites and Node.js projects
+  - Prevents UnboundLocalError when parsing package.json or Docker container status
+  - Cleaner code by using module-level imports consistently
+
+### Deployment Logs Shown in Project Logs Page (2025-11-17)
+- **Feature Added**: Project Logs page now shows deployment logs (not VM process logs)
+- **Implementation**:
+  1. **Helper Function**: Created `broadcast_deployment_log()` that broadcasts to both global deployment stream and project-specific logs
+  2. **Updated Key Broadcasts**: Updated critical deployment log messages to use the helper function
+  3. **Simplified WebSocket**: Changed project logs WebSocket to receive deployment log broadcasts instead of reading VM log file
+  4. **Real-time Logs**: Deployment logs are streamed to the Logs page in real-time during deployment
+- **Location**: 
+  - `process_deployment.py` - Helper function (lines ~35-42) and updated broadcast calls
+  - `orchestrator.py` - Project logs WebSocket (lines ~3656-3732)
+  - `frontend/src/js/app.js` - Frontend log handling (updated to handle broadcast messages)
+- **How It Works**:
+  - When deployment runs, `broadcast_deployment_log()` sends logs to both:
+    - Global deployment stream (deployment logs page)
+    - Project-specific stream (project Logs page)
+  - Project Logs WebSocket is registered to receive project-specific broadcasts
+  - Logs appear in real-time in the Logs page during deployment
+- **Benefits**:
+  - Deployment logs are the primary logs shown in the Logs page
+  - Real-time streaming of deployment progress
+  - Better visibility into deployment process
+  - Easier debugging by viewing logs in project context
+
+### Improved Static Site Process Start Verification (2025-11-17)
+- **Issue Fixed**: Static sites failing to start - process starts but verification fails
+- **Root Cause**: Process verification logic wasn't properly detecting running processes, and pre-start validation was missing
+- **Fixes Applied**:
+  1. **Pre-Start Validation**: Added verification checks before starting python3 -m http.server:
+     - Verify project directory exists
+     - Verify Python 3 is available in VM
+     - Verify http.server module is available
+  2. **Better Error Diagnostics**: Added direct command testing when log file is missing to capture actual errors
+  3. **Improved Logging**: Better error messages and diagnostic output to help debug process start issues
+- **Location**: `process_deployment.py` - Process start and verification (lines ~1466-1578)
+- **Benefits**:
+  - Catches configuration issues before attempting to start process
+  - Better error messages when process fails to start
+  - More reliable process verification
+  - Easier debugging of process start failures
+
+### Fixed Docker Detection Logic and Auto-Fix for Static Sites (2025-11-17)
+- **Issue Fixed**: 
+  1. Deployment form incorrectly pre-filling "docker compose up -d" for projects without Docker files
+  2. Static sites failing to start because incorrect Docker commands were being executed
+- **Root Cause**: 
+  1. Docker detection logic was not robustly checking if Docker files actually exist before suggesting Docker commands
+  2. Process deployment was executing Docker commands even when no Docker files existed, causing failures
+- **Fixes Applied**:
+  1. **Improved File Existence Checks**: Changed from simple string matching to explicit file existence checks using `[ -f ... ]` tests
+  2. **Better Output Parsing**: Changed to check for exact "EXISTS" string match instead of substring matching
+  3. **Added Logging**: Added debug logging to track Docker file detection results
+  4. **Explicit Checks**: Now explicitly checks both docker-compose.yml/yaml and Dockerfile separately with proper error handling
+  5. **Skip Docker When No Files**: Added explicit check to skip Docker detection when Docker is available but no Docker files exist
+  6. **Auto-Fix Before Start**: Added pre-start validation that detects incorrect Docker commands and automatically replaces them with correct static HTTP server commands for static sites
+  7. **Improved Docker Check in Process Deployment**: Fixed the Docker file check in `process_deployment.py` to use the same robust logic as project analyzer
+- **Location**: 
+  - `project_analyzer.py` - `analyze_project_simple()` function (lines ~572-627)
+  - `process_deployment.py` - Pre-start validation (lines ~1415-1460)
+- **Benefits**:
+  - Prevents incorrect Docker command suggestions for non-Docker projects
+  - More accurate project type detection
+  - Better logging for debugging detection issues
+  - Handles edge cases where Docker is available but project doesn't use it
+  - Auto-fixes incorrect commands before deployment fails
+  - Prevents static sites from failing due to incorrect Docker commands
+- **Note**: If a project already has incorrect Docker commands saved in the database, the system will now automatically detect and fix them when deploying, replacing Docker commands with appropriate static HTTP server commands for static sites
 
 ### Improved VM Process Start and Verification (2025-11-17)
 - **Issue Fixed**: VM processes not staying alive or not being properly verified
