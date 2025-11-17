@@ -32,12 +32,16 @@ from login import Deployment, User, EnvironmentVariable
 from auth import authenticate_user, create_user, create_access_token, get_current_user
 from repository_tree_api import router as repository_tree_router, router_repos
 from datetime import timedelta
+import socket
 
 from cloudflare_manager import (
     ensure_project_hostname,
     remove_project_hostname,
     CloudflareError,
 )
+from vm_manager import safe_exec, VMError
+from vm_manager import vm_manager
+from project_analyzer import analyze_project_with_ai
 
 # Import robust features (simplified versions)
 from robust_error_handler import global_error_handler, with_error_handling, RetryConfig
@@ -320,6 +324,233 @@ async def health_check():
             content={"status": "error", "message": "Health check failed"}
         )
 
+@app.get("/debug/deployment/{deployment_id}")
+async def debug_deployment(deployment_id: int, current_user: User = Depends(get_current_user)):
+    """
+    Return an end-to-end snapshot of a deployment across DB, VM/process, and domain mapping.
+    """
+    # DB snapshot
+    with Session(engine) as session:
+        deployment = session.get(Deployment, deployment_id)
+        if not deployment:
+            raise HTTPException(status_code=404, detail="Deployment not found")
+        db_info = {
+            "status": deployment.status,
+            "git_url": deployment.git_url,
+            "parent_project_id": deployment.parent_project_id,
+            "component_type": getattr(deployment, "component_type", None),
+            "vm_name": getattr(deployment, "vm_name", None),
+            "vm_ip": getattr(deployment, "vm_ip", None),
+            "host_port": getattr(deployment, "host_port", None),
+            "port": getattr(deployment, "port", None),
+            "deployed_url": getattr(deployment, "deployed_url", None),
+            "custom_domain": getattr(deployment, "custom_domain", None),
+        }
+    
+    # VM/process checks
+    vm_checks = {
+        "project_dir_exists": None,
+        "process_running": None,
+        "port_open": None,
+    }
+    # project dir check inside VM if vm_name and project_dir known
+    vm_name = db_info.get("vm_name")
+    project_dir = getattr(deployment, "project_dir", None) if 'deployment' in locals() else None
+    if vm_name and project_dir:
+        try:
+            result = await safe_exec(vm_name, f"test -d '{project_dir}' && echo OK || echo MISSING")
+            vm_checks["project_dir_exists"] = "OK" in (result.stdout or "")
+        except VMError:
+            vm_checks["project_dir_exists"] = False
+    # process check via process manager
+    try:
+        processes = get_process_details()
+        c_name = getattr(deployment, "container_name", None)
+        vm_checks["process_running"] = bool(c_name and processes.get(str(c_name), {}).get("status") == "running")
+    except Exception:
+        vm_checks["process_running"] = False
+    # port open check on host
+    host_port = db_info.get("host_port")
+    if host_port:
+        try:
+            with socket.create_connection(("127.0.0.1", int(host_port)), timeout=1.5):
+                vm_checks["port_open"] = True
+        except Exception:
+            vm_checks["port_open"] = False
+    else:
+        vm_checks["port_open"] = False
+
+    # Cloudflare mapping (report from DB-derived values)
+    domain_info = {
+        "domain": db_info.get("custom_domain"),
+    }
+    try:
+        # Service URL best-effort from deployed_url
+        service_url = _derive_service_url(db_info.get("deployed_url") or "http://localhost")
+    except Exception:
+        service_url = None
+    domain_info["service_url"] = service_url
+
+    return {
+        "db": db_info,
+        "vm": vm_checks,
+        "cloudflare": domain_info,
+    }
+
+@app.get("/predeploy", response_class=HTMLResponse)
+async def predeploy_page(project_id: int):
+    """
+    Serve the pre-deploy review page (server-rendered HTML shell + inline JS).
+    """
+    # Basic HTML shell that fetches analysis JSON and renders an editable review.
+    html = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pre-Deploy Review</title>
+  <link rel="icon" type="image/png" href="/icons/logo.png"/>
+  <link rel="stylesheet" href="/assets/styles-CCqhMHcF.css"/>
+  <style>
+    .container {{ max-width: 960px; margin: 2rem auto; padding: 1rem; }}
+    .card {{ background: var(--bg-secondary); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }}
+    .full {{ grid-column: 1 / -1; }}
+    label {{ font-weight: 600; display: block; margin-bottom: 0.5rem; }}
+    input, textarea {{ width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); }}
+    .btn {{ padding: 0.6rem 1rem; border-radius: 6px; border: none; cursor: pointer; }}
+    .btn-primary {{ background: #10b981; color: white; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Pre-Deploy Review</h1>
+    <p id="summary">Analyzing project...</p>
+    <div class="card">
+      <div class="grid">
+        <div class="full">
+          <label>Framework</label>
+          <input id="framework" />
+        </div>
+        <div>
+          <label>Install/Build Command</label>
+          <input id="build_command" />
+        </div>
+        <div>
+          <label>Start Command</label>
+          <input id="start_command" />
+        </div>
+        <div>
+          <label>Port</label>
+          <input id="port" type="number" min="1" max="65535"/>
+        </div>
+        <div>
+          <label>Root Directory</label>
+          <input id="root_directory" />
+        </div>
+        <div class="full">
+          <label>Description</label>
+          <textarea id="description" rows="5"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <p>When you click Deploy, Butler will:</p>
+      <ul>
+        <li>Install dependencies (if build command is provided)</li>
+        <li>Run the start command inside your VM</li>
+        <li>Open and map the selected port to a localhost host_port</li>
+        <li>Configure the domain via Cloudflare (if available)</li>
+      </ul>
+      <button class="btn btn-primary" id="deployBtn">Deploy</button>
+      <a class="btn" href="/deploy">Back</a>
+    </div>
+  </div>
+  <script>
+    const projectId = {project_id};
+    const summaryEl = document.getElementById('summary');
+    const fields = ['framework','build_command','start_command','port','root_directory','description'];
+    const els = Object.fromEntries(fields.map(id => [id, document.getElementById(id)]));
+    async function fetchAnalysis() {{
+      try {{
+        const res = await fetch(`/api/deploy/review/${{projectId}}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Analysis failed');
+        summaryEl.textContent = data.summary || 'Analysis ready. Review and adjust commands.';
+        els.framework.value = data.framework || '';
+        els.build_command.value = data.build_command || '';
+        els.start_command.value = data.start_command || '';
+        els.port.value = data.port || '';
+        els.root_directory.value = data.root_directory || './';
+        els.description.value = data.description || '';
+      }} catch (e) {{
+        summaryEl.textContent = 'Analysis error: ' + e.message;
+      }}
+    }}
+    async function submitDeploy() {{
+      const form = new URLSearchParams();
+      form.set('project_id', String(projectId));
+      form.set('build_command', els.build_command.value || '');
+      form.set('start_command', els.start_command.value || '');
+      if (els.port.value) form.set('port', els.port.value);
+      form.set('root_directory', els.root_directory.value || './');
+      try {{
+        const res = await fetch('/deploy', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/x-www-form-urlencoded' }},
+          body: form
+        }});
+        const data = await res.json();
+        if (res.ok) {{
+          window.location.href = '/applications'; // go back to dashboard/projects
+        }} else {{
+          alert(data.detail || 'Deploy failed');
+        }}
+      }} catch (e) {{
+        alert('Deploy error: ' + e.message);
+      }}
+    }}
+    document.getElementById('deployBtn').addEventListener('click', submitDeploy);
+    fetchAnalysis();
+  </script>
+</body>
+</html>
+    """
+    return HTMLResponse(content=html, status_code=200)
+
+@app.get("/api/deploy/review/{deployment_id}")
+async def get_predeploy_review(deployment_id: int, current_user: User = Depends(get_current_user)):
+    """
+    Analyze a previously imported project and return suggested commands and description.
+    """
+    with Session(engine) as session:
+        deployment = session.get(Deployment, deployment_id)
+        if not deployment or deployment.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Deployment not found")
+        if not deployment.project_dir or not deployment.vm_name:
+            raise HTTPException(status_code=400, detail="Project not prepared yet. Import first.")
+        vm_name = deployment.vm_name
+        project_dir = deployment.project_dir
+    # Perform analysis
+    analysis = await analyze_project_with_ai(vm_name, project_dir, vm_manager, manager)
+    # Heuristic description
+    framework = analysis.get("framework") or "Unknown"
+    start_cmd = analysis.get("start_command") or ""
+    build_cmd = analysis.get("build_command") or ""
+    port = analysis.get("port")
+    description = f"This project appears to be {framework}. It will run with: {start_cmd or 'N/A'}. " \
+                  f"{'It requires a build step: ' + build_cmd if build_cmd else 'No explicit build step detected.'} " \
+                  f"{'Expected port: ' + str(port) if port else ''}".strip()
+    return {
+        "framework": framework,
+        "build_command": build_cmd,
+        "start_command": start_cmd,
+        "port": port,
+        "root_directory": analysis.get("root_directory") or "./",
+        "description": description,
+        "summary": f"Detected {framework}. Review commands and adjust if needed."
+    }
 
 # Authentication endpoints
 @app.post("/api/auth/login")
@@ -1756,7 +1987,7 @@ async def detect_monorepo(
     current_user: User = Depends(get_current_user)
 ):
     """Detect if a repository has monorepo structure (frontend + backend folders)"""
-    from dockerfile_parser import detect_monorepo_structure
+    from utils import detect_monorepo_structure
     import tempfile
     import shutil
     
@@ -1923,7 +2154,7 @@ async def list_deployments(
         else:
             # For Docker/container deployments, check ProcessManager
             is_running = deployment.container_name in running_processes and pm.is_process_running(deployment.container_name)
-            process_info = process_details.get(deployment.container_name, {})
+        process_info = process_details.get(deployment.container_name, {})
         
         # Determine real status
         if is_running:
@@ -2239,11 +2470,12 @@ def configure_project_domain(
             component="cloudflare"
         )
 
+    # Configure Cloudflare (always execute, regardless of health check result)
+    action_name = "domain_configured"  # Default action name
     try:
         ensure_project_hostname(desired, service_url)
         deployment.domain_status = "active"
         deployment.last_domain_sync = datetime.datetime.utcnow()
-        action_name = "domain_configured"
         global_logger.log_structured(
             level=LogLevel.INFO,
             category=LogCategory.NETWORK,
@@ -2254,6 +2486,7 @@ def configure_project_domain(
         error_msg = f"Cloudflare configuration failed for '{desired}': {exc}"
         global_logger.log_error(error_msg)
         deployment.domain_status = "error"
+        action_name = "domain_config_failed"  # Update action name for failed attempt
         session.add(deployment)
         session.commit()
         raise HTTPException(status_code=502, detail=error_msg)
@@ -2423,12 +2656,13 @@ async def get_deployment_logs(
         "logs": logs
     }
 
-@app.get("/projects/{project_id}/logs")
-async def get_project_logs(
+@app.get("/projects/{project_id}/files")
+async def get_project_files(
     project_id: int,
+    path: str = "",
     current_user: User = Depends(get_current_user)
 ):
-    """Get logs for a specific project/process"""
+    """Get files and folders from the cloned repository in VM"""
     try:
         with Session(engine) as session:
             # Verify project belongs to user
@@ -2442,18 +2676,256 @@ async def get_project_logs(
             if not deployment:
                 raise HTTPException(status_code=404, detail="Project not found")
             
-            # Get process logs from process manager
+            # Get project directory from deployment
+            project_dir = deployment.project_dir
+            if not project_dir:
+                # Fallback: construct path from deployment ID
+                vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
+                try:
+                    username_result = await vm_manager.exec_in_vm(vm_name, "whoami")
+                    vm_username = username_result.stdout.strip() if username_result.returncode == 0 else "ubuntu"
+                except:
+                    vm_username = "ubuntu"
+                project_dir = f"/home/{vm_username}/projects/{project_id}"
+            
+            vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
+            
+            # Build full path
+            if path:
+                full_path = f"{project_dir}/{path}".replace("//", "/")
+            else:
+                full_path = project_dir
+            
+            from vm_manager import vm_manager
+            
             try:
-                logs = pm.get_process_logs(deployment.container_name, lines=100)
-                logs_text = "\n".join(logs) if logs else "No logs available"
+                # List files and directories
+                # Use find to get detailed file info
+                list_cmd = f"cd {full_path} && find . -maxdepth 1 -not -path '.' | sort"
+                list_result = await vm_manager.exec_in_vm(vm_name, list_cmd)
+                
+                if list_result.returncode != 0:
+                    raise HTTPException(status_code=500, detail=f"Failed to list files: {list_result.stderr}")
+                
+                files = []
+                file_list = list_result.stdout.strip().split('\n') if list_result.stdout else []
+                
+                for file_path in file_list:
+                    if not file_path.strip():
+                        continue
+                    
+                    # Remove leading ./
+                    clean_path = file_path.strip().lstrip('./')
+                    if not clean_path:
+                        continue
+                    
+                    full_file_path = f"{full_path}/{clean_path}".replace("//", "/")
+                    
+                    # Get file info (type, size, etc.)
+                    stat_cmd = f"stat -c '%F|%s' {full_file_path} 2>/dev/null || echo 'unknown|0'"
+                    stat_result = await vm_manager.exec_in_vm(vm_name, stat_cmd)
+                    
+                    if stat_result.returncode == 0 and stat_result.stdout:
+                        stat_parts = stat_result.stdout.strip().split('|')
+                        file_type_str = stat_parts[0] if len(stat_parts) > 0 else "unknown"
+                        file_size = int(stat_parts[1]) if len(stat_parts) > 1 and stat_parts[1].isdigit() else 0
+                        
+                        is_directory = "directory" in file_type_str.lower()
+                        
+                        # Build relative path for API
+                        if path:
+                            relative_path = f"{path}/{clean_path}".replace("//", "/")
+                        else:
+                            relative_path = clean_path
+                        
+                        files.append({
+                            "name": clean_path,
+                            "path": relative_path,
+                            "type": "dir" if is_directory else "file",
+                            "size": file_size if not is_directory else 0
+                        })
+                
+                return {"contents": files}
+                
+            except Exception as e:
+                logger.error(f"Error listing files: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error listing files: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_project_files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/projects/{project_id}/files/content")
+async def get_project_file_content(
+    project_id: int,
+    file_path: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get file content from the cloned repository in VM using cat"""
+    try:
+        with Session(engine) as session:
+            # Verify project belongs to user
+            deployment = session.exec(
+                select(Deployment).where(
+                    Deployment.id == project_id,
+                    Deployment.user_id == current_user.id
+                )
+            ).first()
+            
+            if not deployment:
+                raise HTTPException(status_code=404, detail="Project not found")
+            
+            # Get project directory from deployment
+            project_dir = deployment.project_dir
+            if not project_dir:
+                # Fallback: construct path from deployment ID
+                vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
+                try:
+                    username_result = await vm_manager.exec_in_vm(vm_name, "whoami")
+                    vm_username = username_result.stdout.strip() if username_result.returncode == 0 else "ubuntu"
+                except:
+                    vm_username = "ubuntu"
+                project_dir = f"/home/{vm_username}/projects/{project_id}"
+            
+            vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
+            
+            # Build full file path
+            full_file_path = f"{project_dir}/{file_path}".replace("//", "/")
+            
+            # Security: prevent path traversal
+            if ".." in file_path or file_path.startswith("/"):
+                raise HTTPException(status_code=400, detail="Invalid file path")
+            
+            from vm_manager import vm_manager
+            
+            try:
+                # Check if file exists and is a file (not directory)
+                check_cmd = f"test -f '{full_file_path}' && echo 'file' || (test -d '{full_file_path}' && echo 'dir' || echo 'not_found')"
+                check_result = await vm_manager.exec_in_vm(vm_name, check_cmd)
+                
+                if not check_result.stdout or "not_found" in check_result.stdout:
+                    raise HTTPException(status_code=404, detail="File not found")
+                
+                if "dir" in check_result.stdout:
+                    raise HTTPException(status_code=400, detail="Path is a directory, not a file")
+                
+                # Get file size
+                size_cmd = f"stat -c '%s' '{full_file_path}' 2>/dev/null || echo '0'"
+                size_result = await vm_manager.exec_in_vm(vm_name, size_cmd)
+                file_size = int(size_result.stdout.strip()) if size_result.stdout and size_result.stdout.strip().isdigit() else 0
+                
+                # Limit file size to 1MB for safety
+                if file_size > 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="File too large (max 1MB)")
+                
+                # Check if file is binary (image, etc.)
+                file_cmd = f"file -b '{full_file_path}'"
+                file_type_result = await vm_manager.exec_in_vm(vm_name, file_cmd)
+                is_binary = False
+                if file_type_result.returncode == 0 and file_type_result.stdout:
+                    file_type = file_type_result.stdout.strip().lower()
+                    # Check if it's a text file
+                    is_binary = not any(text_type in file_type for text_type in ['text', 'ascii', 'utf-8', 'json', 'xml', 'html', 'css', 'javascript'])
+                
+                if is_binary:
+                    # For binary files, return a message instead of trying to decode
+                    return {
+                        "name": file_name,
+                        "path": file_path,
+                        "type": "file",
+                        "size": file_size,
+                        "content": "",
+                        "encoding": "binary",
+                        "is_binary": True,
+                        "message": f"Binary file ({file_type_result.stdout.strip() if file_type_result.stdout else 'unknown type'}) - cannot display as text"
+                    }
+                
+                # Read file content using cat
+                cat_cmd = f"cat '{full_file_path}'"
+                cat_result = await vm_manager.exec_in_vm(vm_name, cat_cmd)
+                
+                if cat_result.returncode != 0:
+                    raise HTTPException(status_code=500, detail=f"Failed to read file: {cat_result.stderr}")
+                
+                content = cat_result.stdout if cat_result.stdout else ""
+                
+                # Get file name from path
+                file_name = file_path.split('/')[-1] if '/' in file_path else file_path
+                
+                return {
+                    "name": file_name,
+                    "path": file_path,
+                    "type": "file",
+                    "size": file_size,
+                    "content": content,
+                    "encoding": "text"
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error reading file: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_project_file_content: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/projects/{project_id}/logs")
+async def get_project_logs(
+    project_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Get logs for a specific project/process from VM"""
+    try:
+        with Session(engine) as session:
+            # Verify project belongs to user
+            deployment = session.exec(
+                select(Deployment).where(
+                    Deployment.id == project_id,
+                    Deployment.user_id == current_user.id
+                )
+            ).first()
+            
+            if not deployment:
+                raise HTTPException(status_code=404, detail="Project not found")
+            
+            # Get logs from VM log file
+            vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
+            log_file_path = f"/tmp/project-{project_id}.log"
+            
+            from vm_manager import vm_manager
+            
+            try:
+                # Read log file from VM
+                log_result = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"tail -100 {log_file_path} 2>/dev/null || cat {log_file_path} 2>/dev/null || echo 'No logs available'"
+                )
+                logs_text = log_result.stdout.strip() if log_result.stdout else "No logs available"
+                
+                # Check if process is running (check if port is listening)
+                is_running = False
+                if deployment.port or deployment.host_port:
+                    port = deployment.host_port or deployment.port
+                    port_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"lsof -i :{port} 2>/dev/null | grep LISTEN || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
+                    )
+                    is_running = bool(port_check.stdout and port_check.stdout.strip())
             except Exception as e:
                 logs_text = f"Error retrieving logs: {str(e)}"
+                is_running = False
             
             return {
                 "project_id": project_id,
-                "container_name": deployment.container_name,
+                "container_name": deployment.container_name or f"project-{project_id}",
                 "logs": logs_text,
-                "is_running": pm.is_process_running(deployment.container_name)
+                "is_running": is_running
             }
             
     except HTTPException:
@@ -3177,75 +3649,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             component="websocket"
         )
 
-@app.websocket("/ws/logs")
-async def logs_websocket(websocket: WebSocket):
-    """WebSocket endpoint for real-time application logs streaming"""
-    await websocket.accept()
-    global_logger.log_structured(
-        level=LogLevel.INFO,
-        category=LogCategory.SYSTEM,
-        message="Logs WebSocket client connected",
-        component="websocket"
-    )
-    
-    try:
-        # Send initial connection message
-        await websocket.send_json({
-            "message": "Connected to application logs stream",
-            "type": "success"
-        })
-        
-        # Stream application logs from logs/application.log
-        log_file_path = Path("logs/application.log")
-        last_position = 0
-        
-        while True:
-            try:
-                if log_file_path.exists():
-                    # Read new lines from log file
-                    with open(log_file_path, 'r') as f:
-                        f.seek(last_position)
-                        new_lines = f.readlines()
-                        last_position = f.tell()
-                        
-                        # Send new log lines
-                        for line in new_lines:
-                            if line.strip():
-                                await websocket.send_json({
-                                    "message": line.strip(),
-                                    "type": "info"
-                                })
-                else:
-                    # Log file doesn't exist yet
-                    await asyncio.sleep(1)
-                
-                # Wait before next fetch
-                await asyncio.sleep(1)
-                
-            except Exception as e:
-                global_logger.log_error(f"Error in logs loop: {str(e)}")
-                await asyncio.sleep(2)
-                
-    except WebSocketDisconnect:
-        global_logger.log_structured(
-            level=LogLevel.INFO,
-            category=LogCategory.SYSTEM,
-            message="Logs WebSocket client disconnected",
-            component="websocket"
-        )
-    except Exception as e:
-        global_logger.log_error(f"Logs WebSocket error: {str(e)}")
-        global_logger.log_structured(
-            level=LogLevel.ERROR,
-            category=LogCategory.SYSTEM,
-            message=f"Logs WebSocket error: {str(e)}",
-            component="websocket"
-        )
-
+# Global logs WebSocket removed - logs are now project-specific
+# Each project has its own logs accessible via /ws/project/{project_id}/logs
 
 @app.websocket("/ws/project/{project_id}/logs")
 async def project_logs_websocket(websocket: WebSocket, project_id: int):
-    """WebSocket endpoint for project-specific process logs streaming"""
+    """WebSocket endpoint for project-specific process logs streaming from VM"""
     await websocket.accept()
     global_logger.log_structured(
         level=LogLevel.INFO,
@@ -3261,51 +3670,95 @@ async def project_logs_websocket(websocket: WebSocket, project_id: int):
             "type": "success"
         })
         
-        # Get container name from project
-        container_name = None
+        # Get deployment info (VM name, log file path)
+        deployment = None
+        vm_name = None
+        log_file_path = None
+        
         with Session(engine) as session:
             deployment = session.exec(
                 select(Deployment).where(Deployment.id == project_id)
             ).first()
-            if deployment and deployment.container_name:
-                container_name = deployment.container_name
         
-        if not container_name:
-            await websocket.send_json({
-                "message": f"No project found for project {project_id}",
-                "type": "error"
-            })
-            await websocket.close()
-            return
+            if not deployment:
+                await websocket.send_json({
+                    "message": f"No project found for project {project_id}",
+                    "type": "error"
+                })
+                await websocket.close()
+                return
         
-        # Stream process logs
-        last_log_count = 0
+            # Get VM name
+            vm_name = deployment.vm_name or f"butler-user-{deployment.user_id}"
+            # Log file is stored in VM at /tmp/project-{deployment_id}.log
+            log_file_path = f"/tmp/project-{project_id}.log"
+        
+        # Import vm_manager for reading logs from VM
+        from vm_manager import vm_manager
+        import time
+        
+        # Stream logs from VM log file
+        last_position = 0
+        # Track last sent time for duplicate messages (deduplication)
+        last_message_time = {}  # {message: timestamp}
+        DEDUP_INTERVAL = 5.0  # Only show duplicate messages every 5 seconds
+        
         while True:
             try:
-                # Get recent logs from process manager
-                logs = pm.get_process_logs(container_name, lines=50)
+                # Read log file from VM
+                log_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"test -f {log_file_path} && echo 'exists' || echo 'not_exists'"
+                )
                 
-                if logs:
-                    # Only send new lines to avoid spamming
-                    new_lines = logs[-10:] if len(logs) > last_log_count else []
-                    last_log_count = len(logs)
+                if "exists" in (log_check.stdout or "").strip():
+                    # Read new lines from log file
+                    read_cmd = f"tail -c +{last_position + 1} {log_file_path} 2>/dev/null || cat {log_file_path} 2>/dev/null"
+                    log_result = await vm_manager.exec_in_vm(vm_name, read_cmd)
                     
-                    for line in new_lines:
-                        if line.strip():
-                            await websocket.send_json({
-                                "message": line.strip(),
-                                "type": "info"
-                            })
-                elif not pm.is_process_running(container_name):
-                    # Process is not running
+                    if log_result.stdout:
+                        new_lines = log_result.stdout.split('\n')
+                        # Filter out empty lines
+                        new_lines = [line for line in new_lines if line.strip()]
+                        
+                        # Send new log lines with deduplication
+                        current_time = time.time()
+                        for line in new_lines:
+                            if line.strip():
+                                message = line.strip()
+                                
+                                # Check if this is a duplicate message
+                                if message in last_message_time:
+                                    # Only send if enough time has passed (5 seconds)
+                                    time_since_last = current_time - last_message_time[message]
+                                    if time_since_last < DEDUP_INTERVAL:
+                                        continue  # Skip duplicate message
+                                
+                                # Send the message and update timestamp
+                                await websocket.send_json({
+                                    "message": message,
+                                    "type": "info"
+                                })
+                                last_message_time[message] = current_time
+                        
+                        # Update position (approximate - we read the whole file)
+                        # For better tracking, we could use wc -c to get file size
+                        size_result = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"wc -c < {log_file_path} 2>/dev/null || echo '0'"
+                        )
+                        if size_result.stdout and size_result.stdout.strip().isdigit():
+                            last_position = int(size_result.stdout.strip())
+                else:
+                    # Log file doesn't exist yet - process might not be running
                     await websocket.send_json({
-                        "message": "Process is not running",
+                        "message": "Log file not found - process may not be running",
                         "type": "warning"
                     })
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(3)
                 
                 # Wait before next fetch
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
                 
             except Exception as e:
                 global_logger.log_error(f"Error in logs loop: {str(e)}")

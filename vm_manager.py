@@ -13,6 +13,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class VMError(Exception):
+    """Raised when VM command execution fails"""
+
 
 class VMManager:
     """Manages OrbStack VMs for user deployments"""
@@ -403,6 +406,18 @@ class VMManager:
                     "name": "Install PM2",
                     "required": False  # Optional, can skip if fails
                 },
+                # Install Docker and docker-compose
+                {
+                    "cmd": "sudo apt-get install -y ca-certificates curl gnupg lsb-release && sudo mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg && echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && sudo apt-get update -y && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
+                    "name": "Install Docker and docker-compose",
+                    "required": False  # Optional, can skip if fails
+                },
+                # Add user to docker group (so they can run docker without sudo)
+                {
+                    "cmd": "sudo usermod -aG docker $USER || true",
+                    "name": "Add user to docker group",
+                    "required": False
+                },
                 # Install Python package manager (upgrade pip)
                 {
                     "cmd": "sudo pip3 install --upgrade pip",
@@ -783,7 +798,23 @@ class VMManager:
             logger.error(f"Error listing VMs: {e}")
             return []
 
-
 # Global VM manager instance
 vm_manager = VMManager()
+
+
+async def safe_exec(vm_name: str, command: str, timeout: int = 600, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None):
+    """
+    Execute a command inside VM and raise VMError on failure.
+    """
+    try:
+        result = await vm_manager.exec_in_vm(vm_name, command, cwd=cwd, env=env)
+        if result.returncode != 0:
+            stderr = result.stderr or ""
+            stdout = result.stdout or ""
+            raise VMError(f"VM command failed: {command}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        return result
+    except VMError:
+        raise
+    except Exception as e:
+        raise VMError(f"VM command error: {command}\n{str(e)}")
 

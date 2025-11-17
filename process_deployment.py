@@ -19,6 +19,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+def log_step(deployment_id: int, step: str, message: str, level: str = "INFO") -> None:
+    """
+    Structured per-deployment logging helper.
+    """
+    log_fn = getattr(logger, level.lower(), logger.info)
+    log_fn(f"[DEPLOY {deployment_id}] [{step}] {message}")
+
 from utils import (
     validate_git_url,
     extract_repo_name
@@ -29,7 +36,11 @@ from database import engine
 from login import Deployment
 from sqlmodel import Session, select
 from sqlalchemy import func
-from dockerfile_parser import parse_dockerfile, parse_docker_compose, detect_monorepo_structure
+import logging
+from utils import set_status, DeploymentError
+from vm_manager import VMError, safe_exec
+from cloudflare_manager import CloudflareError, safe_configure_domain
+# dockerfile_parser removed - Docker files are now handled by docker_deployment.py
 
 
 def parse_readme_for_commands(readme_path: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
@@ -104,43 +115,8 @@ async def detect_build_and_start_commands(repo_dir: str) -> Tuple[Optional[str],
     start_cmd = None
     default_port = None
     
-    # PRIORITY 1: Check for docker-compose.yml first
-    compose_files = ['docker-compose.yml', 'docker-compose.yaml']
-    for compose_file in compose_files:
-        compose_path = os.path.join(repo_dir, compose_file)
-        if os.path.exists(compose_path):
-            compose_info = parse_docker_compose(compose_path)
-            if compose_info:
-                # Try to find the main service (usually 'web', 'app', 'frontend', or first service)
-                main_service = None
-                for service_name in ['web', 'app', 'frontend', 'main']:
-                    if service_name in compose_info:
-                        main_service = compose_info[service_name]
-                        break
-                if not main_service and compose_info:
-                    # Use first service
-                    main_service = list(compose_info.values())[0]
-                
-                if main_service and main_service.get('command'):
-                    start_cmd = main_service['command']
-                    if main_service.get('port'):
-                        default_port = main_service['port']
-                    # If we got command from docker-compose, use it
-                    if start_cmd:
-                        return build_cmd, start_cmd, default_port
-    
-    # PRIORITY 2: Check for Dockerfile (extract commands from it)
-    dockerfile_path = os.path.join(repo_dir, 'Dockerfile')
-    if os.path.exists(dockerfile_path):
-        dockerfile_info = parse_dockerfile(dockerfile_path)
-        if dockerfile_info:
-            build_cmd = dockerfile_info.get('build_command')
-            start_cmd = dockerfile_info.get('start_command')
-            if dockerfile_info.get('port'):
-                default_port = dockerfile_info['port']
-            # If we got commands from Dockerfile, use them
-            if start_cmd:
-                return build_cmd, start_cmd, default_port
+    # Docker files are now handled by docker_deployment.py
+    # Skip Docker file parsing here - they will be detected and handled in the main deployment flow
     
     # PRIORITY 3: Check for README.md
     readme_files = ['README.md', 'README.txt', 'README', 'readme.md']
@@ -307,6 +283,7 @@ async def run_process_deployment(
 ) -> Optional[Tuple[str, str]]:
     """
     Deploy a project using VM-based process execution (inside OrbStack VM).
+    Includes retry logic: if first attempt fails, AI re-analyzes and retries.
     
     Args:
         git_url: Git repository URL
@@ -323,6 +300,77 @@ async def run_process_deployment(
     
     Returns:
         Tuple of (project_id, deployed_url) if successful, None otherwise
+    """
+    max_retries = 2  # Try up to 2 times (initial attempt + 1 retry)
+    
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                await manager.broadcast(f"🔄 Retry attempt {attempt + 1}/{max_retries} - AI re-analyzing project...")
+                # On retry, clear previous commands to force re-analysis
+                build_command = None
+                start_command = None
+                port = None
+            
+            result = await _run_deployment_attempt(
+                git_url=git_url,
+                user_id=user_id,
+                build_command=build_command,
+                start_command=start_command,
+                port=port,
+                env_vars=env_vars,
+                existing_deployment_id=existing_deployment_id,
+                parent_project_id=parent_project_id,
+                component_type=component_type,
+                root_directory=root_directory,
+                project_name=project_name,
+                is_retry=(attempt > 0)
+            )
+            
+            if result:
+                return result
+            else:
+                if attempt < max_retries - 1:
+                    await manager.broadcast(f"⚠️ Deployment attempt {attempt + 1} failed, retrying with AI re-analysis...")
+                    await asyncio.sleep(2)  # Brief pause before retry
+                    continue
+                else:
+                    await manager.broadcast(f"❌ All {max_retries} deployment attempts failed")
+                    return None
+                    
+        except DeploymentError as e:
+            if attempt < max_retries - 1:
+                await manager.broadcast(f"⚠️ Deployment failed: {str(e)}")
+                await manager.broadcast(f"🔄 Retrying with AI re-analysis...")
+                await asyncio.sleep(2)
+                continue
+            else:
+                await manager.broadcast(f"❌ Deployment failed after {max_retries} attempts: {str(e)}")
+                return None
+        except Exception as e:
+            # Non-retryable errors (validation, etc.)
+            await manager.broadcast(f"❌ Deployment error: {str(e)}")
+            return None
+    
+    return None
+
+
+async def _run_deployment_attempt(
+    git_url: str,
+    user_id: Optional[int] = None,
+    build_command: Optional[str] = None,
+    start_command: Optional[str] = None,
+    port: Optional[int] = None,
+    env_vars: Optional[Dict[str, str]] = None,
+    existing_deployment_id: Optional[int] = None,
+    parent_project_id: Optional[int] = None,
+    component_type: Optional[str] = None,
+    root_directory: Optional[str] = "./",
+    project_name: Optional[str] = None,
+    is_retry: bool = False
+) -> Optional[Tuple[str, str]]:
+    """
+    Internal deployment attempt function (called by run_process_deployment with retry logic)
     """
     deployment_id = None  # Initialize early for exception handling
     try:
@@ -591,52 +639,141 @@ async def run_process_deployment(
                     with Session(engine) as session:
                         deployment = session.get(Deployment, deployment_id)
                         if deployment:
-                            deployment.status = "failed"
+                            set_status(deployment, "failed")
                             session.add(deployment)
                             session.commit()
                 return None
             
             await manager.broadcast("✅ Repository cloned successfully in VM")
         
-        # Auto-detect build and start commands if not provided
-        # Priority: 1. User-provided, 2. AI analysis results from DB, 3. File-based detection
+        # PRIORITY 0: AI ANALYSIS FIRST - Let AI understand the project by reading files
+        # AI will check for Dockerfile, docker-compose.yml, and read all relevant files
+        # This gives us intelligent deployment decisions based on actual project structure
+        ai_analysis_result = None
+        if is_retry:
+            await manager.broadcast("🤖 AI is re-analyzing project - reading Dockerfile, docker-compose.yml, package.json, requirements.txt, and other files...")
+        else:
+            await manager.broadcast("🤖 AI is analyzing project structure - reading Dockerfile, docker-compose.yml, package.json, requirements.txt, and other files...")
+        try:
+            from project_analyzer import analyze_project_with_ai, analyze_project_simple
+            # Check if AI is available
+            try:
+                import google.generativeai as genai  # type: ignore
+                AI_AVAILABLE = True
+            except ImportError:
+                AI_AVAILABLE = False
+            
+            # Try AI analysis first (if available)
+            if AI_AVAILABLE:
+                try:
+                    ai_analysis_result = await analyze_project_with_ai(
+                        vm_name, vm_project_dir, vm_manager, manager
+                    )
+                    if ai_analysis_result and ai_analysis_result.get("start_command"):
+                        await manager.broadcast(f"✅ AI analysis complete: {ai_analysis_result.get('framework', 'Unknown')} project detected")
+                except Exception as ai_error:
+                    logger.warning(f"AI analysis failed: {ai_error}, falling back to simple analysis")
+                    ai_analysis_result = None
+            
+            # Fallback to simple analysis if AI not available or failed
+            if not ai_analysis_result:
+                ai_analysis_result = await analyze_project_simple(
+                    vm_name, vm_project_dir, vm_manager, manager
+                )
+                if ai_analysis_result and ai_analysis_result.get("start_command"):
+                    await manager.broadcast(f"✅ Project analysis complete: {ai_analysis_result.get('framework', 'Unknown')} project detected")
+            
+            # Use AI analysis results if available and user hasn't provided commands
+            if ai_analysis_result:
+                if not build_command and ai_analysis_result.get("build_command"):
+                    build_command = ai_analysis_result["build_command"]
+                    await manager.broadcast(f"🤖 Using AI-detected build command: {build_command}")
+                
+                if not start_command and ai_analysis_result.get("start_command"):
+                    start_command = ai_analysis_result["start_command"]
+                    await manager.broadcast(f"🤖 Using AI-detected start command: {start_command}")
+                
+                if not port and ai_analysis_result.get("port"):
+                    port = ai_analysis_result["port"]
+                    await manager.broadcast(f"🤖 Using AI-detected port: {port}")
+                
+                # Check if AI detected Docker - BUT VERIFY FILES ACTUALLY EXIST
+                is_docker = ai_analysis_result.get("is_docker", False) or "docker" in (ai_analysis_result.get("framework", "") or "").lower()
+                deployment_type = ai_analysis_result.get("deployment_type", "")
+                
+                # CRITICAL: Always verify Docker files actually exist before using Docker deployment
+                # Don't trust AI - verify the files are really there!
+                if is_docker:
+                    await manager.broadcast("🔍 Verifying Docker files actually exist...")
+                    docker_compose_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"test -f {vm_project_dir}/docker-compose.yml -o -f {vm_project_dir}/docker-compose.yaml && echo 'exists' || echo 'not_exists'"
+                    )
+                    dockerfile_check = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"test -f {vm_project_dir}/Dockerfile && echo 'exists' || echo 'not_exists'"
+                    )
+                    
+                    docker_compose_exists = "exists" in (docker_compose_check.stdout or "").strip()
+                    dockerfile_exists = "exists" in (dockerfile_check.stdout or "").strip()
+                    
+                    if not docker_compose_exists and not dockerfile_exists:
+                        # AI was wrong - no Docker files exist!
+                        await manager.broadcast("⚠️ AI suggested Docker but no Docker files found - ignoring Docker suggestion")
+                        logger.warning(f"AI incorrectly detected Docker for project without Docker files")
+                        # Clear Docker detection to use other deployment methods
+                        is_docker = False
+                        if start_command and ("docker" in start_command.lower()):
+                            start_command = None  # Clear incorrect Docker command
+                            await manager.broadcast("🔄 Clearing incorrect Docker command, will detect proper deployment method")
+                    else:
+                        # Docker files DO exist - proceed with Docker deployment
+                        # Check if Docker is available
+                        docker_available = False
+                        try:
+                            docker_check = await vm_manager.exec_in_vm(vm_name, "which docker")
+                            docker_available = docker_check.returncode == 0 and docker_check.stdout.strip()
+                        except:
+                            pass
+                        
+                        if docker_available and (docker_compose_exists or dockerfile_exists):
+                            await manager.broadcast("🐳 AI detected Docker configuration - using Docker deployment...")
+                            try:
+                                from docker_deployment import deploy_with_docker
+                                docker_result = await deploy_with_docker(
+                                    git_url, vm_name, vm_project_dir, deployment_id, user_id, env_vars
+                                )
+                                if docker_result:
+                                    service_url, status = docker_result
+                                    # Update deployment with service URL
+                                    with Session(engine) as session:
+                                        deployment = session.get(Deployment, deployment_id)
+                                        if deployment:
+                                            deployment.deployed_url = service_url
+                                            set_status(deployment, status)
+                                            session.add(deployment)
+                                            session.commit()
+                                    return docker_result
+                                else:
+                                    await manager.broadcast("⚠️ Docker deployment failed, falling back to process-based deployment")
+                            except Exception as docker_error:
+                                logger.warning(f"Docker deployment failed: {docker_error}, falling back to process-based")
+                                await manager.broadcast(f"⚠️ Docker deployment error: {str(docker_error)}, using process-based deployment")
+        except Exception as analysis_error:
+            logger.warning(f"Project analysis failed: {analysis_error}, continuing with manual detection")
+            await manager.broadcast(f"⚠️ Analysis error: {str(analysis_error)}, using fallback detection")
+        
+        # Auto-detect build and start commands if not provided (fallback if AI didn't provide)
+        # Priority: 1. User-provided, 2. AI analysis (already done), 3. File-based detection
         if not build_command or not start_command or not port:
             await manager.broadcast("🔍 Auto-detecting build and start commands...")
             
-            # PRIORITY 1: Check for static HTML files FIRST (before AI results)
-            # This prevents static sites from being misclassified as Python/Node.js projects
-            # Static sites should NEVER run build commands like "pip install -r requirements.txt"
-            is_static_site = False
-            if not build_command or not start_command:
-                await manager.broadcast("📄 Checking for static HTML files...")
-                try:
-                    # Check for index.html or any .html files in the project directory
-                    html_check = await vm_manager.exec_in_vm(
-                        vm_name,
-                        f"if [ -f {vm_project_dir}/index.html ] || [ $(find {vm_project_dir} -maxdepth 1 -name '*.html' 2>/dev/null | wc -l) -gt 0 ]; then echo 'found'; else echo 'not_found'; fi"
-                    )
-                    
-                    if "found" in (html_check.stdout or "").strip():
-                        # Static HTML site detected - prioritize this over ALL other detections
-                        is_static_site = True
-                        await manager.broadcast("✅ Detected static HTML site - overriding AI analysis")
-                        # Force static site configuration (ignore AI results)
-                        build_command = None  # No build needed for static sites
-                        if not start_command:
-                            # Use Python's built-in HTTP server for static sites
-                            start_command = "python3 -m http.server 8080 --bind 0.0.0.0"
-                            await manager.broadcast(f"✅ Detected start command for static site: {start_command}")
-                        if not port:
-                            port = 8080
-                            await manager.broadcast(f"✅ Detected port for static site: {port}")
-                except Exception as e:
-                    logger.debug(f"Error checking for static HTML files: {e}")
-                    # Continue with other detection methods
+            # AI analysis already done at PRIORITY 0, skip if already got results
             
-            # PRIORITY 2: Check for AI analysis results in database (if deployment exists and NOT a static site)
+            # PRIORITY 2: Check for AI analysis results in database (if deployment exists)
             # AI analysis runs in background after import, so results may already be available
-            # BUT: Skip AI results if we detected a static site (they might be wrong)
-            if not is_static_site:
+            # Only use if we didn't get fresh AI analysis results above
+            if not ai_analysis_result:
                 ai_detected = False
                 if deployment_id:
                     with Session(engine) as session:
@@ -673,172 +810,84 @@ async def run_process_deployment(
                                 ai_detected = True
                                 await manager.broadcast(f"🤖 Using AI-detected port: {port}")
             
-            # PRIORITY 3: Use dockerfile_parser for Docker-based detection (if AI results not available and not static site)
+            # Docker files are now handled by docker_deployment.py at PRIORITY 0
+            # Skip Docker file parsing here - they are detected and deployed using Docker directly
+            
+            # PRIORITY 3: Check for package.json (Node.js) - detailed detection
             if not build_command or not start_command:
-                await manager.broadcast("📁 Checking project files for build/start commands...")
+                package_json_check = await vm_manager.exec_in_vm(
+                    vm_name,
+                    f"test -f {vm_project_dir}/package.json && echo 'found' || echo 'not_found'"
+                )
                 
-                # Check for docker-compose.yml first (use dockerfile_parser)
-                compose_files = ['docker-compose.yml', 'docker-compose.yaml']
-                for compose_file in compose_files:
-                    compose_check = await vm_manager.exec_in_vm(
+                if "found" in (package_json_check.stdout or ""):
+                    # Read package.json
+                    package_json_content = await vm_manager.exec_in_vm(
                         vm_name,
-                        f"test -f {vm_project_dir}/{compose_file} && echo 'found' || echo 'not_found'"
+                        f"cat {vm_project_dir}/package.json"
                     )
-                    if "found" in (compose_check.stdout or ""):
-                        # Read docker-compose file
-                        compose_content = await vm_manager.exec_in_vm(
-                            vm_name,
-                            f"cat {vm_project_dir}/{compose_file}"
-                        )
-                        if compose_content.returncode == 0 and compose_content.stdout:
-                            # Use dockerfile_parser to parse docker-compose
-                            try:
-                                # Write content to temp file for parsing
-                                import tempfile
-                                with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as tmp_file:
-                                    tmp_file.write(compose_content.stdout)
-                                    tmp_compose_path = tmp_file.name
-                                
-                                compose_info = parse_docker_compose(tmp_compose_path)
-                                if compose_info:
-                                    # Find main service
-                                    main_service = None
-                                    for service_name in ['web', 'app', 'frontend', 'main']:
-                                        if service_name in compose_info:
-                                            main_service = compose_info[service_name]
-                                            break
-                                    if not main_service and compose_info:
-                                        main_service = list(compose_info.values())[0]
-                                    
-                                    if main_service:
-                                        if not start_command and main_service.get('command'):
-                                            start_command = main_service['command']
-                                            await manager.broadcast(f"✅ Detected start command from docker-compose: {start_command}")
-                                        if not port and main_service.get('port'):
-                                            port = main_service['port']
-                                            await manager.broadcast(f"✅ Detected port from docker-compose: {port}")
-                                
-                                # Clean up temp file
-                                os.unlink(tmp_compose_path)
-                            except Exception as e:
-                                logger.debug(f"Error parsing docker-compose: {e}")
-                                pass
-                        break
-                
-                # Check for Dockerfile (use dockerfile_parser)
-                if not start_command:
-                    dockerfile_check = await vm_manager.exec_in_vm(
-                        vm_name,
-                        f"test -f {vm_project_dir}/Dockerfile && echo 'found' || echo 'not_found'"
-                    )
-                    
-                    if "found" in (dockerfile_check.stdout or ""):
-                        # Read Dockerfile
-                        dockerfile_content = await vm_manager.exec_in_vm(
-                            vm_name,
-                            f"cat {vm_project_dir}/Dockerfile"
-                        )
-                        if dockerfile_content.returncode == 0 and dockerfile_content.stdout:
-                            try:
-                                # Write content to temp file for parsing
-                                import tempfile
-                                with tempfile.NamedTemporaryFile(mode='w', suffix='.Dockerfile', delete=False) as tmp_file:
-                                    tmp_file.write(dockerfile_content.stdout)
-                                    tmp_dockerfile_path = tmp_file.name
-                                
-                                dockerfile_info = parse_dockerfile(tmp_dockerfile_path)
-                                if dockerfile_info:
-                                    if not build_command and dockerfile_info.get('build_command'):
-                                        build_command = dockerfile_info['build_command']
-                                        await manager.broadcast(f"✅ Detected build command from Dockerfile: {build_command}")
-                                    if not start_command and dockerfile_info.get('start_command'):
-                                        start_command = dockerfile_info['start_command']
-                                        await manager.broadcast(f"✅ Detected start command from Dockerfile: {start_command}")
-                                    if not port and dockerfile_info.get('port'):
-                                        port = dockerfile_info['port']
-                                        await manager.broadcast(f"✅ Detected port from Dockerfile: {port}")
-                                
-                                # Clean up temp file
-                                os.unlink(tmp_dockerfile_path)
-                            except Exception as e:
-                                logger.debug(f"Error parsing Dockerfile: {e}")
-                                pass
-                
-                # Check for package.json (Node.js) - detailed detection
-                if not build_command or not start_command:
-                    package_json_check = await vm_manager.exec_in_vm(
-                        vm_name,
-                        f"test -f {vm_project_dir}/package.json && echo 'found' || echo 'not_found'"
-                    )
-                    
-                    if "found" in (package_json_check.stdout or ""):
-                        # Read package.json
-                        package_json_content = await vm_manager.exec_in_vm(
-                            vm_name,
-                            f"cat {vm_project_dir}/package.json"
-                        )
-                        if package_json_content.returncode == 0 and package_json_content.stdout:
-                            try:
-                                package_data = json.loads(package_json_content.stdout)
-                                scripts = package_data.get('scripts', {})
-                                deps = package_data.get('dependencies', {})
-                                dev_deps = package_data.get('devDependencies', {})
-                                
-                                # Detect build command
-                                if not build_command:
-                                    if 'build' in scripts:
-                                        build_command = "npm install && npm run build"
-                                    elif 'next' in deps or 'next' in dev_deps:
-                                        build_command = "npm install && npx next build"
-                                    else:
-                                        build_command = "npm install"
-                                    await manager.broadcast(f"✅ Detected build command: {build_command}")
-                                
-                                # Detect start command
-                                if not start_command:
-                                    if 'start' in scripts:
-                                        start_command = "npm start"
-                                    elif 'next' in deps or 'next' in dev_deps:
-                                        start_command = "npx next start"
-                                    elif 'dev' in scripts:
-                                        start_command = "npm run dev"
-                                    elif 'serve' in scripts:
-                                        start_command = "npm run serve"
-                                    else:
-                                        # Check for common entry points (single VM call)
-                                        entry_points = [
-                                            'src/index.js',
-                                            'src/server.js',
-                                            'server.js',
-                                            'app.js',
-                                            'index.js'
-                                        ]
-                                        entry_check = await vm_manager.exec_in_vm(
-                                            vm_name,
-                                            f"for file in {' '.join([f'{vm_project_dir}/{ep}' for ep in entry_points])}; do if [ -f \"$file\" ]; then echo $(basename $(dirname \"$file\"))/$(basename \"$file\") 2>/dev/null || echo $(basename \"$file\"); break; fi; done"
-                                        )
-                                        entry_point = (entry_check.stdout or "").strip()
-                                        if entry_point:
-                                            # Clean up the path
-                                            if entry_point.startswith(f'{vm_project_dir}/'):
-                                                entry_point = entry_point.replace(f'{vm_project_dir}/', '')
-                                            start_command = f"node {entry_point}"
-                                        else:
-                                            start_command = "npm start"  # Fallback
-                                    await manager.broadcast(f"✅ Detected start command: {start_command}")
-                                
-                                # Default port for Node.js
-                                if not port:
-                                    port = 3000
-                                    await manager.broadcast(f"✅ Using default Node.js port: {port}")
-                            except json.JSONDecodeError as e:
-                                # Fallback to simple detection
-                                if not build_command:
+                    if package_json_content.returncode == 0 and package_json_content.stdout:
+                        try:
+                            package_data = json.loads(package_json_content.stdout)
+                            scripts = package_data.get('scripts', {})
+                            deps = package_data.get('dependencies', {})
+                            dev_deps = package_data.get('devDependencies', {})
+                            
+                            # Detect build command
+                            if not build_command:
+                                if 'build' in scripts:
+                                    build_command = "npm install && npm run build"
+                                elif 'next' in deps or 'next' in dev_deps:
+                                    build_command = "npm install && npx next build"
+                                else:
                                     build_command = "npm install"
-                                if not start_command:
+                                await manager.broadcast(f"✅ Detected build command: {build_command}")
+                            
+                            # Detect start command
+                            if not start_command:
+                                if 'start' in scripts:
                                     start_command = "npm start"
-                                if not port:
-                                    port = 3000
+                                elif 'next' in deps or 'next' in dev_deps:
+                                    start_command = "npx next start"
+                                elif 'dev' in scripts:
+                                    start_command = "npm run dev"
+                                elif 'serve' in scripts:
+                                    start_command = "npm run serve"
+                                else:
+                                    # Check for common entry points (single VM call)
+                                    entry_points = [
+                                        'src/index.js',
+                                        'src/server.js',
+                                        'server.js',
+                                        'app.js',
+                                        'index.js'
+                                    ]
+                                    entry_check = await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"for file in {' '.join([f'{vm_project_dir}/{ep}' for ep in entry_points])}; do if [ -f \"$file\" ]; then echo $(basename $(dirname \"$file\"))/$(basename \"$file\") 2>/dev/null || echo $(basename \"$file\"); break; fi; done"
+                                    )
+                                    entry_point = (entry_check.stdout or "").strip()
+                                    if entry_point:
+                                        # Clean up the path
+                                        if entry_point.startswith(f'{vm_project_dir}/'):
+                                            entry_point = entry_point.replace(f'{vm_project_dir}/', '')
+                                        start_command = f"node {entry_point}"
+                                    else:
+                                        start_command = "npm start"  # Fallback
+                                await manager.broadcast(f"✅ Detected start command: {start_command}")
+                            
+                            # Default port for Node.js
+                            if not port:
+                                port = 3000
+                                await manager.broadcast(f"✅ Using default Node.js port: {port}")
+                        except json.JSONDecodeError as e:
+                            # Fallback to simple detection
+                            if not build_command:
+                                build_command = "npm install"
+                            if not start_command:
+                                start_command = "npm start"
+                            if not port:
+                                port = 3000
                 
                 # Check for requirements.txt (Python)
                 if not build_command or not start_command:
@@ -957,7 +1006,7 @@ async def run_process_deployment(
                                 with Session(engine) as session:
                                     deployment = session.get(Deployment, deployment_id)
                                     if deployment:
-                                        deployment.status = "failed"
+                                        set_status(deployment, "failed")
                                         session.add(deployment)
                                         session.commit()
                             return None
@@ -966,6 +1015,82 @@ async def run_process_deployment(
                         # Log build output if available
                         if build_result.stdout:
                             await manager.broadcast(f"Build output: {build_result.stdout[:500]}")
+                        
+                        # POST-BUILD VERIFICATION: Intelligently adjust start command based on what was actually built
+                        # This fixes issues where React apps need to serve from build/ or dist/ folders
+                        await manager.broadcast("🔍 Verifying build output and adjusting start command...")
+                        try:
+                            # Check what build output folders exist after build
+                            build_output_check = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"cd {vm_project_dir} && "
+                                f"if [ -d build ] && [ -f build/index.html ]; then echo 'build'; "
+                                f"elif [ -d dist ] && [ -f dist/index.html ]; then echo 'dist'; "
+                                f"elif [ -d out ] && [ -f out/index.html ]; then echo 'out'; "
+                                f"elif [ -d .next ]; then echo 'next'; "
+                                f"else echo 'none'; fi"
+                            )
+                            build_output = (build_output_check.stdout or "").strip()
+                            
+                            # Check if this is a React/static frontend build that needs to be served from a folder
+                            # Read package.json to understand the project structure
+                            package_json_check = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"cat {vm_project_dir}/package.json 2>/dev/null"
+                            )
+                            is_react_app = False
+                            is_vite = False
+                            if package_json_check.returncode == 0 and package_json_check.stdout:
+                                try:
+                                    package_data = json.loads(package_json_check.stdout)
+                                    deps = package_data.get('dependencies', {})
+                                    dev_deps = package_data.get('devDependencies', {})
+                                    all_deps = {**deps, **dev_deps}
+                                    
+                                    # Check for React
+                                    is_react = any('react' in str(k).lower() for k in all_deps.keys())
+                                    # Check for Vite
+                                    is_vite = any('vite' in str(k).lower() for k in all_deps.keys())
+                                    # Check for Next.js
+                                    is_next = any('next' in str(k).lower() for k in all_deps.keys())
+                                    
+                                    # Determine if this is a frontend build
+                                    is_react_app = is_react and not is_next
+                                    
+                                    logger.info(f"Post-build check: react={is_react}, vite={is_vite}, next={is_next}, build_output={build_output}")
+                                except:
+                                    pass
+                            
+                            # If React app and build output exists, serve from that folder
+                            if is_react_app and build_output in ['build', 'dist', 'out']:
+                                # ALWAYS serve from build output folder for React apps
+                                original_start = start_command or ""
+                                new_port = port or 3000
+                                
+                                # Extract port from original command if present
+                                port_match = re.search(r'\b(\d{4})\b', original_start)
+                                if port_match:
+                                    new_port = int(port_match.group(1))
+                                
+                                # Force serve from build directory
+                                new_start = f"python3 -m http.server {new_port} --bind 0.0.0.0 --directory {build_output}"
+                                start_command = new_start
+                                await manager.broadcast(f"🔄 React app detected: Serving from {build_output}/ folder (NOT root directory)")
+                                await manager.broadcast(f"✅ Start command: {new_start}")
+                                logger.info(f"Post-build adjustment: React app, serving from {build_output}, changed from '{original_start}' to '{new_start}'")
+                            
+                            # If build output exists but no start command, serve from that folder
+                            elif build_output in ['build', 'dist', 'out'] and not start_command:
+                                new_port = port or 3000
+                                start_command = f"python3 -m http.server {new_port} --bind 0.0.0.0 --directory {build_output}"
+                                await manager.broadcast(f"✅ Detected build output in {build_output}/ folder, serving from there")
+                                logger.info(f"Post-build detection: Found {build_output} folder, using it for start command")
+                            
+                        except Exception as post_build_error:
+                            logger.warning(f"Error in post-build verification: {post_build_error}")
+                            # Don't fail deployment if post-build check fails, continue with original start command
+                            pass
+                            
                 except Exception as e:
                     error_msg = f"Build command failed in VM with error: {str(e)}"
                     await manager.broadcast(f"❌ {error_msg}")
@@ -978,7 +1103,7 @@ async def run_process_deployment(
                             with Session(engine) as session:
                                 deployment = session.get(Deployment, deployment_id)
                                 if deployment:
-                                    deployment.status = "failed"
+                                    set_status(deployment, "failed")
                                     session.add(deployment)
                                     session.commit()
                         return None
@@ -1109,7 +1234,9 @@ async def run_process_deployment(
             # Replace the port in start_command with host_port
             import re
             # For python3 -m http.server, replace port number
+            # Handle both formats: "http.server 3000" and "http.server 3000 --bind"
             if "python3 -m http.server" in start_command:
+                # Replace port number in http.server command (handles --directory and --bind flags)
                 start_command = re.sub(r'http\.server\s+\d+', f'http.server {host_port}', start_command)
             else:
                 # Generic replacement for other commands
@@ -1238,22 +1365,17 @@ async def run_process_deployment(
             log_file = f"/tmp/project-{deployment_id}.log"
             pid_file = f"/tmp/project-{deployment_id}.pid"
             
-            # Start command in background using nohup
-            # Problem: `echo $!` captures the PID of the nohup/shell process, not the actual process
-            # Solution: Use a better method - run the process and find its PID by port or process name
+            # Start command in background using nohup with proper detaching
             # Escape single quotes in start_command for safe shell execution
-            # Replace single quotes with '\'' (end quote, escaped quote, start quote)
             escaped_start_command = start_command.replace("'", "'\"'\"'")
-            # Use a wrapper that properly captures the PID of the actual process
-            # Format: (cd dir && nohup command > log 2>&1 &) && sleep 1 && pgrep -f 'command' | head -1 > pid_file
-            # Better: Just start the process and find PID by port/process name afterwards
-            # Use nohup with proper detaching to ensure process survives shell exit
-            # The key is to use 'nohup' with 'exec' or ensure the process is truly backgrounded
-            # Using 'nohup' with '&' and then 'disown' or using 'setsid' to detach from parent
-            # For maximum compatibility, we use: nohup sh -c "command" > log 2>&1 &
-            # But we need to ensure the process doesn't get killed when shell exits
-            # Solution: Use 'nohup' with proper redirection and ensure it's backgrounded correctly
-            start_cmd = f"cd {vm_project_dir} && nohup sh -c '{start_command}' > {log_file} 2>&1 & sleep 1"
+            
+            # Improved start command that ensures process stays alive:
+            # Use nohup with proper shell execution to ensure process survives shell exit
+            # Format: cd dir && nohup bash -c 'command' > log 2>&1 &
+            # The nohup command ensures the process continues running after the shell exits
+            # We use bash -c to properly execute the command with environment variables
+            # The & runs it in background, and nohup ensures it survives
+            start_cmd = f"cd {vm_project_dir} && nohup bash -c '{escaped_start_command}' > {log_file} 2>&1 &"
             
             # Execute the command with environment variables
             # Note: env vars are exported in exec_in_vm, so they should be available
@@ -1290,7 +1412,7 @@ async def run_process_deployment(
                     logger.info(f"Start command output: {start_result.stdout[:200]}")
             
             # Wait a moment for process to start
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)  # Increased wait time for process to fully start
             
             # Initialize variables for process verification
             pid = None
@@ -1298,6 +1420,20 @@ async def run_process_deployment(
             # PRIORITY 1: Check port FIRST (most reliable method for process verification)
             process_running = False
             port_listening = False
+            
+            # PRIORITY 0: Verify the command actually executed by checking log file exists
+            log_exists_check = await vm_manager.exec_in_vm(
+                vm_name,
+                f"test -f {log_file} && echo 'exists' || echo 'missing'"
+            )
+            if "missing" in (log_exists_check.stdout or "").strip():
+                # Log file doesn't exist - command might not have executed
+                error_msg = f"Start command may not have executed - log file not found: {log_file}"
+                await manager.broadcast(f"⚠️ {error_msg}")
+                logger.warning(error_msg)
+                # Try to read any error output from the start command
+                if start_result.stderr:
+                    await manager.broadcast(f"Error output: {start_result.stderr[:500]}")
             
             if port:
                 # Check if port is listening (primary verification method)
@@ -1446,41 +1582,83 @@ async def run_process_deployment(
             
             # PRIORITY 4: If port is not listening yet, wait a bit and check again (process might be starting)
             if not process_running and port:
-                await asyncio.sleep(3)  # Wait for process to start
-                # Check port again (final attempt)
-                port_check2 = await vm_manager.exec_in_vm(
-                    vm_name,
-                    f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
-                )
-                if port_check2.stdout and port_check2.stdout.strip():
-                    port_listening = True
-                    process_running = True
-                    logger.info(f"✅ Port {port} is now listening - process started")
+                # Try multiple times with increasing wait intervals
+                max_retries = 3
+                for retry in range(max_retries):
+                    wait_time = 2 + (retry * 2)  # 2s, 4s, 6s
+                    await manager.broadcast(f"⏳ Waiting for process to start on port {port} (attempt {retry + 1}/{max_retries})...")
+                    await asyncio.sleep(wait_time)
                     
-                    # Try to get PID from port (use multiple methods since lsof might not be installed)
-                    try:
-                        # Method 1: Try lsof
-                        pid_from_port = await vm_manager.exec_in_vm(
-                            vm_name,
-                            f"lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
-                        )
-                        if pid_from_port.stdout and pid_from_port.stdout.strip():
-                            pid = int(pid_from_port.stdout.strip())
-                            logger.info(f"✅ Found PID from port (after wait, lsof): {pid}")
-                        else:
-                            # Method 2: Use pgrep (more reliable, doesn't require lsof)
-                            pgrep_result = await vm_manager.exec_in_vm(
+                    # Check port again
+                    port_check2 = await vm_manager.exec_in_vm(
+                        vm_name,
+                        f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo ''"
+                    )
+                    if port_check2.stdout and port_check2.stdout.strip():
+                        port_listening = True
+                        logger.info(f"✅ Port {port} is now listening (after {wait_time}s wait)")
+                        
+                        # CRITICAL: Also verify HTTP accessibility before marking as running
+                        http_verified = False
+                        try:
+                            await manager.broadcast(f"🔍 Verifying HTTP accessibility...")
+                            http_check = await vm_manager.exec_in_vm(
                                 vm_name,
-                                f"pgrep -f 'http.server {port}' 2>/dev/null | head -1 || pgrep -f ':{port}' 2>/dev/null | head -1 || echo ''"
+                                f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 --connect-timeout 5 http://localhost:{port} 2>&1 || echo '000'"
                             )
-                            if pgrep_result.stdout and pgrep_result.stdout.strip():
-                                pid = int(pgrep_result.stdout.strip())
-                                logger.info(f"✅ Found PID from port (after wait, pgrep): {pid}")
+                            http_code = (http_check.stdout or "").strip()
+                            # HTTP status codes are 3 digits (200, 404, 500, etc.)
+                            # "000" means connection failed
+                            if http_code and len(http_code) == 3 and http_code.isdigit() and http_code != "000":
+                                http_verified = True
+                                process_running = True
+                                logger.info(f"✅ HTTP check passed - service returned status {http_code}")
+                                await manager.broadcast(f"✅ Service is accessible via HTTP (status: {http_code})")
                             else:
+                                logger.warning(f"⚠️ Port is listening but HTTP check failed (returned: {http_code})")
+                                await manager.broadcast(f"⚠️ Port {port} is listening but HTTP check failed - will retry...")
+                                # Don't mark as running if HTTP check fails - continue to next retry
+                                port_listening = False
+                        except Exception as e:
+                            logger.warning(f"⚠️ HTTP check failed: {e}")
+                            await manager.broadcast(f"⚠️ HTTP check error: {e} - will retry...")
+                            port_listening = False
+                        
+                        # Only break if both port is listening AND HTTP is verified
+                        if port_listening and http_verified:
+                            process_running = True
+                            # Try to get PID from port (use multiple methods since lsof might not be installed)
+                            try:
+                                # Method 1: Try lsof
+                                pid_from_port = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"lsof -ti :{port} 2>/dev/null | head -1 || echo ''"
+                                )
+                                if pid_from_port.stdout and pid_from_port.stdout.strip():
+                                    pid = int(pid_from_port.stdout.strip())
+                                    logger.info(f"✅ Found PID from port (after wait, lsof): {pid}")
+                                else:
+                                    # Method 2: Use pgrep (more reliable, doesn't require lsof)
+                                    pgrep_result = await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"pgrep -f 'http.server {port}' 2>/dev/null | head -1 || pgrep -f ':{port}' 2>/dev/null | head -1 || echo ''"
+                                    )
+                                    if pgrep_result.stdout and pgrep_result.stdout.strip():
+                                        pid = int(pgrep_result.stdout.strip())
+                                        logger.info(f"✅ Found PID from port (after wait, pgrep): {pid}")
+                                    else:
+                                        pid = None
+                            except Exception as e:
+                                logger.warning(f"Failed to get PID after wait: {e}")
                                 pid = None
-                    except Exception as e:
-                        logger.warning(f"Failed to get PID after wait: {e}")
-                        pid = None
+                            
+                            break
+                    elif not port_listening:
+                        # Port not listening, continue retry
+                        continue
+                    else:
+                        # Port listening but HTTP failed - continue retry
+                        continue
             
             # Final verification: If process is not running by port check, check log for fatal errors
             if not process_running:
@@ -1525,7 +1703,7 @@ async def run_process_deployment(
                             with Session(engine) as session:
                                 deployment = session.get(Deployment, deployment_id)
                                 if deployment:
-                                    deployment.status = "failed"
+                                    set_status(deployment, "failed")
                                     session.add(deployment)
                                     session.commit()
                             return None
@@ -1537,7 +1715,7 @@ async def run_process_deployment(
                         with Session(engine) as session:
                             deployment = session.get(Deployment, deployment_id)
                             if deployment:
-                                deployment.status = "failed"
+                                set_status(deployment, "failed")
                                 session.add(deployment)
                                 session.commit()
                         return None
@@ -1554,11 +1732,85 @@ async def run_process_deployment(
                             logger.info(f"✅ Port {port} is now listening - process started (delayed)")
                             await manager.broadcast(f"✅ Process is running (port {port} is listening)")
                         elif start_result.returncode == 0:
-                            # Command succeeded but port not listening - might be a non-port-based service
-                            # For now, assume it's running if command succeeded
-                            logger.warning(f"⚠️ Command succeeded but port {port} not listening - assuming process is running")
-                            await manager.broadcast(f"⚠️ Cannot verify port, but command succeeded - assuming running")
-                            process_running = True
+                            # Command succeeded but port not listening - need to actually verify
+                            # Check if it's a Docker Compose command
+                            is_docker_compose = "docker compose" in start_command.lower() or "docker-compose" in start_command.lower()
+                            
+                            if is_docker_compose:
+                                # For Docker Compose, check if containers are actually running
+                                await manager.broadcast(f"🐳 Checking Docker containers status...")
+                                container_check = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"cd {vm_project_dir} && docker compose ps --format json 2>/dev/null || docker-compose ps --format json 2>/dev/null || echo '[]'"
+                                )
+                                
+                                if container_check.stdout and container_check.stdout.strip() and container_check.stdout.strip() != '[]':
+                                    try:
+                                        import json
+                                        containers = json.loads(container_check.stdout)
+                                        if isinstance(containers, list) and len(containers) > 0:
+                                            running_containers = [c for c in containers if c.get('State') == 'running']
+                                            if running_containers:
+                                                await manager.broadcast(f"✅ Found {len(running_containers)} running container(s)")
+                                                # Check if any container is exposing the port
+                                                port_check_docker = await vm_manager.exec_in_vm(
+                                                    vm_name,
+                                                    f"docker ps --format '{{{{.Ports}}}}' | grep -o ':{port}' || echo ''"
+                                                )
+                                                if port_check_docker.stdout and port_check_docker.stdout.strip():
+                                                    process_running = True
+                                                    port_listening = True
+                                                    logger.info(f"✅ Docker containers running and port {port} is exposed")
+                                                else:
+                                                    # Containers running but port not exposed - check what ports are actually exposed
+                                                    exposed_ports = await vm_manager.exec_in_vm(
+                                                        vm_name,
+                                                        f"docker ps --format '{{{{.Ports}}}}' | head -5"
+                                                    )
+                                                    if exposed_ports.stdout:
+                                                        await manager.broadcast(f"⚠️ Containers running but port {port} not found. Exposed ports: {exposed_ports.stdout[:200]}")
+                                                    # Still mark as running if containers are up
+                                                    process_running = True
+                                                    logger.info(f"✅ Docker containers running (port verification inconclusive)")
+                                            else:
+                                                await manager.broadcast(f"❌ Docker containers exist but none are running")
+                                                logger.warning(f"⚠️ Docker containers not running")
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ Could not parse Docker container status: {e}")
+                                        # Fall through to HTTP check
+                                else:
+                                    await manager.broadcast(f"⚠️ Could not verify Docker containers - checking HTTP directly...")
+                            
+                            # For any command, verify via HTTP check (most reliable)
+                            if not process_running:
+                                await manager.broadcast(f"🔍 Performing HTTP health check to verify service...")
+                                http_verify = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 --connect-timeout 5 http://localhost:{port} 2>&1 || echo 'FAILED'"
+                                )
+                                http_result = (http_verify.stdout or "").strip()
+                                
+                                # HTTP status codes are 3 digits (200, 404, 500, etc.)
+                                # "000" or "FAILED" means connection failed
+                                if http_result and len(http_result) == 3 and http_result.isdigit() and http_result != "000":
+                                    process_running = True
+                                    port_listening = True
+                                    logger.info(f"✅ HTTP check passed - service returned {http_result}")
+                                    await manager.broadcast(f"✅ Service verified via HTTP (status: {http_result})")
+                                else:
+                                    # HTTP check failed - read logs to understand why
+                                    log_diagnosis = await vm_manager.exec_in_vm(
+                                        vm_name,
+                                        f"tail -30 {log_file} 2>/dev/null | tail -10 || echo 'No logs'"
+                                    )
+                                    log_snippet = (log_diagnosis.stdout or "").strip()
+                                    error_msg = f"Service not accessible via HTTP (curl returned: {http_result})"
+                                    if log_snippet and log_snippet != 'No logs':
+                                        error_msg += f"\nRecent logs: {log_snippet[:300]}"
+                                    await manager.broadcast(f"❌ {error_msg}")
+                                    logger.error(f"Service verification failed: {error_msg}")
+                                    # Don't assume - fail the deployment
+                                    process_running = False
                             pid = None
                         else:
                             # Command failed and process not running - fail
@@ -1575,10 +1827,41 @@ async def run_process_deployment(
                 else:
                     # No log file - command might not have executed
                     if start_result.returncode == 0:
-                        # Command succeeded - assume process is running
-                        logger.warning(f"⚠️ No log file but command succeeded - assuming process is running")
-                        await manager.broadcast(f"⚠️ Cannot verify process, but command succeeded - assuming running")
-                        process_running = True
+                        # Command succeeded but no log file - need to verify
+                        await manager.broadcast(f"⚠️ No log file found - verifying service is actually running...")
+                        
+                        # Check if it's Docker Compose
+                        is_docker_compose = "docker compose" in start_command.lower() or "docker-compose" in start_command.lower()
+                        if is_docker_compose:
+                            container_check = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"cd {vm_project_dir} && docker compose ps 2>/dev/null | grep -i running || docker-compose ps 2>/dev/null | grep -i running || echo ''"
+                            )
+                            if container_check.stdout and "running" in container_check.stdout.lower():
+                                process_running = True
+                                await manager.broadcast(f"✅ Docker containers verified as running")
+                            else:
+                                await manager.broadcast(f"❌ Docker containers not running")
+                                process_running = False
+                        elif port:
+                            # For non-Docker, verify via HTTP
+                            http_verify = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 http://localhost:{port} 2>&1 || echo 'FAILED'"
+                            )
+                            http_result = (http_verify.stdout or "").strip()
+                            if http_result and len(http_result) == 3 and http_result.isdigit() and http_result != "000":
+                                process_running = True
+                                port_listening = True
+                                await manager.broadcast(f"✅ Service verified via HTTP (status: {http_result})")
+                            else:
+                                await manager.broadcast(f"❌ Service not accessible via HTTP (returned: {http_result})")
+                                process_running = False
+                        else:
+                            # No port specified and no Docker - can't verify
+                            await manager.broadcast(f"❌ Cannot verify service (no port specified and not Docker)")
+                            process_running = False
+                        
                         pid = None
                     else:
                         # Command failed and no log - fail
@@ -1607,6 +1890,51 @@ async def run_process_deployment(
                         except ValueError:
                             pid = None
                 
+                # Final HTTP health check to ensure service is actually accessible
+                if port and process_running:
+                    try:
+                        await manager.broadcast(f"🔍 Verifying HTTP accessibility on port {port}...")
+                        http_health_check = await vm_manager.exec_in_vm(
+                            vm_name,
+                            f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 http://localhost:{port} || echo '000'"
+                        )
+                        http_code = (http_health_check.stdout or "").strip()
+                        # HTTP status codes are 3 digits (200, 404, 500, etc.)
+                        # "000" or empty means connection failed
+                        if http_code and len(http_code) == 3 and http_code.isdigit() and http_code != "000":
+                            logger.info(f"✅ HTTP health check passed - service returned status {http_code}")
+                            await manager.broadcast(f"✅ Service is accessible via HTTP (status: {http_code})")
+                        else:
+                            # HTTP check failed - this is a problem, don't assume success
+                            error_msg = f"HTTP health check failed - service returned: {http_code or 'no response'}"
+                            logger.error(f"❌ {error_msg}")
+                            await manager.broadcast(f"❌ {error_msg}")
+                            
+                            # Try to diagnose the issue
+                            await manager.broadcast(f"🔍 Diagnosing service issue...")
+                            
+                            # Check if port is actually listening
+                            port_listen_check = await vm_manager.exec_in_vm(
+                                vm_name,
+                                f"lsof -i :{port} 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep :{port} || ss -tlnp 2>/dev/null | grep :{port} || echo 'NOT_LISTENING'"
+                            )
+                            if "NOT_LISTENING" in (port_listen_check.stdout or ""):
+                                await manager.broadcast(f"❌ Port {port} is not listening")
+                                process_running = False
+                            else:
+                                # Port is listening but HTTP fails - might be wrong port or service not ready
+                                await manager.broadcast(f"⚠️ Port {port} is listening but HTTP check failed - service may not be ready")
+                                # Read logs to see what's happening
+                                recent_logs = await vm_manager.exec_in_vm(
+                                    vm_name,
+                                    f"tail -20 {log_file} 2>/dev/null || echo 'No logs'"
+                                )
+                                if recent_logs.stdout and recent_logs.stdout.strip() != 'No logs':
+                                    await manager.broadcast(f"📋 Recent logs: {recent_logs.stdout[:300]}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ HTTP health check failed: {e}")
+                        await manager.broadcast(f"⚠️ Could not verify HTTP accessibility: {e}")
+                
                 # Broadcast success
                 if pid and pid > 0:
                     await manager.broadcast(f"✅ Process started successfully in VM (PID: {pid}, Port: {port})")
@@ -1627,13 +1955,9 @@ async def run_process_deployment(
                 if full_log.stdout:
                     logger.error(f"Full log: {full_log.stdout}")
                     await manager.broadcast(f"📋 Full log: {full_log.stdout[:1000]}")
-                with Session(engine) as session:
-                    deployment = session.get(Deployment, deployment_id)
-                    if deployment:
-                        deployment.status = "failed"
-                        session.add(deployment)
-                        session.commit()
-                return None
+                
+                # Raise exception to trigger retry logic
+                raise DeploymentError(f"Deployment failed: {error_msg}")
             
         except Exception as e:
             error_msg = f"Exception while starting process in VM: {str(e)}"
@@ -1681,7 +2005,7 @@ async def run_process_deployment(
                     with Session(engine) as session:
                         deployment = session.get(Deployment, deployment_id)
                         if deployment:
-                            deployment.status = "failed"
+                            set_status(deployment, "failed")
                             session.add(deployment)
                             session.commit()
                     return None
@@ -1691,7 +2015,7 @@ async def run_process_deployment(
                 with Session(engine) as session:
                     deployment = session.get(Deployment, deployment_id)
                     if deployment:
-                        deployment.status = "failed"
+                        set_status(deployment, "failed")
                         session.add(deployment)
                         session.commit()
                 return None
@@ -1805,11 +2129,11 @@ async def run_process_deployment(
                     # Configure Cloudflare tunnel ingress via API
                     # service_url uses VM IP so tunnel on host can reach the service
                     # Cloudflare will automatically provide SSL/TLS at the edge
-                    ensure_project_hostname(domain_to_use, service_url)
+                    safe_configure_domain(domain_to_use, service_url)
                     deployment.domain_status = "active"
                     deployment.last_domain_sync = datetime.datetime.utcnow()
                     # Only set status to "running" if Cloudflare configuration succeeded
-                    deployment.status = "running"
+                    set_status(deployment, "running")
                     await manager.broadcast(f"✅ Domain configured: {domain_to_use} → {service_url}")
                     logger.info(f"✅ Cloudflare configured successfully - setting deployment {deployment_id} status to 'running'")
                 except Exception as cf_error:
@@ -1850,7 +2174,7 @@ async def run_process_deployment(
                 with Session(engine) as session:
                     deployment = session.get(Deployment, deployment_id)
                     if deployment:
-                        deployment.status = "failed"
+                        set_status(deployment, "failed")
                         session.add(deployment)
                         session.commit()
                         print(f"Updated deployment {deployment_id} status to failed")

@@ -20,6 +20,75 @@
 
 ## Recent Updates (Latest Session)
 
+### Improved VM Process Start and Verification (2025-11-17)
+- **Issue Fixed**: VM processes not staying alive or not being properly verified
+- **Root Cause**: Process start command wasn't ensuring process stays alive, and verification was insufficient
+- **Fixes Applied**:
+  1. **Improved Start Command**: Changed from `nohup sh -c` to `nohup bash -c` for better shell compatibility
+  2. **Better Process Verification**: Added log file existence check before port verification
+  3. **Retry Logic**: Added retry mechanism (3 attempts with increasing wait times: 2s, 4s, 6s) if port not listening
+  4. **HTTP Health Check**: Added HTTP accessibility verification inside VM using curl
+  5. **Final HTTP Check**: Added final HTTP health check after process is confirmed running
+  6. **Increased Wait Time**: Changed initial wait from 2s to 3s for process to fully start
+- **Verification Flow**:
+  1. Check log file exists (ensures command executed)
+  2. Check port is listening (primary verification)
+  3. Extract PID from port (multiple methods: lsof, ss, netstat, pgrep)
+  4. If port not listening, retry up to 3 times with increasing wait intervals
+  5. During retry, perform HTTP check inside VM to verify service responds
+  6. Final HTTP health check after process confirmed running
+- **Location**: `process_deployment.py` - Process start and verification logic (lines ~1245-1679)
+- **Benefits**:
+  - Processes stay alive reliably (better shell command)
+  - More robust verification (multiple checks)
+  - Automatic retry if process starts slowly
+  - HTTP verification ensures service is actually accessible
+  - Better error messages and logging
+
+## Recent Updates (Previous Session)
+
+### New Deploy Page (Simplified) (2025-11-13)
+- **Feature**: Added a new simplified "+ New Deploy" page with clean UI
+- **Location**: 
+  - Frontend HTML: `frontend/src/index.html` and `static/index.html` - new `page-new-deploy` section
+  - Frontend CSS: `frontend/src/css/styles.css` - `.new-deploy-*` styles
+  - Frontend JS: `frontend/src/js/app.js` - `showNewDeployPage()`, `toggleSplitMode()`, `handleContinueDeploy()` functions
+- **Functionality**:
+  1. Shows "Let's build something new" heading
+  2. Single repository input with chain link icon (default view)
+  3. "Split" button toggles to show frontend/backend repository inputs
+  4. "Continue" button validates input and navigates to full deploy page with pre-filled values
+  5. The split mode uses existing split deployment functionality (treats frontend+backend as single project)
+- **User Flow**:
+  - Click "+ New Deploy" → See simplified page → Enter repo URL(s) → Click "Continue" → Full deploy page with values pre-filled
+  - Click "Split" → Shows frontend/backend inputs → Enter both URLs → Click "Continue" → Deploys as split project
+- **Note**: This is a separate page from the existing deploy page - the old deploy page remains unchanged
+
+### Project-Specific Logs (2025-11-13)
+- **Change**: Removed global "Logs" page, moved logs to be project-specific
+- **Rationale**: Each project should have its own logs view, not a global one mixing all projects
+- **Implementation**:
+  1. Removed global "Logs" nav item from main sidebar
+  2. Removed global logs page HTML (`page-logs`)
+  3. Removed global logs WebSocket endpoint (`/ws/logs`)
+  4. Removed global logs functions (`loadLogs`, `connectLogsWebSocket`, `appendLog`, `setupLogsButtons`)
+  5. Added "Logs" nav item to project sidebar (appears when a project is selected)
+  6. Updated `showProjectContent()` to handle 'logs' case
+  7. Updated project logs WebSocket to read from VM log file (`/tmp/project-{project_id}.log`)
+  8. Updated `get_project_logs()` endpoint to read from VM instead of process manager
+- **User Experience**:
+  - Select a project → See project sidebar → Click "Logs" → View that project's logs
+  - Each project shows only its own logs (from `/tmp/project-{project_id}.log` in VM)
+  - Real-time streaming via WebSocket (`/ws/project/{project_id}/logs`)
+- **Location**: 
+  - Frontend: `frontend/src/index.html` (removed global logs nav and page), `frontend/src/js/app.js` (removed global functions, added logs to project sidebar)
+  - Backend: `orchestrator.py` (removed `/ws/logs`, updated `/ws/project/{project_id}/logs` and `/projects/{project_id}/logs`)
+- **Benefits**:
+  - Better organization (logs are project-specific)
+  - Cleaner UI (no global logs page)
+  - More intuitive (logs are where you expect them - in the project)
+  - Works with VM-based deployments (reads from VM log files)
+
 ### Domain Configuration Health Check (2025-11-13)
 - **Issue Fixed**: 502 Bad Gateway errors when accessing domain before service is running
 - **Root Cause**: Domain configuration was setting Cloudflare tunnel to point to `localhost:port` without any verification
@@ -179,6 +248,37 @@
   3. **JavaScript/Node projects** (package.json) → Detects React, Next.js, Vue.js, Express.js, NestJS, or generic Node.js
   4. **Docker projects** (Dockerfile) → Detected but not supported (process-based deployment only)
   5. **Unknown** → Safe defaults
+- **Enhanced Python Detection (2025-11-13)**:
+  - **Flexible Entry Point Detection**: Now detects ANY .py file in root directory, not just standard names (app.py, main.py, etc.)
+  - **AI-Powered Analysis**: 
+    - Uses Google Gemini AI to intelligently analyze project structure
+    - Reads README.md FIRST (highest priority) for deployment instructions
+    - Reads package.json, requirements.txt, config files, and project structure
+    - All detection logic is in the AI prompt - no hardcoded if-else chains
+    - AI makes intelligent decisions based on all project files
+    - Falls back to file-based detection if AI is unavailable
+  - **Handles Non-Standard Files**: Can detect and deploy applications with custom entry points like `bot.py`, `barsha.py`, `turuturu.py`, etc.
+  - **Smart Flask Detection**: 
+    - Searches for Flask imports in Python files to find the actual Flask app
+    - Automatically sets `FLASK_APP` environment variable when Flask is detected
+    - Falls back to direct Python execution if `flask run` fails
+  - **Framework-Specific Detection** (AI-powered, all logic in prompt):
+    - Django: Detects `manage.py` → `python3 manage.py runserver 0.0.0.0:8000`
+    - Flask: Detects Flask in requirements.txt + searches for Flask app in .py files → `FLASK_APP={file} flask run --host 0.0.0.0 --port 5000 || python3 {file}`
+    - FastAPI: Detects FastAPI/uvicorn in requirements.txt → `uvicorn {module}:app --host 0.0.0.0 --port 8000`
+    - Generic Python: Uses detected entry file → `python3 {entry_file}`
+    - React: 
+      - Intelligently parses package.json as JSON to read scripts and dependencies
+      - Detects React, Vite, Create React App from dependencies
+      - Checks for vite.config.js to determine build output directory
+      - Checks for existing build/ or dist/ folders from previous builds
+      - Builds with `npm install && npm run build`
+      - **Post-build verification**: After build completes, checks what was actually built
+      - Automatically adjusts start command to serve from build/ or dist/ folder
+      - Serves static files using `python3 -m http.server --directory build` (NOT `npm start` which is dev mode)
+      - If build creates build/ or dist/ folder, automatically updates start command to serve from there
+    - Vue.js: Detects Vue → Builds → Serves from `dist/` folder
+    - Next.js: Detects Next.js → Builds → Uses `npm start` (Next.js handles production serving)
 - **Framework Detection**:
   - **Static**: Detects pure HTML sites (no build needed)
   - **Python**: Detects Django (manage.py), Flask (requirements.txt contains Flask), FastAPI (requirements.txt contains fastapi/uvicorn), or generic Python
@@ -701,4 +801,26 @@ Devops_Butler/
    - Deletes the user's OrbStack VM
    - Deletes the user account from database
    - Redirects to login page after successful deletion
+
+New (stability guard rails):
+--------------------------------
+- Deployment state machine and guard:
+  - `utils.py`:
+    - `ALLOWED_TRANSITIONS`: canonical transitions for statuses (`imported`, `imported_split`, `starting`, `running`, `success`, `failed`)
+    - `set_status(deployment, new_status)`: enforces allowed transitions with logging
+    - Invariant helpers: `DeploymentError`, `assert_parent_is_split`, `assert_child_component`, `assert_vm_running_fields`, `assert_domain_service_localhost`
+- VM adapter:
+  - `vm_manager.py`:
+    - `class VMError(Exception)`: raised on VM execution failures
+    - `async def safe_exec(vm_name, command, ...)`: executes via OrbStack and raises `VMError` when non-zero
+- Cloudflare adapter:
+  - `cloudflare_manager.py`:
+    - `safe_configure_domain(hostname, service_url)`: wraps `ensure_project_hostname` and normalizes errors to `CloudflareError`
+- Structured logging:
+  - `process_deployment.py`:
+    - `log_step(deployment_id, step, message, level=\"INFO\")` for pipeline-style logs
+    - Replaced direct `deployment.status = ...` in key paths to `set_status(...)`
+- Doctor endpoint:
+  - `orchestrator.py`:
+    - `GET /debug/deployment/{id}` returns `{ db, vm, cloudflare }` snapshot, including port-open check and basic VM dir presence
 

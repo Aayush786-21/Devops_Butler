@@ -148,9 +148,6 @@ class Router {
       case 'settings':
         loadSettings();
         break;
-      case 'logs':
-        loadLogs();
-        break;
     }
   }
 }
@@ -438,7 +435,8 @@ function setupEventListeners() {
       mainSidebar.style.display = 'block';
     }
     
-    router.navigate('/deploy');
+    // Show new deploy page instead of old deploy page
+    showNewDeployPage();
   });
 
   // Deploy form
@@ -1403,6 +1401,14 @@ function createProjectSidebar() {
         <span class="nav-icon">🔐</span>
         <span class="nav-label">Environment Variables</span>
       </a>
+      <a href="#" class="nav-item project-nav-item" data-project-page="logs">
+        <span class="nav-icon">📋</span>
+        <span class="nav-label">Logs</span>
+      </a>
+      <a href="#" class="nav-item project-nav-item" data-project-page="files">
+        <span class="nav-icon">📁</span>
+        <span class="nav-label">Files</span>
+      </a>
     </nav>
     
     <div class="sidebar-footer">
@@ -1999,6 +2005,13 @@ function showProjectContent(page) {
         loadEnvVars();
       }
       break;
+    case 'logs':
+      showProjectLogs();
+      break;
+    case 'files':
+      document.getElementById('pageTitle').textContent = 'Repository Files';
+      showProjectFiles();
+      break;
   }
 }
 
@@ -2098,6 +2111,508 @@ async function showProjectLogs() {
   if (currentProject && currentProject.id) {
     connectProjectLogsWebSocket(currentProject.id);
   }
+}
+
+async function showProjectFiles() {
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+  
+  // Find or create files page
+  let filesPage = document.getElementById('page-project-files');
+  if (!filesPage) {
+    filesPage = document.createElement('div');
+    filesPage.id = 'page-project-files';
+    filesPage.className = 'page';
+    document.getElementById('pageContent').appendChild(filesPage);
+  }
+  
+  // Extract owner and repo from git_url
+  if (!currentProject || !currentProject.git_url) {
+    filesPage.innerHTML = `
+      <div class="card">
+        <div class="page-header">
+          <h2>Repository Files</h2>
+        </div>
+        <div style="padding: 2rem; text-align: center; color: var(--text-secondary);">
+          <p>No repository URL found for this project.</p>
+        </div>
+      </div>
+    `;
+    filesPage.style.display = 'block';
+    return;
+  }
+  
+  const gitUrl = currentProject.git_url || currentProject.repository_url || '';
+  const urlMatch = gitUrl.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git|[/]|$)/);
+  
+  if (!urlMatch) {
+    filesPage.innerHTML = `
+      <div class="card">
+        <div class="page-header">
+          <h2>Repository Files</h2>
+        </div>
+        <div style="padding: 2rem; text-align: center; color: var(--text-secondary);">
+          <p>Could not parse repository URL: ${escapeHtml(gitUrl)}</p>
+        </div>
+      </div>
+    `;
+    filesPage.style.display = 'block';
+    return;
+  }
+  
+  const owner = urlMatch[1];
+  const repo = urlMatch[2];
+  
+  // Show loading state
+  filesPage.innerHTML = `
+    <div class="card">
+      <div class="page-header">
+        <h2>Repository Files</h2>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <div class="breadcrumb" id="filesBreadcrumb">
+            <span class="breadcrumb-item" onclick="loadFilesPath('')">${escapeHtml(repo)}</span>
+          </div>
+          <button class="btn-secondary" id="filesBackButton" onclick="goBackInFiles()" style="display: none;">
+            ← Back
+          </button>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 300px 1fr; gap: 1rem; min-height: 500px;">
+        <div style="background: var(--card-bg); border-radius: 12px; padding: 1rem; overflow-y: auto; max-height: 600px;">
+          <div id="filesTreeLoading" style="display: flex; justify-content: center; align-items: center; height: 200px;">
+            <div style="width: 40px; height: 40px; border: 4px solid var(--border-color); border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite;"></div>
+          </div>
+          <div id="filesTreeContainer" style="display: none;"></div>
+        </div>
+        <div style="background: var(--card-bg); border-radius: 12px; padding: 1.5rem; overflow-y: auto; max-height: 600px;">
+          <div id="fileContentContainer">
+            <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">📁</div>
+              <p>Select a file to view its content</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  filesPage.style.display = 'block';
+  
+  // Store project ID for VM file access
+  filesPage.dataset.projectId = currentProject.id;
+  filesPage.dataset.useVm = 'true'; // Flag to use VM instead of GitHub API
+  
+  // Load root directory
+  await loadFilesPath('');
+}
+
+// Load files for a specific path
+async function loadFilesPath(path) {
+  const filesPage = document.getElementById('page-project-files');
+  if (!filesPage) return;
+  
+  const useVm = filesPage.dataset.useVm === 'true';
+  const projectId = filesPage.dataset.projectId;
+  const owner = filesPage.dataset.owner;
+  const repo = filesPage.dataset.repo;
+  
+  if (useVm && !projectId) {
+    showToast('Project ID not found', 'error');
+    return;
+  }
+  
+  if (!useVm && (!owner || !repo)) {
+    showToast('Repository information not found', 'error');
+    return;
+  }
+  
+  const treeContainer = document.getElementById('filesTreeContainer');
+  const treeLoading = document.getElementById('filesTreeLoading');
+  const fileContent = document.getElementById('fileContentContainer');
+  
+  // Show loading
+  if (treeLoading) treeLoading.style.display = 'flex';
+  if (treeContainer) treeContainer.style.display = 'none';
+  if (fileContent) {
+    fileContent.innerHTML = `
+      <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+        <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">📁</div>
+        <p>Select a file to view its content</p>
+      </div>
+    `;
+  }
+  
+  try {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    // Build URL - use VM endpoint if available, otherwise GitHub API
+    let url;
+    if (useVm) {
+      url = `/projects/${projectId}/files`;
+      if (path) {
+        url += `?path=${encodeURIComponent(path)}`;
+      }
+    } else {
+      url = `/api/repository/${owner}/${repo}/contents`;
+      if (path) {
+        url += `?path=${encodeURIComponent(path)}`;
+      }
+    }
+    
+    console.log('Loading files from:', url);
+    const response = await fetch(url, { headers });
+    
+    if (response.status === 401) {
+      showToast('Authentication required', 'error');
+      if (treeLoading) treeLoading.style.display = 'none';
+      return;
+    }
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      console.error('API error:', response.status, errorData);
+      showToast(errorData.detail || `Failed to load repository contents (${response.status})`, 'error');
+      if (treeLoading) treeLoading.style.display = 'none';
+      return;
+    }
+    
+    const data = await response.json();
+    console.log('API response:', data);
+    
+    // Handle both response formats: {contents: [...]} or direct array
+    const items = data.contents || (Array.isArray(data) ? data : []);
+    console.log('Files loaded:', items.length, 'items', items);
+    
+    if (!Array.isArray(items)) {
+      console.error('Invalid response format:', items);
+      showToast('Invalid response format from server', 'error');
+      if (treeLoading) treeLoading.style.display = 'none';
+      return;
+    }
+    
+    // Hide loading, show tree
+    if (treeLoading) treeLoading.style.display = 'none';
+    if (treeContainer) {
+      treeContainer.style.display = 'block';
+      renderFilesTree(items, path);
+    }
+    
+    // Update breadcrumb and store current path
+    const repoName = repo || currentProject?.name || 'Repository';
+    updateFilesBreadcrumb(path, repoName);
+    if (filesPage) {
+      filesPage.dataset.currentPath = path;
+    }
+  } catch (error) {
+    console.error('Error loading files:', error);
+    showToast('Failed to load repository contents: ' + error.message, 'error');
+    if (treeLoading) treeLoading.style.display = 'none';
+  }
+}
+
+// Render files tree
+function renderFilesTree(items, currentPath) {
+  const container = document.getElementById('filesTreeContainer');
+  if (!container) return;
+  
+  container.innerHTML = '';
+  
+  if (!items || items.length === 0) {
+    container.innerHTML = `
+      <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+        <div style="font-size: 2rem; margin-bottom: 0.5rem; opacity: 0.5;">📁</div>
+        <p>This directory is empty</p>
+      </div>
+    `;
+    return;
+  }
+  
+  // Sort: folders first, then files
+  const sorted = items.sort((a, b) => {
+    if (a.type === 'dir' && b.type !== 'dir') return -1;
+    if (a.type !== 'dir' && b.type === 'dir') return 1;
+    return a.name.localeCompare(b.name);
+  });
+  
+  sorted.forEach(item => {
+    const div = document.createElement('div');
+    div.style.cssText = 'display: flex; align-items: center; padding: 0.5rem; margin: 0.25rem 0; border-radius: 6px; cursor: pointer; transition: all 0.2s; font-size: 0.9rem;';
+    div.onmouseover = () => div.style.background = 'var(--bg-secondary)';
+    div.onmouseout = () => div.style.background = 'transparent';
+    
+    const icon = item.type === 'dir' ? '📁' : getFileIconForFiles(item.name);
+    
+    div.innerHTML = `
+      <span style="margin-right: 0.5rem; font-size: 1rem; ${item.type === 'dir' ? 'color: var(--accent);' : ''}">${icon}</span>
+      <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(item.name)}</span>
+    `;
+    
+    div.onclick = () => {
+      if (item.type === 'dir') {
+        loadFilesPath(item.path);
+      } else {
+        loadFileContentForProject(item);
+      }
+    };
+    
+    container.appendChild(div);
+  });
+}
+
+// Load file content
+async function loadFileContentForProject(file) {
+  const filesPage = document.getElementById('page-project-files');
+  if (!filesPage) return;
+  
+  const useVm = filesPage.dataset.useVm === 'true';
+  const projectId = filesPage.dataset.projectId;
+  const owner = filesPage.dataset.owner;
+  const repo = filesPage.dataset.repo;
+  
+  if (useVm && !projectId) {
+    showToast('Project ID not found', 'error');
+    return;
+  }
+  
+  if (!useVm && (!owner || !repo)) {
+    showToast('Repository information not found', 'error');
+    return;
+  }
+  
+  const fileContent = document.getElementById('fileContentContainer');
+  if (!fileContent) return;
+  
+  fileContent.innerHTML = `
+    <div style="display: flex; justify-content: center; align-items: center; height: 200px;">
+      <div style="width: 40px; height: 40px; border: 4px solid var(--border-color); border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite;"></div>
+    </div>
+  `;
+  
+  try {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('authToken');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    // Use VM endpoint if available, otherwise GitHub API
+    let url;
+    if (useVm) {
+      url = `/projects/${projectId}/files/content?file_path=${encodeURIComponent(file.path)}`;
+    } else {
+      url = `/api/repository/${owner}/${repo}/contents/${file.path}`;
+    }
+    
+    console.log('Loading file content from:', url);
+    const response = await fetch(url, { headers });
+    
+    if (response.status === 401) {
+      showToast('Authentication required', 'error');
+      return;
+    }
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      console.error('File content error:', response.status, errorData);
+      showToast(errorData.detail || 'Failed to load file content', 'error');
+      fileContent.innerHTML = `
+        <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">❌</div>
+          <p>Error loading file: ${escapeHtml(errorData.detail || 'Unknown error')}</p>
+        </div>
+      `;
+      return;
+    }
+    
+    const data = await response.json();
+    
+    // Handle binary files
+    if (data.is_binary || data.encoding === 'binary') {
+      const fileSize = data.size || 0;
+      fileContent.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border-color);">
+          <div style="font-weight: 600; font-size: 1.1rem;">${escapeHtml(file.name)}</div>
+          <div style="color: var(--text-secondary); font-size: 0.9rem;">${formatFileSize(fileSize)}</div>
+        </div>
+        <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">📄</div>
+          <p>${escapeHtml(data.message || 'Binary file - cannot display as text')}</p>
+          <p style="font-size: 0.9rem; margin-top: 0.5rem; opacity: 0.7;">This file appears to be a binary file (image, executable, etc.) and cannot be displayed as text.</p>
+        </div>
+      `;
+      return;
+    }
+    
+    // Handle both VM response (content is plain text) and GitHub API response (base64 encoded)
+    let content;
+    if (useVm) {
+      // VM returns plain text content
+      content = data.content || '';
+    } else {
+      // GitHub API returns base64 encoded content
+      if (data.type === 'file' && data.content) {
+        try {
+          content = atob(data.content);
+        } catch (e) {
+          // If base64 decode fails, might be binary
+          fileContent.innerHTML = `
+            <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">⚠️</div>
+              <p>Unable to display this file - it may be a binary file</p>
+            </div>
+          `;
+          return;
+        }
+      } else {
+        fileContent.innerHTML = `
+          <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+            <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">⚠️</div>
+            <p>Unable to display this file type</p>
+          </div>
+        `;
+        return;
+      }
+    }
+    
+    const extension = file.name.split('.').pop().toLowerCase();
+    const fileSize = data.size || 0;
+    
+    fileContent.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border-color);">
+        <div style="font-weight: 600; font-size: 1.1rem;">${escapeHtml(file.name)}</div>
+        <div style="color: var(--text-secondary); font-size: 0.9rem;">${formatFileSize(fileSize)}</div>
+      </div>
+      <pre style="background: var(--bg-secondary); padding: 1rem; border-radius: 8px; overflow-x: auto; font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace; font-size: 0.9rem; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;"><code class="language-${extension}">${escapeHtml(content)}</code></pre>
+    `;
+    
+    // Highlight code if Prism.js is available
+    if (window.Prism) {
+      Prism.highlightAll();
+    }
+  } catch (error) {
+    console.error('Error loading file content:', error);
+    showToast('Failed to load file content: ' + error.message, 'error');
+    fileContent.innerHTML = `
+      <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+        <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">❌</div>
+        <p>Error loading file: ${escapeHtml(error.message)}</p>
+      </div>
+    `;
+  }
+}
+
+// Update breadcrumb
+function updateFilesBreadcrumb(path, repo) {
+  const breadcrumb = document.getElementById('filesBreadcrumb');
+  const backButton = document.getElementById('filesBackButton');
+  if (!breadcrumb) return;
+  
+  // Show/hide back button based on path depth
+  if (backButton) {
+    if (path && path.split('/').filter(p => p).length > 0) {
+      backButton.style.display = 'block';
+    } else {
+      backButton.style.display = 'none';
+    }
+  }
+  
+  if (!path) {
+    breadcrumb.innerHTML = `<span class="breadcrumb-item" onclick="loadFilesPath('')">${escapeHtml(repo)}</span>`;
+    return;
+  }
+  
+  const parts = path.split('/').filter(p => p);
+  let html = `<span class="breadcrumb-item" onclick="loadFilesPath('')">${escapeHtml(repo)}</span>`;
+  
+  let currentPath = '';
+  parts.forEach((part, index) => {
+    currentPath += (index > 0 ? '/' : '') + part;
+    html += `
+      <span style="color: var(--text-secondary); margin: 0 0.5rem;">/</span>
+      <span class="breadcrumb-item" onclick="loadFilesPath('${currentPath}')" style="color: var(--text-secondary); cursor: pointer; transition: color 0.2s;">${escapeHtml(part)}</span>
+    `;
+  });
+  
+  breadcrumb.innerHTML = html;
+}
+
+// Go back in file navigation
+function goBackInFiles() {
+  const filesPage = document.getElementById('page-project-files');
+  if (!filesPage) return;
+  
+  // Get current path from breadcrumb or stored state
+  const breadcrumb = document.getElementById('filesBreadcrumb');
+  if (!breadcrumb) return;
+  
+  // Find the last breadcrumb item that's not the root
+  const breadcrumbItems = breadcrumb.querySelectorAll('.breadcrumb-item');
+  if (breadcrumbItems.length <= 1) {
+    // Already at root
+    loadFilesPath('');
+    return;
+  }
+  
+  // Get the second-to-last item's path
+  const secondToLast = breadcrumbItems[breadcrumbItems.length - 2];
+  if (secondToLast && secondToLast.onclick) {
+    // Extract path from onclick attribute
+    const onclickAttr = secondToLast.getAttribute('onclick');
+    if (onclickAttr) {
+      const match = onclickAttr.match(/loadFilesPath\('([^']*)'\)/);
+      if (match) {
+        loadFilesPath(match[1]);
+        return;
+      }
+    }
+  }
+  
+  // Fallback: go to parent directory by removing last part of current path
+  // We need to track current path - let's use a simpler approach
+  const currentPath = filesPage.dataset.currentPath || '';
+  if (currentPath) {
+    const parts = currentPath.split('/').filter(p => p);
+    if (parts.length > 0) {
+      parts.pop();
+      const parentPath = parts.join('/');
+      loadFilesPath(parentPath);
+    } else {
+      loadFilesPath('');
+    }
+  } else {
+    loadFilesPath('');
+  }
+}
+
+// Get file icon
+function getFileIconForFiles(filename) {
+  const extension = filename.split('.').pop().toLowerCase();
+  const iconMap = {
+    'js': '📄', 'jsx': '📄', 'ts': '📄', 'tsx': '📄',
+    'py': '🐍', 'java': '☕', 'cpp': '⚙️', 'c': '⚙️',
+    'html': '🌐', 'css': '🎨', 'scss': '🎨', 'sass': '🎨',
+    'json': '📋', 'xml': '📋', 'yml': '📋', 'yaml': '📋',
+    'md': '📝', 'txt': '📝', 'sql': '🗄️',
+    'sh': '🐚', 'bat': '🪟', 'dockerfile': '🐳', 'gitignore': '🚫'
+  };
+  return iconMap[extension] || '📄';
+}
+
+// Format file size
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 async function showProjectConfiguration() {
@@ -4127,6 +4642,13 @@ async function searchRepositories() {
       if (data.repositories.length === 0) {
         grid.innerHTML = '<div class="empty-state"><p>No repositories found</p></div>';
         } else {
+        // persist last successful search
+        try {
+          localStorage.setItem('repos.lastUsername', username);
+          localStorage.setItem('repos.lastData', JSON.stringify(data.repositories));
+        } catch (e) {
+          // ignore storage errors
+        }
         grid.innerHTML = data.repositories.map(repo => {
           const isSelected = selectedRepositories.some(r => r.url === repo.clone_url);
           return `
@@ -4415,12 +4937,53 @@ async function importRepository(repoUrl, repoName) {
 }
 
 function loadRepositories() {
-  // Just show empty state for now
-  document.getElementById('repositoriesGrid').innerHTML = `
-    <div class="empty-state">
-      <p>Search for a GitHub username to see their repositories</p>
+  const grid = document.getElementById('repositoriesGrid');
+  const input = document.getElementById('usernameSearch');
+  if (!grid) return;
+  
+  // Try to restore from localStorage
+  let restored = false;
+  try {
+    const lastUsername = localStorage.getItem('repos.lastUsername') || '';
+    const raw = localStorage.getItem('repos.lastData');
+    if (raw) {
+      const repos = JSON.parse(raw);
+      if (Array.isArray(repos) && repos.length >= 0) {
+        if (input) input.value = lastUsername;
+        grid.innerHTML = repos.map(repo => {
+          const isSelected = selectedRepositories.some(r => r.url === repo.clone_url);
+          return `
+          <div class="repository-card ${isSelected ? 'selected' : ''}" data-repo-url="${repo.clone_url}" onclick="toggleRepositorySelection('${repo.clone_url}', '${repo.name || ''}')">
+            <h3>${repo.name || 'Unnamed'}</h3>
+            <p style="color: var(--text-secondary); margin: 0.5rem 0;">
+              ${(repo.description || 'No description')}
+            </p>
+            <div style="margin-top: 1rem; display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 0.875rem; color: var(--text-secondary);">
+                ${(repo.language || 'Unknown')} • ${(repo.stargazers_count || 0)} stars
+              </span>
+              <button class="btn-primary btn-small" onclick="event.stopPropagation(); importRepository('${repo.clone_url}', '${repo.name || ''}')">
+                📥 Import
+              </button>
             </div>
-        `;
+          </div>
+          `;
+        }).join('');
+        updateRepositorySelectionVisuals();
+        restored = true;
+      }
+    }
+  } catch (e) {
+    // ignore parse/storage errors
+  }
+  
+  if (!restored) {
+    grid.innerHTML = `
+      <div class="empty-state">
+        <p>Search for a GitHub username to see their repositories</p>
+      </div>
+    `;
+  }
     }
 
 // Toast notification
@@ -5477,9 +6040,7 @@ function updateTeamAndOwnerInfo(userName) {
 }
 
 // Logs Page with WebSocket
-let logsWebSocket = null;
-let logsPaused = false;
-let logsBuffer = [];
+// Global logs removed - logs are now project-specific
 
 function parseLogPayload(rawMessage) {
   if (rawMessage == null) {
@@ -5506,134 +6067,6 @@ function parseLogPayload(rawMessage) {
     return JSON.parse(candidate);
   } catch (_) {
     return { message: trimmed };
-  }
-}
-
-function loadLogs() {
-  const logsContent = document.getElementById('logsContent');
-  if (!logsContent) return;
-  
-  // Initialize logs display
-  logsContent.innerHTML = '<p class="logs-connecting">Connecting to WebSocket...</p>';
-  
-  // Connect to WebSocket
-  connectLogsWebSocket();
-  
-  // Setup button handlers
-  setupLogsButtons();
-}
-
-function connectLogsWebSocket() {
-  // Close existing connection if any
-  if (logsWebSocket) {
-    logsWebSocket.close();
-  }
-  
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${wsProtocol}//${window.location.host}/ws/logs`;
-  
-  logsWebSocket = new WebSocket(wsUrl);
-  
-  logsWebSocket.onopen = () => {
-    console.log('Logs WebSocket connected');
-    appendLog('Connected to logs stream', 'success');
-    
-    // Send any buffered logs
-    if (logsBuffer.length > 0) {
-      logsBuffer.forEach(log => appendLog(log.message, log.type));
-      logsBuffer = [];
-    }
-  };
-  
-  logsWebSocket.onmessage = (event) => {
-    const data = parseLogPayload(event.data);
-    if (!data || !data.message) {
-      return;
-    }
-
-    if (logsPaused) {
-      // Buffer logs when paused
-      logsBuffer.push({ message: data.message, type: data.type || 'info' });
-    } else {
-      appendLog(data.message, data.type || 'info');
-    }
-  };
-  
-  logsWebSocket.onerror = (error) => {
-    console.error('Logs WebSocket error:', error);
-    appendLog('WebSocket connection error', 'error');
-  };
-  
-  logsWebSocket.onclose = () => {
-    console.log('Logs WebSocket disconnected');
-    appendLog('Disconnected from logs stream', 'warning');
-    
-    // Try to reconnect after 3 seconds
-    setTimeout(() => {
-      if (document.getElementById('page-logs')?.style.display !== 'none') {
-        connectLogsWebSocket();
-      }
-    }, 3000);
-  };
-}
-
-function appendLog(message, type = 'info') {
-  const logsContent = document.getElementById('logsContent');
-  if (!logsContent) return;
-  
-  const timestamp = new Date().toLocaleString('en-US', {
-    timeZone: 'Asia/Kathmandu',
-    timeStyle: 'medium',
-    dateStyle: 'short'
-  });
-  const logEntry = document.createElement('div');
-  logEntry.className = `log-entry ${type}`;
-  
-  logEntry.innerHTML = `
-    <span class="log-timestamp">[${timestamp}]</span>
-    <span class="log-message">${escapeHtml(message)}</span>
-  `;
-  
-  logsContent.appendChild(logEntry);
-  
-  // Auto-scroll to bottom
-  logsContent.scrollTop = logsContent.scrollHeight;
-  
-  // Limit log entries to prevent memory issues
-  const maxLogs = 1000;
-  const logs = logsContent.querySelectorAll('.log-entry');
-  if (logs.length > maxLogs) {
-    logs[0].remove();
-  }
-}
-
-function setupLogsButtons() {
-  const clearLogsBtn = document.getElementById('clearLogsBtn');
-  const toggleLogsBtn = document.getElementById('toggleLogsBtn');
-  
-  if (clearLogsBtn) {
-    clearLogsBtn.addEventListener('click', () => {
-      const logsContent = document.getElementById('logsContent');
-      if (logsContent) {
-        logsContent.innerHTML = '';
-        logsBuffer = [];
-        appendLog('Logs cleared', 'info');
-      }
-    });
-  }
-  
-  if (toggleLogsBtn) {
-    toggleLogsBtn.addEventListener('click', () => {
-      logsPaused = !logsPaused;
-      toggleLogsBtn.textContent = logsPaused ? 'Resume' : 'Pause';
-      
-      if (!logsPaused && logsBuffer.length > 0) {
-        logsBuffer.forEach(log => appendLog(log.message, log.type));
-        logsBuffer = [];
-      }
-      
-      appendLog(logsPaused ? 'Logs paused' : 'Logs resumed', 'info');
-    });
   }
 }
 
@@ -5898,6 +6331,51 @@ function updateDeploymentStatus(status, text) {
   }
 }
 
+/**
+ * Check if a deployed service is accessible
+ * @param {string} url - The deployed URL to check
+ * @returns {Promise<boolean>} - True if service is accessible, false otherwise
+ */
+async function checkServiceAccessibility(url) {
+  if (!url) return false;
+  
+  try {
+    // Use fetch with no-cors mode to avoid CORS issues
+    // We can't check the actual response due to CORS, but we can check if it loads
+    const response = await fetch(url, {
+      method: 'HEAD',
+      mode: 'no-cors',
+      cache: 'no-cache'
+    });
+    // With no-cors, we can't read the response, but if it doesn't throw, it likely exists
+    return true;
+  } catch (error) {
+    // If fetch fails, try using an image as a proxy check
+    return new Promise((resolve) => {
+      const img = new Image();
+      const timeout = setTimeout(() => {
+        resolve(false);
+      }, 5000);
+      
+      img.onload = () => {
+        clearTimeout(timeout);
+        resolve(true);
+      };
+      
+      img.onerror = () => {
+        clearTimeout(timeout);
+        // Even if image fails, the service might be running (could be API-only)
+        // So we'll be optimistic and return true if the URL is valid
+        resolve(url.startsWith('http://') || url.startsWith('https://'));
+      };
+      
+      // Try to load a favicon or root path
+      const testUrl = url.endsWith('/') ? url + 'favicon.ico' : url + '/favicon.ico';
+      img.src = testUrl;
+    });
+  }
+}
+
 function showDeploymentSuccessPage(result) {
   // Close deployment logs WebSocket
   if (deploymentLogsWebSocket) {
@@ -5922,13 +6400,122 @@ function showDeploymentSuccessPage(result) {
     
     document.getElementById('success-project-name').textContent = projectName;
     document.getElementById('success-deployed-url').textContent = deployedUrl || 'Not available';
-    document.getElementById('success-status').textContent = 'Running';
+    
+    // Check if service is actually accessible
+    const statusElement = document.getElementById('success-status');
+    if (deployedUrl) {
+      statusElement.textContent = 'Checking...';
+      statusElement.style.color = 'var(--text-secondary)';
+      
+      // Verify service is accessible
+      checkServiceAccessibility(deployedUrl).then(isAccessible => {
+        if (isAccessible) {
+          statusElement.textContent = 'Running';
+          statusElement.style.color = 'var(--success)';
+        } else {
+          statusElement.textContent = 'Service Unavailable';
+          statusElement.style.color = 'var(--error)';
+          // Show warning message
+          const deploymentInfo = document.getElementById('deployment-info');
+          if (deploymentInfo && !deploymentInfo.querySelector('.service-warning')) {
+            const warning = document.createElement('div');
+            warning.className = 'service-warning';
+            warning.style.cssText = 'margin-top: 1rem; padding: 1rem; background: var(--warning-bg, #fff3cd); border-left: 4px solid var(--warning, #ffc107); border-radius: 4px; color: var(--text-primary);';
+            warning.innerHTML = `
+              <strong>⚠️ Service Check Failed</strong>
+              <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">
+                The service may be starting up or experiencing issues. The auto-restart system will attempt to fix this automatically.
+                You can try refreshing this page in a few moments.
+              </p>
+            `;
+            deploymentInfo.appendChild(warning);
+          }
+        }
+      }).catch(() => {
+        statusElement.textContent = 'Status Unknown';
+        statusElement.style.color = 'var(--text-secondary)';
+      });
+    } else {
+      statusElement.textContent = 'Not Deployed';
+      statusElement.style.color = 'var(--text-secondary)';
+    }
     
     // Set website preview iframe
     if (deployedUrl) {
       const preview = document.getElementById('website-preview');
+      const previewContainer = document.getElementById('website-preview-container');
+      const iframeFallback = document.getElementById('iframe-fallback');
+      const openSiteFallbackBtn = document.getElementById('open-site-fallback-btn');
+      
       if (preview) {
+        // Set up error handling for iframe
+        let iframeErrorTimeout;
+        
+        // Show fallback if iframe fails to load
+        const showFallback = () => {
+          if (iframeFallback) {
+            iframeFallback.style.display = 'flex';
+          }
+          if (preview) {
+            preview.style.display = 'none';
+          }
+        };
+        
+        // Try to detect iframe blocking (browsers may block silently)
+        preview.onload = () => {
+          clearTimeout(iframeErrorTimeout);
+          // Check if iframe content is accessible
+          try {
+            // This will throw if iframe is blocked by X-Frame-Options
+            const iframeDoc = preview.contentDocument || preview.contentWindow?.document;
+            if (!iframeDoc && preview.contentWindow) {
+              // Iframe loaded but content is blocked
+              setTimeout(() => {
+                try {
+                  const test = preview.contentWindow.location.href;
+                  if (!test || test === 'about:blank') {
+                    showFallback();
+                  }
+                } catch (e) {
+                  // Cross-origin or blocked - show fallback
+                  showFallback();
+                }
+              }, 1000);
+            }
+          } catch (e) {
+            // Cross-origin or blocked - show fallback after a delay
+            setTimeout(showFallback, 2000);
+          }
+        };
+        
+        preview.onerror = () => {
+          clearTimeout(iframeErrorTimeout);
+          showFallback();
+        };
+        
+        // Fallback timeout - if iframe doesn't load within 3 seconds, show fallback
+        iframeErrorTimeout = setTimeout(() => {
+          try {
+            // Try to access iframe content
+            const iframeDoc = preview.contentDocument || preview.contentWindow?.document;
+            if (!iframeDoc) {
+              showFallback();
+            }
+          } catch (e) {
+            // Can't access iframe - likely blocked
+            showFallback();
+          }
+        }, 3000);
+        
+        // Set iframe source
         preview.src = deployedUrl;
+      }
+      
+      // Set up fallback button
+      if (openSiteFallbackBtn) {
+        openSiteFallbackBtn.onclick = () => {
+          window.open(deployedUrl, '_blank');
+        };
       }
       
       // Set open site button
@@ -5944,15 +6531,6 @@ function showDeploymentSuccessPage(result) {
       if (previewContainer) {
         previewContainer.style.display = 'none';
       }
-    }
-    
-    // Set view projects button
-    const viewProjectsBtn = document.getElementById('view-projects-btn');
-    if (viewProjectsBtn) {
-      viewProjectsBtn.onclick = () => {
-        router.navigate('/applications');
-        loadProjects();
-      };
     }
   }
   
@@ -6129,9 +6707,160 @@ function setupCommandPalette() {
             item.style.display = 'none';
         }
       });
-      selectedIndex = -1;
+          selectedIndex = -1;
       updateSelection();
     });
   }
 }
+
+// New Deploy Page Functions
+function showNewDeployPage() {
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(page => {
+    page.style.display = 'none';
+  });
+  
+  // Show new deploy page
+  const newDeployPage = document.getElementById('page-new-deploy');
+  if (newDeployPage) {
+    newDeployPage.style.display = 'block';
+    // Reset form state
+    resetNewDeployForm();
+  }
+  
+  // Update page title
+  const pageTitle = document.getElementById('pageTitle');
+  if (pageTitle) {
+    pageTitle.textContent = 'New Deploy';
+  }
+}
+
+function resetNewDeployForm() {
+  // Reset to single repo mode
+  const singleInput = document.getElementById('single-repo-input');
+  const splitInputs = document.getElementById('split-repo-inputs');
+  const splitBtn = document.getElementById('split-toggle-btn');
+  const gitUrlInput = document.getElementById('new-deploy-git-url');
+  const frontendInput = document.getElementById('new-deploy-frontend-url');
+  const backendInput = document.getElementById('new-deploy-backend-url');
+  
+  if (singleInput) singleInput.style.display = 'block';
+  if (splitInputs) splitInputs.style.display = 'none';
+  if (splitBtn) splitBtn.classList.remove('active');
+  if (gitUrlInput) gitUrlInput.value = '';
+  if (frontendInput) frontendInput.value = '';
+  if (backendInput) backendInput.value = '';
+}
+
+// Toggle between single and split repo mode
+window.toggleSplitMode = function() {
+  const singleInput = document.getElementById('single-repo-input');
+  const splitInputs = document.getElementById('split-repo-inputs');
+  const splitBtn = document.getElementById('split-toggle-btn');
+  
+  if (!singleInput || !splitInputs || !splitBtn) return;
+  
+  const isSplit = splitInputs.style.display !== 'none';
+  
+  if (isSplit) {
+    // Switch to single repo mode
+    singleInput.style.display = 'block';
+    splitInputs.style.display = 'none';
+    splitBtn.classList.remove('active');
+  } else {
+    // Switch to split repo mode
+    singleInput.style.display = 'none';
+    splitInputs.style.display = 'block';
+    splitBtn.classList.add('active');
+  }
+};
+
+// Handle Continue button click
+window.handleContinueDeploy = async function() {
+  const singleInput = document.getElementById('single-repo-input');
+  const splitInputs = document.getElementById('split-repo-inputs');
+  const gitUrlInput = document.getElementById('new-deploy-git-url');
+  const frontendInput = document.getElementById('new-deploy-frontend-url');
+  const backendInput = document.getElementById('new-deploy-backend-url');
+  
+  if (!singleInput || !splitInputs || !gitUrlInput || !frontendInput || !backendInput) return;
+  
+  const isSplit = splitInputs.style.display !== 'none';
+  
+  if (isSplit) {
+    // Split mode: validate and deploy with frontend + backend
+    const frontendUrl = frontendInput.value.trim();
+    const backendUrl = backendInput.value.trim();
+    
+    if (!frontendUrl || !backendUrl) {
+      showToast('Please enter both frontend and backend repository URLs', 'error');
+      return;
+    }
+    
+    // Navigate to deploy page with split mode pre-filled
+    router.navigate('/deploy');
+    
+    // Wait a bit for page to load, then populate and show split layout
+    setTimeout(() => {
+      const deployTypeSelect = document.getElementById('deploy-type');
+      const deployTypeGroup = document.getElementById('deploy-type-group');
+      const singleRepoGroup = document.getElementById('single-repo-group');
+      const splitLayout = document.getElementById('split-deploy-layout');
+      const frontendUrlInput = document.getElementById('frontend-url');
+      const backendUrlInput = document.getElementById('backend-url');
+      
+      if (deployTypeSelect) {
+        deployTypeSelect.value = 'split';
+      }
+      if (deployTypeGroup) {
+        deployTypeGroup.style.display = 'block';
+      }
+      if (singleRepoGroup) {
+        singleRepoGroup.style.display = 'none';
+      }
+      if (splitLayout) {
+        splitLayout.style.display = 'block';
+      }
+      if (frontendUrlInput) {
+        frontendUrlInput.value = frontendUrl;
+      }
+      if (backendUrlInput) {
+        backendUrlInput.value = backendUrl;
+      }
+      
+      // Trigger change event to update form state
+      if (deployTypeSelect) {
+        deployTypeSelect.dispatchEvent(new Event('change'));
+      }
+    }, 100);
+  } else {
+    // Single mode: validate and navigate to deploy page
+    const gitUrl = gitUrlInput.value.trim();
+    
+    if (!gitUrl) {
+      showToast('Please enter a Git repository URL', 'error');
+      return;
+    }
+    
+    // Navigate to deploy page with git URL pre-filled
+    router.navigate('/deploy');
+    
+    // Wait a bit for page to load, then populate the form
+    setTimeout(() => {
+      const gitUrlInputDeploy = document.getElementById('git-url');
+      const deployTypeSelect = document.getElementById('deploy-type');
+      const gitUrlSection = document.getElementById('git-url-section');
+      
+      if (gitUrlInputDeploy) {
+        gitUrlInputDeploy.value = gitUrl;
+      }
+      if (deployTypeSelect) {
+        deployTypeSelect.value = 'single';
+      }
+      if (gitUrlSection) {
+        gitUrlSection.style.display = 'block';
+      }
+    }, 100);
+  }
+};
 

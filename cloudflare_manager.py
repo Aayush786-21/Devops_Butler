@@ -171,3 +171,15 @@ def remove_project_hostname(hostname: str) -> None:
 
     _delete_dns_record(zone_id, hostname, token)
 
+
+def safe_configure_domain(hostname: str, service_url: str) -> None:
+    """
+    Narrow adapter to configure Cloudflare routing with consistent errors.
+    """
+    try:
+        ensure_project_hostname(hostname, service_url)
+    except Exception as exc:
+        # Wrap any unexpected errors as CloudflareError for orchestration layer
+        if isinstance(exc, CloudflareError):
+            raise
+        raise CloudflareError(str(exc))
